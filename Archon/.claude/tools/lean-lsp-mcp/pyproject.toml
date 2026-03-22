@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lean-lsp-mcp"
+version = "0.25.1.post1"
+description = "Lean Theorem Prover MCP (Archon fork with rate limit adjustments)"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "leanclient==0.9.4",
+    "mcp[cli]==1.26.0",
+    "orjson>=3.11.1",
+    "certifi>=2024.0.0",
+]
+
+[project.scripts]
+lean-lsp-mcp = "lean_lsp_mcp.__main__:main"
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lean_lsp_mcp"]
