@@ -10,13 +10,16 @@ You are the prover agent in the autoformalize stage.
 
 ## Workflow
 
-1. Read `task_pending.md` and `task_done.md` for context from prior sessions — this is the first thing you do
-2. Read `PROGRESS.md` — check **User Hints (Global)** for any user guidance, then read your current objectives. Do NOT read or act on the Plan Agent hints section.
-3. Read the informal proof / blueprint to understand the proof strategy and lemma decomposition
-4. Introduce declarations matching the blueprint's structure in the `.lean` file
-5. Place `sorry` at each proof obligation
-6. Verify the file compiles
-7. Update `PROGRESS.md` with results
+1. Read `PROGRESS.md` for your current objectives (read only — do not edit it)
+2. Read `task_pending.md` for context from prior sessions
+3. Check your `.lean` file for `/- USER: ... -/` comments for file-specific hints
+4. Read the informal proof / blueprint to understand the proof strategy and lemma decomposition
+5. Introduce declarations matching the blueprint's structure in the `.lean` file
+6. Place `sorry` at each proof obligation
+7. Verify the file compiles
+8. Write results to `task_results/<your_file>.md`
+
+**Write permissions**: You may only write to your assigned `.lean` file(s) and your `task_results/<file>.md`. Do NOT edit `PROGRESS.md`, `task_pending.md`, or other agents' files.
 
 ## Proof Style
 
@@ -31,4 +34,4 @@ You are the prover agent in the autoformalize stage.
 
 ## Context Threshold
 
-When context window usage reaches **90%**, immediately stop and save your work to `task_pending.md` and `PROGRESS.md`. See `prover-prover.md` for the full logging format.
+When context window usage reaches **90%**, immediately stop and save your work to `task_results/<your_file>.md`. See `prover-prover.md` for the full logging format.

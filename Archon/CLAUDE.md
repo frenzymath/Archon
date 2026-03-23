@@ -10,44 +10,39 @@ You are either the plan agent or a prover agent. Read `PROGRESS.md` to determine
 - Informal Agent: `.claude/tools/informal_agent.py` — call OpenAI/Gemini for informal mathematical reasoning
 - lean-lsp-mcp (local): `.claude/tools/lean-lsp-mcp/` — Lean LSP MCP server. Use this for all Lean LSP operations (search, diagnostics, goal inspection).
 
-## Key Files
+## Key Files & Permissions
 
-| File | Purpose |
-|------|---------|
-| `PROGRESS.md` | Current stage, objectives, user hints — read every iteration |
-| `task_pending.md` | Pending work organized by file → theorem → attempts |
-| `task_done.md` | Completed theorems with strategies that worked |
-| `.claude/prompts/init.md` | Init stage instructions (runs before plan/prover) |
-| `.claude/prompts/plan.md` | Plan agent instructions |
-| `.claude/prompts/prover-*.md` | Prover agent instructions (per stage) |
+| File | Plan Agent | Prover Agent | User |
+|------|-----------|-------------|------|
+| `PROGRESS.md` | read + write | **read only** | read |
+| `USER_HINTS.md` | read (then clear) | do not read | write |
+| `task_pending.md` | read + write | **read only** | read |
+| `task_done.md` | read + write | **read only** | read |
+| `task_results/<file>.md` | read (collect results) | write (own file only) | read |
+| `.lean` files | do not edit | write (own file only) | write (via comments) |
 
----
+## User Interaction
 
-## User Hints
+Users provide hints in two places:
 
-`PROGRESS.md` has two hint sections that the user can edit at any time while the loop runs:
-
-- **User Hints (Global)** — all agents read this every iteration.
-- **User Hints (Plan Agent)** — only the plan agent reads this. Provers ignore it.
-
-Check these sections at the start of every iteration before doing any work.
+- **Strategic hints** → `USER_HINTS.md`. The plan agent reads this and translates hints into concrete objectives. Provers never read this file.
+- **File-specific hints** → `/- USER: ... -/` comments directly in `.lean` files. The prover that owns that file sees them naturally.
 
 ## Agent Roles
 
 ### Plan Agent
 - Read `.claude/prompts/plan.md` for your full instructions
-- Read `PROGRESS.md` — check **User Hints (Global)** and **User Hints (Plan Agent)** first
-- Evaluate prover results: completed / cannot complete / why
-- Update `PROGRESS.md` with objectives for the next prover iteration
-- Update **Next Agent** in `PROGRESS.md` before finishing
-- Do NOT write proofs or fill sorries yourself
+- Read `USER_HINTS.md` — incorporate hints, then clear them after acting
+- Read `task_results/` — collect prover results, then update `task_pending.md` and `task_done.md`
+- Write `PROGRESS.md` with objectives for the next prover round
+- Do NOT write proofs, edit `.lean` files, or fill sorries yourself
 
 ### Prover Agent
-- Read `PROGRESS.md` — check **User Hints (Global)** first, then your current objectives. Ignore the Plan Agent hints section.
+- Read `PROGRESS.md` for your current objectives (read only — do not edit it)
 - Read the stage-specific prompt:
   - autoformalize → `.claude/prompts/prover-autoformalize.md`
   - prover → `.claude/prompts/prover-prover.md`
   - polish → `.claude/prompts/prover-polish.md`
-- Execute the objectives listed in `PROGRESS.md`
-- When done, update `PROGRESS.md` with results and **Next Agent**
-- **One agent per file**: never edit a `.lean` file assigned to another agent
+- Write results to `task_results/<your_file>.md`
+- Write only to the `.lean` file(s) you are assigned — **never edit another agent's file**
+- Check for `/- USER: ... -/` comments in your `.lean` file for file-specific hints

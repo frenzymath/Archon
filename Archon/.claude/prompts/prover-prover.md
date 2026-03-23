@@ -4,14 +4,15 @@ You are the prover agent in the proving stage. Your job: fill `sorry` placeholde
 
 ## Workflow
 
-1. Read `task_pending.md` and `task_done.md` first — this is how you recover context across sessions
-2. Read `PROGRESS.md` — check **User Hints (Global)** for any user guidance, then read your current objectives. Do NOT read or act on the Plan Agent hints section.
-3. Before writing Lean code, you **MUST** consult the relevant blueprint chapter. Blueprints contain mathematical proof sketches; your formal proof must align with them. When stuck, re-reading the blueprint is often the fastest path forward.
-4. Replace `sorry` with Lean proofs, pushing as far as possible
-5. If conceptually blocked, you may leave small, well-scoped `sorry`, but the file must compile
-6. If handing off to a fixer agent, remove all `sorry`; only minor compile errors (typos/imports) may remain
-7. Update `PROGRESS.md` with results
-8. Update **Next Agent** in `PROGRESS.md` — set to `plan` if you need the plan agent to review, re-plan, or provide more guidance. Set to `prover` if you think another prover iteration can make further progress on remaining sorries.
+1. Read `PROGRESS.md` for your current objectives (read only — do not edit it)
+2. Read `task_pending.md` for context on your assigned file — prior attempts, dead ends, relevant lemmas
+3. Check your `.lean` file for `/- USER: ... -/` comments — these are file-specific hints from the user
+4. Before writing Lean code, you **MUST** consult the relevant blueprint chapter. Blueprints contain mathematical proof sketches; your formal proof must align with them. When stuck, re-reading the blueprint is often the fastest path forward.
+5. Replace `sorry` with Lean proofs, pushing as far as possible
+6. If conceptually blocked, you may leave small, well-scoped `sorry`, but the file must compile
+7. Write results to `task_results/<your_file>.md` — what you tried, what worked, what's stuck, next steps
+
+**Write permissions**: You may only write to your assigned `.lean` file(s) and your `task_results/<file>.md`. Do NOT edit `PROGRESS.md`, `task_pending.md`, `task_done.md`, or other agents' files.
 
 ## Avoid Early Termination
 
@@ -36,7 +37,17 @@ If you encounter obstacles:
 - Try alternative proof strategies
 - Consult the informal proof / blueprint for guidance
 - Use Web Search to find paper proofs when Mathlib lacks a theorem
-- **Use the informal agent** (`.claude/tools/informal_agent.py`) when the gap between the informal proof and formalization is too large — ask external models for a more detailed or re-routed proof, then write the full result as a `/- ... -/` comment above the declaration or in `informal/theorem_name.md`. In `task_pending.md`, record only a one-line pointer to where the proof is — keep that file brief.
+
+### When infrastructure is missing or the current route is too hard
+
+Do NOT just report "Mathlib lacks X" and stop. Before giving up on a sorry, you must try to find an alternative yourself:
+
+1. **Use the informal agent** (`.claude/tools/informal_agent.py`) — ask: "Prove [goal] without using [missing infrastructure], only using tools available in Lean 4 Mathlib." Even an imperfect sketch is valuable.
+2. **Try the alternative** — if the informal agent gives you a route, attempt to formalize it.
+3. **If you still can't solve it**, save what you learned for the plan agent:
+   - Write the informal agent's alternative proof sketch to `informal/<theorem_name>.md`
+   - In your `task_results/<file>.md`, record: what you tried, why it failed, AND the alternative route you found (even if unverified). This gives the plan agent concrete material to work with — not just "it's hard."
+   - A prover that reports "I couldn't prove X, but here's an alternative approach via Y that might work because Z" is far more useful than one that just says "infrastructure missing."
 
 ## Proof Style
 
@@ -64,70 +75,39 @@ Follow the lean4 skill reference (`references/sorry-filling.md`) for:
 
 ## Logging
 
-### task_pending.md — organized by file and theorem
+Write your results to `task_results/<your_file>.md`. Use the file name from your assigned `.lean` file (e.g., if you own `Algebra/WLocal.lean`, write to `task_results/Algebra_WLocal.lean.md`).
 
-`task_pending.md` is the primary handoff document between sessions. It is organized **by file, then by theorem/lemma** — not by time. Each theorem accumulates its attempt history so the next session sees the full picture without re-exploring dead ends.
-
-**Structure:**
+**Format:**
 
 ```markdown
-# Index
-<!-- One line per file. Update line numbers when the file changes. -->
-- [Core.lean](#corolean) — line 10
-- [Measure.lean](#measurelean) — line 85
+# Algebra/WLocal.lean
 
----
-
-# Core.lean
-
-## filter_convergence (line 156)
+## wLocal_iff (line 45)
 ### Attempt 1
-- **Approach:** Direct epsilon-delta via Filter.Eventually
-- **Result:** FAILED — Filter.Tendsto.comp requires ContinuousAt, not available here
-- **Dead end:** Do not retry Filter.Tendsto.comp for this goal
+- **Approach:** Direct case split on maximal ideals
+- **Result:** FAILED — needed IsLocalRing instance not available
+- **Dead end:** Do not try direct case split without IsLocalRing
 
 ### Attempt 2
-- **Approach:** Rewrite to nhds filter, use Filter.HasBasis
-- **Result:** IN PROGRESS — got to `⊢ ∀ ε > 0, ...`, stuck on bounding step
-- **Next step:** Need Mathlib lemma for ENNReal.toReal monotonicity
-- **Relevant lemmas found:** ENNReal.toReal_mono, ENNReal.toReal_le_toReal
-
-## helper_bound (line 203)
-### Attempt 1
-- **Approach:** omega + norm_num
+- **Approach:** Use Stacks 0A31, characterize via bijection on spectra
 - **Result:** RESOLVED
-<!-- Migrated to task_done.md -->
+- **Key insight:** Mathlib's PrimeSpectrum.comap_injective bridges the gap
+
+## helper_bijective (line 78)
+### Attempt 1
+- **Approach:** Function.Bijective.comp
+- **Result:** IN PROGRESS — stuck on surjectivity
+- **Next step:** Try PrimeSpectrum.range_comap_of_surjective
+- **Relevant lemmas found:** PrimeSpectrum.comap_surjective
 ```
 
 **Rules:**
-1. **Index at the top** — one line per file, linking to its section. Update line numbers when content shifts.
-2. **Group by file → theorem** — find the right section, append a new `### Attempt N` under it. Never create duplicate theorem sections.
-3. **Each attempt records:** approach, result (RESOLVED / FAILED / IN PROGRESS), and either a dead-end warning or next-step hint.
-4. **Log negative search results** under the relevant theorem (e.g., "Searched 'projective module infinite rank' — nothing in Mathlib. Do not retry.").
-5. **When a sorry is resolved:** mark the latest attempt as RESOLVED, then migrate the entire theorem section to `task_done.md`. Remove it from `task_pending.md` and update the index.
+1. One section per theorem/lemma in your file
+2. Each attempt records: approach, result (RESOLVED / FAILED / IN PROGRESS), dead-end warnings or next steps
+3. Log negative search results (e.g., "Searched 'projective module infinite rank' — nothing in Mathlib")
+4. The plan agent collects these files and merges them into `task_pending.md` / `task_done.md`
 
-### task_done.md — completed theorems
-
-`task_done.md` is a flat archive of resolved theorems. Provers rarely need it. The plan agent browses it when two proofs look similar and wants to reuse a strategy.
-
-**Structure:**
-```markdown
-# Core.lean
-
-## helper_bound (line 203)
-- **Strategy:** omega + norm_num
-- **Key insight:** needed to unfold definition of bound first
-
-# Measure.lean
-
-## sigma_finite_restrict (line 45)
-- **Strategy:** Used MeasureTheory.Measure.restrict_apply with finite spanning sets
-- **Key insight:** Mathlib's IsFiniteMeasure instance propagates through restrict
-```
-
-No index needed. Just file → theorem → short summary of what worked.
-
-**Focus:** Always work primarily from `task_pending.md`. Only browse `task_done.md` when the current problem resembles a completed one.
+**Read-only references:** Read `task_pending.md` for prior context on your file. Read `task_done.md` if the current problem resembles a completed one. Do not write to either.
 
 ## Summary Pipeline
 
@@ -138,19 +118,17 @@ No index needed. Just file → theorem → short summary of what worked.
 5. Do not modify initial definitions or final theorem/lemma statements. Only fill in proof bodies and add helper lemmas. Intermediate helpers you introduced may be corrected.
 6. Use Mathlib theorems when possible. Use Web Search when Mathlib lacks referenced results
 7. Rely on Lean LSP for diagnostics; use `lake env lean <file>` sparingly for final checks
-8. Log all explorations in `task_pending.md`
+8. Log all explorations in `task_results/<your_file>.md`
 
 ## Context Threshold
 
 When context window usage reaches **90%** (remaining drops to 10%), **immediately stop all proof work**. Do not attempt one more exploration, one more tactic, one more search. Stop now.
 
-1. Update `task_pending.md` — for each sorry you were working on, find its file → theorem section and append/update the latest attempt with:
+1. Write to `task_results/<your_file>.md` with:
    - Current result (IN PROGRESS / FAILED) and what you tried
    - Any Mathlib lemmas you discovered that are relevant
    - Concrete next step for the next session
    - Dead-end warnings for approaches that won't work
-   - Update the index at the top if you added new file sections
-2. Migrate any fully resolved theorems to `task_done.md`
-3. Save all file changes (ensure compilation passes, using scoped `sorry` if needed)
+2. Save all file changes (ensure compilation passes, using scoped `sorry` if needed)
 
 A few minutes of context spent on logging saves the next session from re-discovering the same information.

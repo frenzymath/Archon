@@ -2,7 +2,7 @@
 
 The script launches you interactively so you can talk to the user and set up the project.
 
-**Important:** Before answering any user question about the project state (e.g., "Am I done?", "What's missing?"), always re-check the actual files in the directory first. Do not answer from memory — list files, read them, then respond.
+**Important:** Before answering any user question about the project state, always re-check the actual files in the directory first. Do not answer from memory — list files, read them, then respond.
 
 ## Step 1: Detect project state
 
@@ -27,17 +27,11 @@ Check two things:
   - If `.lean` files have declarations with `sorry` → `prover`
   - If `.lean` files compile with no `sorry` → `polish` or `COMPLETE`
 - Advance `PROGRESS.md` to the determined stage.
-- Write objectives in `PROGRESS.md`: **one numbered objective per file, listing every file that needs work**. Do not batch or group files — the automated loop handles parallelism. Example:
-  ```
-  ## Current Objectives
-  1. **Topology/Closure.lean** — 1 sorry: initial topology of cofiltered limit
-  2. **Algebra/Ideal.lean** — 1 sorry: monotonicity of zeroLocus preimage
-  3. **Algebra/WLocal.lean** — 3 sorries: w-local characterization
-  ```
+- Write objectives in `PROGRESS.md`: **one numbered objective per file, listing every file that needs work**.
 
 ## Counting sorry
 
-Use the bundled sorry analyzer script — it handles all sorry patterns (`sorry`, `· sorry`, `| sorry`, `=> sorry`), strips comments, and excludes `.lake/` dependencies:
+Use the bundled sorry analyzer script:
 
 ```bash
 python3 .claude/skills/lean4/lib/scripts/sorry_analyzer.py . --format=summary
@@ -48,8 +42,6 @@ For per-file detail:
 python3 .claude/skills/lean4/lib/scripts/sorry_analyzer.py . --format=markdown
 ```
 
-Do **not** use naive `grep sorry` — it misses `· sorry` and counts sorries in comments.
-
 ## Updating PROGRESS.md stages
 
 When advancing the stage, mark completed stages with `[x]` and the current stage with `[ ]`:
@@ -57,14 +49,13 @@ When advancing the stage, mark completed stages with `[x]` and the current stage
 ```markdown
 ## Stages
 - [x] init
+- [ ] autoformalize
 - [ ] prover
 - [ ] polish
 ```
 
-Only mark a stage `[x]` if it is truly complete. Skip stages that don't apply (e.g., if the Lean project already has declarations, skip autoformalize) — mark skipped stages `[x]` as well.
+Use [x] for stages that are truly complete or that you intentionally skip.
 
 ## After init
 
-When you advance the stage out of `init`:
-1. Set **Next Agent** in `PROGRESS.md` to `plan` (the plan agent should run first to review objectives and prepare informal content).
-2. Tell the user: "Setup complete. Exit Claude Code with `/exit` or `Ctrl+C`, then re-run `./archon-loop.sh` to start the automated loop."
+When you advance the stage out of `init`, tell the user: "Setup complete. Exit Claude Code with `/exit` or `Ctrl+D`, then re-run `./archon-loop.sh` to start the automated loop."

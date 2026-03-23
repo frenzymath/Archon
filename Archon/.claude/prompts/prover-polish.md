@@ -4,15 +4,18 @@ You are the prover agent in the polish stage. Your job: verify, clean, and impro
 
 ## Workflow
 
-1. Read `task_pending.md` and `task_done.md` first — recover context from prior sessions
-2. Read `PROGRESS.md` — check **User Hints (Global)** for any user guidance, then read your current objectives. Do NOT read or act on the Plan Agent hints section.
-3. Verify compilation and confirm absence of `sorry`, `axiom`, and other escape hatches
-4. Perform code quality improvements:
+1. Read `PROGRESS.md` for your current objectives (read only — do not edit it)
+2. Read `task_pending.md` for context from prior sessions
+3. Check your `.lean` file for `/- USER: ... -/` comments for file-specific hints
+4. Verify compilation and confirm absence of `sorry`, `axiom`, and other escape hatches
+5. Perform code quality improvements:
    - Golf proofs for brevity and clarity (`/lean4:golf`)
    - Refactor to leverage Mathlib (`/lean4:refactor`)
    - Extract reusable helpers from long proofs
-5. Verify compilation after each change
-6. Update `PROGRESS.md` with results
+6. Verify compilation after each change
+7. Write results to `task_results/<your_file>.md`
+
+**Write permissions**: You may only write to your assigned `.lean` file(s) and your `task_results/<file>.md`. Do NOT edit `PROGRESS.md`, `task_pending.md`, or other agents' files.
 
 ## Constraints
 
@@ -24,10 +27,8 @@ You are the prover agent in the polish stage. Your job: verify, clean, and impro
 
 ## Logging
 
-Record polish work in `task_pending.md` under the relevant file → theorem section (see `prover-prover.md` for the full format). Add a new `### Attempt N` entry for each optimization or issue found.
-
-When a polish task is complete, migrate the theorem section to `task_done.md` with a short summary of what was improved.
+Record polish work in `task_results/<your_file>.md` (see `prover-prover.md` for the full format). Add a new `### Attempt N` entry for each optimization or issue found.
 
 ## Context Threshold
 
-When context window usage reaches **90%**, immediately stop and save your work to `task_pending.md` and `PROGRESS.md`. See `prover-prover.md` for the full logging format.
+When context window usage reaches **90%**, immediately stop and save your work to `task_results/<your_file>.md`. See `prover-prover.md` for the full logging format.

@@ -69,15 +69,22 @@ The loop exits automatically when the stage reaches `COMPLETE`.
 
 ### Guiding agents while the loop runs
 
-Edit `PROGRESS.md` at any time — no need to stop the loop:
+No need to stop the loop — provide hints in two places:
 
-- **User Hints (Global)** — all agents read this every iteration. Use for constraints that apply everywhere (e.g., "avoid `omega` — it times out on this project").
-- **User Hints (Plan Agent)** — only the plan agent reads this. Use for strategic guidance (e.g., "the measure_union approach is a dead end, try sigma-additivity instead"). The plan agent translates these into concrete prover objectives.
+- **`USER_HINTS.md`** — strategic guidance for the plan agent (e.g., "the measure_union approach is a dead end, try sigma-additivity instead"). The plan agent reads this every iteration and translates your hints into concrete prover objectives.
+- **`/- USER: ... -/` comments in `.lean` files** — file-specific hints for the prover that owns that file (e.g., "try Stacks 0A31 for this lemma").
 
 ### Monitoring
 
 ```bash
-tail -f Archon/logs/archon-*.log
+# Main dialogue log (plan agent + monitor)
+tail -f Archon/logs/archon-*.readable.log
+
+# Watch which .lean files provers are modifying
+watch -n5 'ls -lt proetale/**/*.lean 2>/dev/null | head -20'
+
+# Check prover results as they finish
+watch -n10 'ls -lt Archon/task_results/'
 ```
 
 ### CLI options
@@ -85,9 +92,9 @@ tail -f Archon/logs/archon-*.log
 | Flag | Description |
 |------|-------------|
 | `--max-iterations N` | Max loop iterations (default: 50) |
-| `--agent plan\|prover` | Force a specific agent |
 | `--stage STAGE` | Override the current stage |
 | `--serial` | Use a single prover instead of parallel agents |
+| `--verbose-logs` | Generate raw JSON logs alongside readable logs |
 | `--dry-run` | Print prompts without launching Claude |
 
 ## Key Features
