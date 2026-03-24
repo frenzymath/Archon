@@ -20,24 +20,22 @@ cd Archon-preopen
 5. Register the lean-lsp-mcp MCP server at project scope
 6. Register the bundled lean4 skills plugin via local marketplace
 
-After setup, verify and register plugins:
+After setup, verify plugins are working:
 ```bash
-cd Archon
+cd workspace
 claude
 # Inside Claude Code:
-/plugin marketplace add .claude/skills
-/plugin install lean4@archon-local
 /lean4:doctor
 ```
 
-If `setup.sh` registered the plugins automatically, the first two commands will confirm they're already installed. If not, they complete the registration.
+If plugins weren't registered, re-run `./setup.sh` from the repo root.
 
 ## Usage
 
 ### Starting a new project
 
 ```bash
-cd Archon
+cd workspace
 ./archon-loop.sh
 ```
 
@@ -77,14 +75,14 @@ No need to stop the loop — provide hints in two places:
 ### Monitoring
 
 ```bash
-# Main dialogue log (plan agent + monitor)
-tail -f Archon/logs/archon-*.readable.log
+# Structured log (one JSON event per line)
+tail -f workspace/logs/archon-*.jsonl
 
-# Watch which .lean files provers are modifying
-watch -n5 'ls -lt proetale/**/*.lean 2>/dev/null | head -20'
+# Pretty-print the log
+cat workspace/logs/archon-*.jsonl | python3 -m json.tool
 
 # Check prover results as they finish
-watch -n10 'ls -lt Archon/task_results/'
+watch -n10 'ls -lt workspace/task_results/'
 ```
 
 ### CLI options
@@ -94,7 +92,7 @@ watch -n10 'ls -lt Archon/task_results/'
 | `--max-iterations N` | Max loop iterations (default: 50) |
 | `--stage STAGE` | Override the current stage |
 | `--serial` | Use a single prover instead of parallel agents |
-| `--verbose-logs` | Generate raw JSON logs alongside readable logs |
+| `--verbose-logs` | Also save raw Claude stream events to `.raw.jsonl` |
 | `--dry-run` | Print prompts without launching Claude |
 
 ## Key Features

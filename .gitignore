@@ -1,6 +1,7 @@
 mathlib_preferred_idioms.md
 mathlib_unavailable_theorems.md
 /.claude
-Archon/SKILL_CHANGES.md
-Archon/task_results/
-Archon/logs/
+workspace/SKILL_CHANGES.md
+workspace/task_results/
+workspace/logs/
+workspace/.claude/skills/.git/

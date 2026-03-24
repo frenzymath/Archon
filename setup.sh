@@ -20,7 +20,7 @@ err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # -- Determine script directory & project folder --
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${SCRIPT_DIR}/Archon"
+PROJECT_DIR="${SCRIPT_DIR}/workspace"
 
 info "Script directory: ${SCRIPT_DIR}"
 info "Project directory: ${PROJECT_DIR}"
@@ -29,8 +29,7 @@ info "Project directory: ${PROJECT_DIR}"
 # Phase 0: Create or enter project folder
 # ============================================================
 if [ -d "${PROJECT_DIR}" ]; then
-    warn "Project folder already exists: ${PROJECT_DIR}"
-    info "Entering existing folder and continuing setup (existing files will NOT be overwritten)..."
+    ok "Project folder exists: ${PROJECT_DIR}"
     cd "${PROJECT_DIR}"
 
     if [ -d ".git" ]; then
@@ -226,13 +225,7 @@ CLAUDE_VERSION=""
 if command -v claude &>/dev/null; then
     CLAUDE_INSTALLED=true
     CLAUDE_VERSION=$(claude --version 2>/dev/null || echo "unknown")
-    ok "Claude Code is installed: ${CLAUDE_VERSION}"
-fi
-
-if [ "$CLAUDE_INSTALLED" = true ]; then
-    warn "Claude Code is already installed (${CLAUDE_VERSION})."
-    warn "To update, run:  claude update"
-    warn "Or reinstall:    curl -fsSL https://claude.ai/install.sh | bash"
+    ok "Claude Code: ${CLAUDE_VERSION} (to update: claude update)"
 else
     info "Installing Claude Code..."
     curl -fsSL https://claude.ai/install.sh | bash
@@ -255,9 +248,14 @@ cd "${PROJECT_DIR}"
 
 info "Adding lean-lsp MCP server to Claude Code (project scope)..."
 # Use uv run to launch from local source — picks up local modifications
-claude mcp add lean-lsp -s project -- uv run --directory "${LEAN_LSP_MCP_DIR}" lean-lsp-mcp && \
-    ok "lean-lsp MCP server added (local fork)" || \
-    warn "Failed to add lean-lsp MCP server. Manual setup: claude mcp add lean-lsp -s project -- uv run --directory .claude/tools/lean-lsp-mcp lean-lsp-mcp"
+MCP_OUTPUT=$(claude mcp add lean-lsp -s project -- uv run --directory "${LEAN_LSP_MCP_DIR}" lean-lsp-mcp 2>&1)
+if [ $? -eq 0 ]; then
+    ok "lean-lsp MCP server added (local fork)"
+elif echo "$MCP_OUTPUT" | grep -qi "already exists"; then
+    ok "lean-lsp MCP server already configured"
+else
+    warn "Failed to add lean-lsp MCP server: $MCP_OUTPUT"
+fi
 
 # ============================================================
 # Phase 5: Register local lean4-skills plugin
@@ -280,18 +278,28 @@ if [ ! -f "${PROJECT_DIR}/.claude/skills/.claude-plugin/marketplace.json" ]; the
 fi
 ok "Local marketplace index found"
 
+# Initialize .claude/skills as a git repo so marketplace add works
+# (marketplace add expects a git repo, even for local paths)
+SKILLS_DIR="${PROJECT_DIR}/.claude/skills"
+if [ ! -d "${SKILLS_DIR}/.git" ]; then
+    git -C "${SKILLS_DIR}" init -q
+    git -C "${SKILLS_DIR}" add -A
+    git -C "${SKILLS_DIR}" commit -q -m "Local lean4 skills" 2>/dev/null || true
+    ok "Initialized .claude/skills as git repo"
+fi
+
 # Register the local marketplace and install the plugin
 info "Registering local marketplace with Claude Code..."
-claude plugin marketplace add "${PROJECT_DIR}/.claude/skills" 2>/dev/null && \
+claude plugin marketplace add "${SKILLS_DIR}" 2>/dev/null && \
     ok "Local marketplace registered" || \
-    { warn "Could not auto-register marketplace. Register manually inside Claude Code:"; \
-      warn "  /plugin marketplace add .claude/skills"; }
+    { warn "Could not auto-register marketplace. Re-run setup.sh or register manually:"; \
+      warn "  claude plugin marketplace add ${SKILLS_DIR}"; }
 
 info "Installing lean4 from local marketplace..."
 claude plugin install lean4@archon-local 2>/dev/null && \
     ok "lean4 plugin installed from local skills" || \
-    { warn "Could not auto-install plugin. Install manually inside Claude Code:"; \
-      warn "  /plugin install lean4@archon-local"; }
+    { warn "Could not auto-install plugin. Re-run setup.sh or install manually:"; \
+      warn "  claude plugin install lean4@archon-local"; }
 
 # Create/update CLAUDE.md
 CLAUDE_MD="${PROJECT_DIR}/CLAUDE.md"
@@ -321,15 +329,9 @@ echo -e "  1. cd ${PROJECT_DIR}"
 echo -e "  2. claude"
 echo -e "  3. Verify with: ${CYAN}/lean4:doctor${NC}"
 echo ""
-echo -e "  ${YELLOW}If the plugin didn't auto-register, run inside Claude Code:${NC}"
-echo -e "     ${CYAN}/plugin marketplace add .claude/skills${NC}"
-echo -e "     ${CYAN}/plugin install lean4@archon-local${NC}"
+echo -e "  ${YELLOW}If the plugin didn't auto-register, re-run:${NC}"
+echo -e "     ${CYAN}./setup.sh${NC}"
 echo ""
 echo -e "  ${YELLOW}To customize lean4 skills:${NC}"
 echo -e "     Edit files under ${CYAN}.claude/skills/lean4/${NC}"
 echo ""
-if [ "$CLAUDE_INSTALLED" = true ]; then
-    echo -e "  ${YELLOW}Note:${NC} Claude Code was already installed (${CLAUDE_VERSION})."
-    echo -e "  To update: ${CYAN}claude update${NC}"
-    echo ""
-fi

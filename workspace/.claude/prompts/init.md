@@ -22,12 +22,37 @@ Check two things:
 - Advance `PROGRESS.md` current stage to `autoformalize` with the objective: translate the natural-language content into Lean declarations.
 
 **Lean project already exists:**
-- Determine the next stage:
-  - If `.lean` files have no declarations yet → `autoformalize`
+- Determine the next stage by checking the `.lean` files:
+  - If `.lean` files have no theorem/lemma declarations yet (only imports or empty) → `autoformalize`
   - If `.lean` files have declarations with `sorry` → `prover`
   - If `.lean` files compile with no `sorry` → `polish` or `COMPLETE`
 - Advance `PROGRESS.md` to the determined stage.
-- Write objectives in `PROGRESS.md`: **one numbered objective per file, listing every file that needs work**.
+- Write objectives in `PROGRESS.md`: **one numbered objective per file, listing every file that needs work**. Do not batch or group — one per file.
+- Keep all stages in the Stages list. Only mark `init` as `[x]`. Mark stages between init and the current stage as `[x]` only if they are truly complete. If autoformalize was not needed (declarations already exist), mark it `[x]`. If it was needed but not done, leave it `[ ]` and set it as the current stage.
+
+Example (Lean project with sorries, autoformalize already done):
+```markdown
+## Current Stage
+prover
+
+## Stages
+- [x] init
+- [x] autoformalize
+- [ ] prover
+- [ ] polish
+```
+
+Example (Lean project with empty files, needs autoformalization):
+```markdown
+## Current Stage
+autoformalize
+
+## Stages
+- [x] init
+- [ ] autoformalize
+- [ ] prover
+- [ ] polish
+```
 
 ## Counting sorry
 

@@ -98,9 +98,9 @@ Line count unchanged + sorry count unchanged = zero progress.
 ## Verification
 
 After a prover reports completion, always verify independently:
-1. Check sorry count: `grep -n '^\s*sorry' file.lean` (not `grep -c sorry` which counts comments)
-2. Check axioms: no new `axiom` declarations
-3. Check compilation: `lake env lean file.lean`
+1. Check sorry count: `python3 .claude/skills/lean4/lib/scripts/sorry_analyzer.py <file> --format=summary`
+2. Check compilation: `lean_diagnostic_messages(file)` or `lake env lean <file>`
+3. Check axioms: no new `axiom` declarations
 
 Never advance to the next stage based solely on the prover's word.
 

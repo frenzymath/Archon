@@ -9,7 +9,7 @@ You are the prover agent in the proving stage. Your job: fill `sorry` placeholde
 3. Check your `.lean` file for `/- USER: ... -/` comments — these are file-specific hints from the user
 4. Before writing Lean code, you **MUST** consult the relevant blueprint chapter. Blueprints contain mathematical proof sketches; your formal proof must align with them. When stuck, re-reading the blueprint is often the fastest path forward.
 5. Replace `sorry` with Lean proofs, pushing as far as possible
-6. If conceptually blocked, you may leave small, well-scoped `sorry`, but the file must compile
+6. **Always save partial progress in the code.** If you cannot fully prove a sorry, replace it with your best attempt — commented-out proof steps, helper lemmas, partial `by` blocks with remaining `sorry` at the stuck point. The file must still compile (use scoped `sorry` for the stuck parts), but your work must be visible in the code for the next agent to continue from. NEVER revert to the original bare `sorry` — that wastes all your work.
 7. Write results to `task_results/<your_file>.md` — what you tried, what worked, what's stuck, next steps
 
 **Write permissions**: You may only write to your assigned `.lean` file(s) and your `task_results/<file>.md`. Do NOT edit `PROGRESS.md`, `task_pending.md`, `task_done.md`, or other agents' files.
