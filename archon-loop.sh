@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ctrl+C exits the entire script, not just the current iteration
 trap 'echo ""; err "Interrupted by user."; exit 130' INT
 
 # ============================================================
 #  Archon Loop — dual-agent loop for Lean4
 #
+#  Usage:
+#    ./archon-loop.sh [OPTIONS] [/path/to/lean-project]
+#
+#  If no path given, uses current directory.
+#  Project state lives in <project>/.archon/.
+#
 #  Each iteration = one plan round + one prover round.
 #  Plan always runs first to collect results and set objectives.
-#  State persists via PROGRESS.md, task_pending.md, task_results/.
 #
-#  User interaction (no need to stop the loop):
-#    - USER_HINTS.md             → plan agent reads strategic hints
-#    - /- USER: ... -/ in .lean  → prover sees file-specific hints
-#
-#  Parallel mode (default): prover iterations use Claude Code
-#  agent teams (--teammate-mode tmux), one prover per sorry-file.
-#  Use --serial to disable.
-#
-#  Logging:
-#    - logs/archon-*.jsonl         — structured log (one JSON event per line)
-#    - logs/archon-*.raw.jsonl     — raw Claude stream (only with --verbose-logs)
+#  Logging: <project>/.archon/logs/archon-*.jsonl
 # ============================================================
+
+ARCHON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # -- Defaults --
 MAX_ITERATIONS=50
@@ -30,10 +26,7 @@ FORCE_STAGE=""
 DRY_RUN=false
 PARALLEL=true
 VERBOSE_LOGS=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROGRESS_FILE="${SCRIPT_DIR}/PROGRESS.md"
-LOG_DIR="${SCRIPT_DIR}/logs"
-LOG_BASE=""  # Set later in logging setup
+LOG_BASE=""
 
 # -- Color helpers with JSONL logging --
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -43,7 +36,6 @@ _log_jsonl() {
         ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         level="$1"
         msg="$2"
-        # Escape quotes and backslashes for JSON
         escaped="${msg//\\/\\\\}"
         escaped="${escaped//\"/\\\"}"
         echo "{\"ts\":\"${ts}\",\"event\":\"shell\",\"level\":\"${level}\",\"message\":\"${escaped}\"}" >> "${LOG_BASE}.jsonl"
@@ -55,7 +47,8 @@ ok()    { echo -e "${GREEN}[ARCHON]${NC}  $*"; _log_jsonl "ok" "$*"; }
 warn()  { echo -e "${YELLOW}[ARCHON]${NC}  $*"; _log_jsonl "warn" "$*"; }
 err()   { echo -e "${RED}[ARCHON]${NC}  $*"; _log_jsonl "error" "$*"; }
 
-# -- Parse CLI args --
+# -- Parse CLI args (options first, then positional project path) --
+PROJECT_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --max-iterations) MAX_ITERATIONS="$2"; shift 2 ;;
@@ -64,7 +57,9 @@ while [[ $# -gt 0 ]]; do
         --serial)         PARALLEL=false;      shift   ;;
         --verbose-logs)   VERBOSE_LOGS=true;   shift   ;;
         -h|--help)
-            echo "Usage: archon-loop.sh [OPTIONS]"
+            echo "Usage: archon-loop.sh [OPTIONS] [/path/to/lean-project]"
+            echo ""
+            echo "If no path given, uses current directory."
             echo ""
             echo "Options:"
             echo "  --max-iterations N   Max loop iterations (default: 50)"
@@ -75,16 +70,41 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help           Show this help"
             echo ""
             echo "User interaction (while the loop runs):"
-            echo "  USER_HINTS.md           → strategic hints (plan agent reads)"
-            echo "  /- USER: ... -/ in .lean → file-specific hints (prover reads)"
-            echo ""
-            echo "Monitoring:"
-            echo "  tail -f workspace/logs/archon-*.jsonl"
+            echo "  Edit .archon/USER_HINTS.md in your project"
+            echo "  Add /- USER: ... -/ comments in .lean files"
             exit 0
             ;;
-        *) err "Unknown option: $1"; exit 1 ;;
+        -*) err "Unknown option: $1"; exit 1 ;;
+        *)  PROJECT_ARG="$1"; shift ;;
     esac
 done
+
+# -- Resolve project path --
+BOLD='\033[1m'
+if [[ -n "$PROJECT_ARG" ]]; then
+    PROJECT_PATH="$(cd "$PROJECT_ARG" 2>/dev/null && pwd)" || { err "Directory not found: $PROJECT_ARG"; exit 1; }
+    info "Using specified project path: ${PROJECT_PATH}"
+else
+    PROJECT_PATH="$(pwd)"
+    echo ""
+    info "${BOLD}No project path specified — using current directory:${NC}"
+    info "  ${PROJECT_PATH}"
+    info ""
+    info "To run on a project elsewhere, use:"
+    info "  ${CYAN}./archon-loop.sh /path/to/your-lean-project${NC}"
+    echo ""
+fi
+
+if [[ "$PROJECT_PATH" == "$ARCHON_DIR" ]]; then
+    err "Cannot use the Archon directory as a project."
+    err "Usage: ./archon-loop.sh /path/to/your-lean-project"
+    exit 1
+fi
+
+PROJECT_NAME="$(basename "$PROJECT_PATH")"
+STATE_DIR="${PROJECT_PATH}/.archon"
+PROGRESS_FILE="${STATE_DIR}/PROGRESS.md"
+LOG_DIR="${STATE_DIR}/logs"
 
 # ============================================================
 #  Helper functions
@@ -97,7 +117,7 @@ read_stage() {
     fi
     if [[ ! -f "$PROGRESS_FILE" ]]; then
         echo -e "${RED}[ARCHON]${NC}  PROGRESS.md not found at $PROGRESS_FILE" >&2
-        echo -e "${RED}[ARCHON]${NC}  Create it with: echo -e '# Project Progress\n\n## Current Stage\ninit\n\n## Stages\n- [ ] init\n- [ ] autoformalize\n- [ ] prover\n- [ ] polish\n\n## Current Objectives\n' > $PROGRESS_FILE" >&2
+        echo -e "${RED}[ARCHON]${NC}  Run ./init.sh ${PROJECT_PATH} first." >&2
         exit 1
     fi
     local stage
@@ -121,26 +141,31 @@ build_prompt() {
     local stage="$2"
     if [[ "$agent" == "plan" ]]; then
         cat <<EOF
-You are the plan agent. Current stage: ${stage}.
-Read CLAUDE.md for your role, then read .claude/prompts/plan.md and PROGRESS.md.
+You are the plan agent for project '${PROJECT_NAME}'. Current stage: ${stage}.
+Project directory: ${PROJECT_PATH}
+Project state directory: ${STATE_DIR}
+Read ${STATE_DIR}/CLAUDE.md for your role, then read ${STATE_DIR}/prompts/plan.md and ${STATE_DIR}/PROGRESS.md.
+All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in ${STATE_DIR}/.
+The .lean files are in ${PROJECT_PATH}/.
 EOF
     else
         cat <<EOF
-You are the prover agent. Current stage: ${stage}.
-Read CLAUDE.md for your role, then read .claude/prompts/prover-${stage}.md and PROGRESS.md.
+You are the prover agent for project '${PROJECT_NAME}'. Current stage: ${stage}.
+Project directory: ${PROJECT_PATH}
+Project state directory: ${STATE_DIR}
+Read ${STATE_DIR}/CLAUDE.md for your role, then read ${STATE_DIR}/prompts/prover-${stage}.md and ${STATE_DIR}/PROGRESS.md.
+All state files are in ${STATE_DIR}/. The .lean files are in ${PROJECT_PATH}/.
 EOF
     fi
 }
 
-# Portable relative path (macOS lacks realpath --relative-to)
 relpath() {
     python3 -c "import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))" "$1" "$2" 2>/dev/null \
         || echo "$1"
 }
 
-# Find project .lean files containing sorry
 find_sorry_files() {
-    find "${SCRIPT_DIR}" \
+    find "${PROJECT_PATH}" \
         -path '*/.lake' -prune -o \
         -path '*/lake-packages' -prune -o \
         -path '*/.*' -prune -o \
@@ -149,14 +174,13 @@ find_sorry_files() {
         | sort -u || true
 }
 
-# Extract files listed in PROGRESS.md Current Objectives
 parse_objective_files() {
     awk '/^## Current Objectives/,/^## /' "$PROGRESS_FILE" \
         | grep -oE '\*\*[^*]+\.lean\*\*' \
         | sed 's/\*\*//g' \
         | while IFS= read -r f; do
             local found
-            found=$(find "${SCRIPT_DIR}" -path "*/$f" -not -path '*/.lake/*' -not -path '*/lake-packages/*' 2>/dev/null | head -1)
+            found=$(find "${PROJECT_PATH}" -path "*/$f" -not -path '*/.lake/*' -not -path '*/lake-packages/*' 2>/dev/null | head -1)
             [[ -n "$found" ]] && echo "$found"
         done \
         | sort -u
@@ -178,6 +202,7 @@ run_claude() {
         local stderr_dest="/dev/null"
         [[ "$verbose" == "true" ]] && stderr_dest="$raw_log"
 
+        cd "$PROJECT_PATH"
         claude -p "$prompt" \
             --dangerously-skip-permissions --permission-mode bypassPermissions \
             --verbose --output-format stream-json \
@@ -286,6 +311,7 @@ if RAW: RAW.close()
 " || true
         return 0
     else
+        cd "$PROJECT_PATH"
         claude -p "$prompt" \
             --dangerously-skip-permissions --permission-mode bypassPermissions \
             "$@"
@@ -349,13 +375,13 @@ cost_log_lines() {
 run_parallel_provers() {
     local stage="$1"
 
-    # Archive old results before clearing
-    local results_dir="${SCRIPT_DIR}/task_results"
+    # Archive old results
+    local results_dir="${STATE_DIR}/task_results"
     if ls "${results_dir}/"*.md &>/dev/null; then
         local archive="${LOG_DIR}/task_results-$(date +%Y%m%d-%H%M%S)"
         mkdir -p "$archive"
         mv "${results_dir}/"*.md "$archive/"
-        info "Archived previous task_results/ to ${archive}"
+        info "Archived previous task_results/"
     fi
 
     local sorry_files
@@ -367,21 +393,18 @@ run_parallel_provers() {
     fi
 
     if [[ -z "$sorry_files" ]]; then
-        info "No files with sorry found. Skipping parallel prover iteration."
+        info "No files with sorry found. Skipping prover iteration."
         return 0
     fi
 
     local file_count
     file_count=$(echo "$sorry_files" | wc -l | tr -d ' ')
 
-    # Single file — run serial, no agent teams overhead
     if [[ "$file_count" -eq 1 ]]; then
         local rel
-        rel=$(relpath "$(echo "$sorry_files" | head -1)" "$SCRIPT_DIR")
+        rel=$(relpath "$(echo "$sorry_files" | head -1)" "$PROJECT_PATH")
         info "Only 1 file (${rel}) — running serial prover"
-        local single_prompt
-        single_prompt=$(build_prompt "prover" "$stage")
-        run_claude "$single_prompt" || true
+        run_claude "$(build_prompt "prover" "$stage")" || true
         return 0
     fi
 
@@ -389,64 +412,64 @@ run_parallel_provers() {
 
     local prover_prompt_base
     prover_prompt_base=$(cat <<EOF
-You are a prover agent. Current stage: ${stage}.
-Read CLAUDE.md for your role, then read .claude/prompts/prover-${stage}.md and PROGRESS.md.
+You are a prover agent for project '${PROJECT_NAME}'. Current stage: ${stage}.
+Project directory: ${PROJECT_PATH}
+Project state directory: ${STATE_DIR}
+Read ${STATE_DIR}/CLAUDE.md for your role, then read ${STATE_DIR}/prompts/prover-${stage}.md and ${STATE_DIR}/PROGRESS.md.
 Check your .lean file for /- USER: ... -/ comments for file-specific hints.
 
 IMPORTANT:
 - You own ONLY the file assigned below. Do NOT edit any other .lean file.
-- Write your results to task_results/<your_file>.md when done (see prover-prover.md for format).
+- Write your results to ${STATE_DIR}/task_results/<your_file>.md when done.
 - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
-- Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry. If Mathlib lacks a theorem, implement it yourself, find a detour, or use the informal agent to find an alternative proof path.
-- NEVER revert to a bare sorry. Always leave your partial proof attempt in the code (helper lemmas, commented proof steps, partial by blocks with sorry at the stuck point). The file must compile, but your work must be visible for the next agent.
+- Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
+- NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.
 EOF
     )
 
-    # Build file list for monitor
     local file_list=""
     while IFS= read -r f; do
         local rel
-        rel=$(relpath "$f" "$SCRIPT_DIR")
+        rel=$(relpath "$f" "$PROJECT_PATH")
         file_list="${file_list}  - ${rel}"$'\n'
     done <<< "$sorry_files"
 
     local monitor_prompt
     monitor_prompt=$(cat <<EOF
-You are the monitor agent for a parallel prover round. Current stage: ${stage}.
+You are the monitor agent for project '${PROJECT_NAME}'. Current stage: ${stage}.
+Project directory: ${PROJECT_PATH}
+Project state directory: ${STATE_DIR}
 You do NOT write proofs or edit .lean files. Your only job is to supervise ${file_count} prover teammates.
 
 Teammates and their assigned files:
 ${file_list}
-Each teammate writes results to task_results/<file>.md when done.
+Each teammate writes results to ${STATE_DIR}/task_results/<file>.md when done.
 
-task_results/ has been cleared before this round. Any file that appears is from the current run.
+task_results/ has been cleared before this round.
 
 YOUR RESPONSIBILITIES:
-1. Wait for ALL ${file_count} teammates to finish. Check task_results/ periodically to see which result files have appeared.
-2. Do NOT exit until all ${file_count} expected result files exist in task_results/. Keep checking.
-3. If a teammate seems stuck (much longer than others), note it but keep waiting.
+1. Wait for ALL ${file_count} teammates to finish. Check ${STATE_DIR}/task_results/ periodically.
+2. Do NOT exit until all ${file_count} expected result files exist. Keep checking.
+3. If a teammate seems stuck, note it but keep waiting.
 4. Once all results are in, collect them:
    - Read each task_results/<file>.md
-   - Update task_pending.md with attempt results
-   - Migrate resolved theorems to task_done.md
-   - Update PROGRESS.md with a summary of what was accomplished
-5. Before exiting, run the /cost command and include the output in your final message. This is the only way we can capture the total team cost.
+   - Update ${STATE_DIR}/task_pending.md with attempt results
+   - Migrate resolved theorems to ${STATE_DIR}/task_done.md
+   - Update ${STATE_DIR}/PROGRESS.md with a summary
+5. Before exiting, run the /cost command and include the output in your final message.
 6. Do NOT use TeamDelete.
 7. Do NOT edit any .lean files.
 EOF
     )
 
     if [[ "$DRY_RUN" == true ]]; then
-        echo "=== Monitor (lead) ==="
+        echo "=== Monitor ==="
         echo "$monitor_prompt"
         echo ""
         while IFS= read -r f; do
             local rel
-            rel=$(relpath "$f" "$SCRIPT_DIR")
-            echo "=== Prover teammate: ${rel} ==="
-            echo "${prover_prompt_base}"
-            echo "Your assigned file: ${rel}"
-            echo ""
+            rel=$(relpath "$f" "$PROJECT_PATH")
+            echo "=== Prover: ${rel} ==="
         done <<< "$sorry_files"
         return 0
     fi
@@ -456,29 +479,24 @@ EOF
     local teammate_args=()
     while IFS= read -r f; do
         local rel
-        rel=$(relpath "$f" "$SCRIPT_DIR")
+        rel=$(relpath "$f" "$PROJECT_PATH")
         teammate_args+=("--teammate-mode" "tmux" "-p" "${prover_prompt_base}"$'\n'"Your assigned file: ${rel}")
     done <<< "$sorry_files"
 
     info "Monitor supervising ${file_count} prover teammate(s)"
     info ""
-    info "Watch progress from another terminal:"
+    info "Watch progress:"
     info "  tail -f ${LOG_DIR}/archon-*.jsonl"
-    info "  watch -n10 'ls -lt task_results/'"
+    info "  watch -n10 'ls -lt ${STATE_DIR}/task_results/'"
     info ""
 
     run_claude "$monitor_prompt" "${teammate_args[@]}" || true
 
-    # Emit a note about parallel cost tracking
+    # Emit parallel round note
     if [[ -n "${LOG_BASE:-}" ]]; then
         python3 -c "
 import json, datetime
-row = {
-    'ts': datetime.datetime.now().isoformat(),
-    'event': 'parallel_round_end',
-    'teammate_count': ${file_count},
-    'note': 'session_end cost reflects monitor + teammates if Claude Code aggregates team costs. Check monitor final message for /cost output.'
-}
+row = {'ts': datetime.datetime.now().isoformat(), 'event': 'parallel_round_end', 'teammate_count': ${file_count}}
 with open('${LOG_BASE}.jsonl', 'a') as f:
     f.write(json.dumps(row) + '\n')
 " 2>/dev/null || true
@@ -489,8 +507,6 @@ with open('${LOG_BASE}.jsonl', 'a') as f:
 #  Main
 # ============================================================
 
-cd "$SCRIPT_DIR"
-
 # -- Pre-flight --
 if [[ "$DRY_RUN" != true ]]; then
     if ! command -v claude &>/dev/null; then
@@ -498,77 +514,50 @@ if [[ "$DRY_RUN" != true ]]; then
         exit 1
     fi
     if ! claude -p "reply with OK" --no-session-persistence &>/dev/null; then
-        err "Claude Code cannot run. Possible causes:"
-        err "  - Not logged in (run: claude auth)"
-        err "  - No API key set (set ANTHROPIC_API_KEY)"
-        err "  - Network issue"
+        err "Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network."
         exit 1
     fi
     ok "Claude Code is authenticated and ready"
 fi
 
-# -- Check PROGRESS.md exists --
+# -- Check project state exists --
 if [[ ! -f "$PROGRESS_FILE" ]]; then
-    echo -e "${RED}[ARCHON]${NC}  PROGRESS.md not found at $PROGRESS_FILE" >&2
-    echo -e "${RED}[ARCHON]${NC}  Run setup.sh first, or create it manually." >&2
+    err "No project state found for '${PROJECT_NAME}'."
+    err "Run: ./init.sh ${PROJECT_PATH}"
     exit 1
 fi
 
-# -- Init stage (interactive, before logging) --
 STAGE=$(read_stage)
-
 if [[ "$STAGE" == "init" ]]; then
-    info "═══════════════════════════════════════════════"
-    info "Stage: init — Interactive project setup"
-    info "═══════════════════════════════════════════════"
-    info "Claude will check the project state and guide you through setup."
-    info "When done, Claude will update PROGRESS.md to the next stage."
-    info "Then re-run this script to start the automated loop."
-    echo ""
-
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "Would launch: claude (interactive)"
-        exit 0
-    fi
-
-    claude "You are in the init stage. Read CLAUDE.md, then read .claude/prompts/init.md and follow its instructions." || true
-
-    NEW_STAGE=$(read_stage)
-    if [[ "$NEW_STAGE" == "init" ]]; then
-        warn "Stage is still 'init'. Setup may not be complete."
-        warn "Re-run: ./archon-loop.sh"
-    else
-        ok "Setup complete. Stage is now: ${NEW_STAGE}"
-        ok "Re-run to start the automated loop: ./archon-loop.sh"
-    fi
-    exit 0
+    err "Project '${PROJECT_NAME}' is still in init stage."
+    err "Run: ./init.sh ${PROJECT_PATH}"
+    exit 1
 fi
 
-# -- Logging setup (automated loop only) --
-LOG_BASE=""
+# -- Logging setup --
 if [[ "$DRY_RUN" != true ]]; then
-    mkdir -p "$LOG_DIR" "${SCRIPT_DIR}/task_results"
+    mkdir -p "$LOG_DIR" "${STATE_DIR}/task_results"
     LOG_BASE="${LOG_DIR}/archon-$(date +%Y%m%d-%H%M%S)"
 fi
 
 info "Archon Loop starting"
+info "Project: ${PROJECT_PATH}"
+info "State: ${STATE_DIR}"
 info "Max iterations: ${MAX_ITERATIONS}"
-info "Working directory: ${SCRIPT_DIR}"
 [[ -n "$FORCE_STAGE" ]] && info "Forced stage: ${FORCE_STAGE}"
 [[ "$PARALLEL" == true ]] && info "Prover mode: parallel (agent teams)"
-[[ "$PARALLEL" != true ]] && info "Prover mode: serial (single prover)"
+[[ "$PARALLEL" != true ]] && info "Prover mode: serial"
 [[ "$DRY_RUN" == true ]] && warn "DRY RUN mode"
 [[ -n "$LOG_BASE" ]] && info "Log: ${LOG_BASE}.jsonl"
-[[ "$VERBOSE_LOGS" == true && -n "$LOG_BASE" ]] && info "Raw stream: ${LOG_BASE}.raw.jsonl" || true
+[[ "$VERBOSE_LOGS" == true && -n "$LOG_BASE" ]] && info "Raw: ${LOG_BASE}.raw.jsonl" || true
 info ""
-info "To guide agents while the loop runs:"
-info "  - Edit USER_HINTS.md          → strategic hints (plan agent reads)"
-info "  - Add /- USER: ... -/ in .lean → file-specific hints (prover reads)"
+info "User hints: ${STATE_DIR}/USER_HINTS.md"
+info "Or add /- USER: ... -/ comments in .lean files"
 echo ""
 
 # -- COMPLETE check --
 if is_complete; then
-    ok "PROGRESS.md says COMPLETE. Nothing to do."
+    ok "Project '${PROJECT_NAME}' is COMPLETE. Nothing to do."
     exit 0
 fi
 
@@ -591,7 +580,7 @@ for (( i=0; i<MAX_ITERATIONS; i++ )); do
     fi
 
     info "════════════════════════════════════════"
-    info "Iteration $((i+1))/${MAX_ITERATIONS}  |  Stage: ${STAGE}"
+    info "Iteration $((i+1))/${MAX_ITERATIONS}  |  Stage: ${STAGE}  |  Project: ${PROJECT_NAME}"
     info "════════════════════════════════════════"
 
     ITER_START=$SECONDS
@@ -605,7 +594,6 @@ for (( i=0; i<MAX_ITERATIONS; i++ )); do
     PLAN_PROMPT=$(build_prompt "plan" "$STAGE")
     if [[ "$DRY_RUN" == true ]]; then
         echo "$PLAN_PROMPT"
-        echo ""
     else
         run_claude "$PLAN_PROMPT" || true
     fi
@@ -633,7 +621,6 @@ for (( i=0; i<MAX_ITERATIONS; i++ )); do
         PROVER_PROMPT=$(build_prompt "prover" "$STAGE")
         if [[ "$DRY_RUN" == true ]]; then
             echo "$PROVER_PROMPT"
-            echo ""
         else
             run_claude "$PROVER_PROMPT" || true
         fi

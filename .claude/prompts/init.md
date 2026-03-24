@@ -83,4 +83,4 @@ Use [x] for stages that are truly complete or that you intentionally skip.
 
 ## After init
 
-When you advance the stage out of `init`, tell the user: "Setup complete. Exit Claude Code with `/exit` or `Ctrl+D`, then re-run `./archon-loop.sh` to start the automated loop."
+When you advance the stage out of `init`, tell the user: "Init complete. Exit Claude Code with `/exit` or `Ctrl+D`. Then verify with `/lean4:doctor` and start the loop with `./archon-loop.sh`."

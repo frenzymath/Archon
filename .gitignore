@@ -1,7 +1,12 @@
+# Workspace projects are local working copies, not part of Archon repo
+workspace/*
+!workspace/.gitkeep
+
+# Legacy artifacts (safe to delete)
+.claude/tools/lean4/
+.claude/docs/lean4/
+
+# Root-level files not needed in repo
 mathlib_preferred_idioms.md
 mathlib_unavailable_theorems.md
-/.claude
-workspace/SKILL_CHANGES.md
-workspace/task_results/
-workspace/logs/
-workspace/.claude/skills/.git/
+SKILL_CHANGES.md

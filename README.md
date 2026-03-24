@@ -4,86 +4,118 @@ Archon is an agentic system that autonomously formalizes research-level mathemat
 
 ## Setup
 
-Prerequisites: git, Python 3.10+, curl.
+Prerequisites: git, Python 3.10+, curl, elan (Lean toolchain).
 
 ```bash
-git clone <repo-url>
-cd Archon-preopen
+git clone <repo-url> ~/Archon
+cd ~/Archon
 ./setup.sh
 ```
 
-`setup.sh` will:
-1. Verify system prerequisites (git, Python, pip, curl)
-2. Install `uv` (Python package manager) and the local lean-lsp-mcp server
-3. Install `tmux` (required for parallel prover agents)
-4. Install Claude Code (or detect existing installation)
-5. Register the lean-lsp-mcp MCP server at project scope
-6. Register the bundled lean4 skills plugin via local marketplace
+Install once. Works with any number of Lean projects.
 
-After setup, verify plugins are working:
+## Usage
+
+### 1. Initialize a project
+
+**Option A — Use an existing project in-place** (recommended for active repos):
 ```bash
-cd workspace
+cd ~/Archon
+./init.sh /path/to/your-lean-project
+```
+This adds a `.archon/` folder (runtime state) and symlinks Archon skills into `.claude/skills/` inside your project. No project files are copied or moved.
+
+**Option B — Create a project in Archon's workspace**:
+```bash
+cd ~/Archon
+./init.sh workspace/my-project
+```
+
+If no path is given, `init.sh` defaults to the current directory and prints a clear message about what it's doing.
+
+Init installs per-project MCP + skills and guides you through setup:
+- Detects existing Lean project state
+- Sets up lakefile and Mathlib if needed
+- Counts sorries, writes initial objectives
+
+After init, verify:
+```bash
+cd /path/to/your-lean-project   # or workspace/my-project
 claude
 # Inside Claude Code:
 /lean4:doctor
 ```
 
-If plugins weren't registered, re-run `./setup.sh` from the repo root.
-
-## Usage
-
-### Starting a new project
+### 2. Start the automated loop
 
 ```bash
-cd workspace
-./archon-loop.sh
+cd ~/Archon
+./archon-loop.sh /path/to/your-lean-project
 ```
 
-On first run, `PROGRESS.md` starts at stage `init`. The script launches Claude Code **interactively** so you can:
-- Provide informal proofs, blueprints, or problem statements
-- Point to an existing Lean project
-- Configure Lean and Mathlib versions
-
-Claude detects the project state and advances to the next stage. Then re-run the script to start the automated loop.
-
-### Automated loop
-
+Or from the project directory (no path needed):
 ```bash
-./archon-loop.sh              # parallel provers (default)
-./archon-loop.sh --serial     # single prover per iteration
-./archon-loop.sh --dry-run    # print prompts without running
+cd /path/to/your-lean-project
+~/Archon/archon-loop.sh
 ```
 
-The loop alternates plan and prover agents through four stages:
+The loop alternates plan and prover agents through stages:
 
 | Stage | What happens |
 |-------|-------------|
-| `init` | Interactive setup (runs once, then exits) |
 | `autoformalize` | Scaffolding — translate informal math into Lean declarations with `sorry` |
 | `prover` | Proving — fill `sorry` placeholders with verified proofs |
 | `polish` | Verification and polish — golf, refactor, extract reusable lemmas |
 
 The loop exits automatically when the stage reaches `COMPLETE`.
 
+### 3. Multiple projects
+
+```bash
+# External projects — no copying needed
+./init.sh ~/repos/project-A
+./init.sh ~/repos/project-B
+
+# Or workspace projects
+./init.sh workspace/project-C
+
+# Run in parallel from separate terminals:
+./archon-loop.sh ~/repos/project-A
+./archon-loop.sh ~/repos/project-B
+```
+
+Each project gets `.archon/` (runtime state) and `.claude/skills/lean4` (symlink to Archon skills).
+
 ### Guiding agents while the loop runs
 
 No need to stop the loop — provide hints in two places:
 
-- **`USER_HINTS.md`** — strategic guidance for the plan agent (e.g., "the measure_union approach is a dead end, try sigma-additivity instead"). The plan agent reads this every iteration and translates your hints into concrete prover objectives.
-- **`/- USER: ... -/` comments in `.lean` files** — file-specific hints for the prover that owns that file (e.g., "try Stacks 0A31 for this lemma").
+- **`<project>/.archon/USER_HINTS.md`** — strategic guidance for the plan agent
+- **`/- USER: ... -/` comments in `.lean` files** — file-specific hints for the prover
 
 ### Monitoring
 
 ```bash
-# Structured log (one JSON event per line)
-tail -f workspace/logs/archon-*.jsonl
+# Structured log
+tail -f /path/to/project/.archon/logs/archon-*.jsonl
 
-# Pretty-print the log
-cat workspace/logs/archon-*.jsonl | python3 -m json.tool
-
-# Check prover results as they finish
-watch -n10 'ls -lt workspace/task_results/'
+# Check prover results
+watch -n10 'ls -lt /path/to/project/.archon/task_results/'
 ```
+
+### Existing lean4-skills installations
+
+If you already have the standard `lean4-skills` plugin installed globally, `init.sh` will automatically detect it and **disable it for this project only**. This prevents Claude Code from seeing two conflicting skill sets (Archon's modified version and the standard one) and not knowing which to use.
+
+Your global installation is **not removed** — it continues to work in all other projects.
+
+To re-enable the standard lean4-skills in an Archon project:
+```bash
+cd /path/to/your-project
+claude plugin enable lean4-skills --scope project
+```
+
+To check which plugins are active, run `/plugin` inside Claude Code and check the Installed tab.
 
 ### CLI options
 
@@ -99,31 +131,24 @@ watch -n10 'ls -lt workspace/task_results/'
 
 ### Dual-agent architecture with strategic oversight
 
-The plan agent doesn't just dispatch tasks. When the prover encounters obstacles, the plan agent employs three intervention strategies: **detailed informal support** (generating step-by-step natural-language guidance), **decomposition** (breaking complex proofs into smaller, independently provable sub-lemmas), and **informal re-routing** (proposing alternative proof strategies when the standard approach lacks necessary library infrastructure). It recognizes common failure patterns — premature abandonment, wrong constructions, skipped web searches — and responds with targeted corrections, tracking dead ends so provers never re-explore failed approaches.
+The plan agent doesn't just dispatch tasks. When the prover encounters obstacles, the plan agent employs three intervention strategies: **detailed informal support** (generating step-by-step natural-language guidance), **decomposition** (breaking complex proofs into smaller, independently provable sub-lemmas), and **informal re-routing** (proposing alternative proof strategies when the standard approach lacks necessary library infrastructure).
 
 ### Parallel prover agents
 
-Prover iterations automatically detect which `.lean` files contain `sorry` and spawn one prover agent per file using Claude Code agent teams. Each agent has exclusive ownership of its file — no conflicts, no merge issues. The plan agent coordinates and commits the combined work. Use `--serial` to fall back to a single prover.
+Prover iterations automatically detect which `.lean` files contain `sorry` and spawn one prover agent per file using Claude Code agent teams. Each agent has exclusive ownership of its file — no conflicts, no merge issues. Use `--serial` to fall back to a single prover.
 
 ### Pre-generated informal proofs
 
-Archon pre-generates complete informal proofs before attempting formalization, eliminating wasted computation from repeated re-derivation during proving cycles. The plan agent enriches blueprints using external model consultation and web search for published papers, ensuring the prover always has rich mathematical context rather than working blind.
+Archon pre-generates complete informal proofs before attempting formalization, eliminating wasted computation from repeated re-derivation during proving cycles. The plan agent enriches blueprints using external model consultation and web search for published papers.
 
 ### Task tracking organized by theorem
 
-`task_pending.md` is organized by file and theorem, not by time. Each theorem accumulates its attempt history: what was tried, what failed, what dead ends to avoid, what Mathlib lemmas were found. An index at the top lets agents jump to the right section. `task_done.md` archives completed theorems with the strategy that worked. This persistent memory across fresh-context iterations prevents the system from rediscovering the same dead ends.
+`task_pending.md` is organized by file and theorem, not by time. Each theorem accumulates its attempt history: what was tried, what failed, what dead ends to avoid. This persistent memory across fresh-context iterations prevents the system from rediscovering the same dead ends.
 
 ### Expert knowledge through bundled skills (40+ guides)
 
-All Lean 4 skill references ship with the project — no external dependencies. This encodes tacit expertise reflecting authentic mathematical practice: tactic patterns, domain-specific proof strategies (measure theory, algebra, topology), Mathlib integration guides, proof golfing patterns, compilation error fixes, and more. Two notable additions:
-
-- **Preferred Mathlib idioms** — which abstractions to choose (filters over epsilon-delta, bundled morphisms, Finset vs Set, Finite vs Fintype)
-- **Unavailable theorems index** — 52 mathematical domains with classical theorems that should not be used as default dependencies due to missing or immature Mathlib infrastructure. This proactively prevents wasted effort on approaches that will fail due to infrastructure gaps.
+All Lean 4 skill references ship with the project — no external dependencies. Includes tactic patterns, domain-specific proof strategies, Mathlib integration guides, proof golfing patterns, compilation error fixes, preferred Mathlib idioms, and an unavailable theorems index covering 52 mathematical domains.
 
 ### Local lean-lsp-mcp server
 
-The Lean LSP MCP server ships as a local fork with adjusted rate limits, ensuring agents can search Mathlib effectively without hitting throttling during intensive proof sessions. The entire tool suite — LeanSearch, Lean LSP diagnostics, goal inspection — runs locally with no external service dependencies.
-
-### Inviolable proof integrity rules
-
-Working proofs are never modified. Theorem statements are never changed. Mathlib version is never touched. Every edit is verified before and after. If compilation breaks, the change is reverted immediately. These rules are absolute — no optimization or convenience overrides them.
+The Lean LSP MCP server ships as a local fork with adjusted rate limits, ensuring agents can search Mathlib effectively without hitting throttling during intensive proof sessions.
