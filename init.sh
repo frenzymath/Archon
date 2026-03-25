@@ -129,9 +129,11 @@ if [[ -f "$HOME/.claude/settings.json" ]] && command -v python3 &>/dev/null; the
     while IFS= read -r mcp_name; do
         [[ -z "$mcp_name" ]] && continue
         GLOBAL_MCP_FOUND=true
-        warn "Detected global MCP server '${mcp_name}' that may conflict with Archon's lean-lsp."
+        warn "Found existing MCP server '${mcp_name}' in your global config."
+        info "  Archon uses its own modified version (archon-lean-lsp) in this project."
+        info "  Disabling '${mcp_name}' here so only Archon's version is active."
         claude mcp remove "$mcp_name" -s project 2>/dev/null || true
-        info "Disabled '${mcp_name}' for this project."
+        ok "Disabled '${mcp_name}' for this project"
     done < <(python3 -c "
 import json
 try:
@@ -146,8 +148,9 @@ except: pass
 
     if [[ "$GLOBAL_MCP_FOUND" == true ]]; then
         info ""
-        info "${BOLD}NOTE:${NC} Your global lean-lsp MCP is NOT removed — it still works in other projects."
-        info "To re-enable it here: ${CYAN}claude mcp add lean-lsp -s project -- <original command>${NC}"
+        info "${BOLD}What happened:${NC} Your global MCP is untouched and still works in all other projects."
+        info "In this project only, Archon's modified version (archon-lean-lsp) will be used."
+        info "To restore the original here: ${CYAN}claude mcp add lean-lsp -s project -- <original command>${NC}"
         echo ""
     fi
 fi
@@ -167,10 +170,10 @@ fi
 # ============================================================
 info "=== Step 4: Linking Archon skills ==="
 
-ARCHON_SKILLS="${ARCHON_DIR}/.archon-src/skills/lean4"
+ARCHON_SKILLS_DIR="${ARCHON_DIR}/.archon-src/skills"
 
-# Verify Archon skills are present
-if [ ! -f "${ARCHON_SKILLS}/.claude-plugin/plugin.json" ]; then
+# Verify core lean4 skills are present
+if [ ! -f "${ARCHON_SKILLS_DIR}/lean4/.claude-plugin/plugin.json" ]; then
     err "Archon lean4 skills not found at .archon-src/skills/lean4/"
     err "The repo may be incomplete — try re-cloning."
     exit 1
@@ -179,10 +182,23 @@ fi
 # Create .claude/skills/ and .claude/rules/ in the project
 mkdir -p "${PROJECT_PATH}/.claude/skills" "${PROJECT_PATH}/.claude/rules"
 
-# Symlink Archon's lean4 skills into the project (as archon-lean4 to avoid
-# conflicting with any existing .claude/skills/lean4 the user may have)
-ln -sfn "${ARCHON_SKILLS}" "${PROJECT_PATH}/.claude/skills/archon-lean4"
-ok "Archon lean4 skills symlinked to .claude/skills/archon-lean4"
+# Symlink all skill directories from .archon-src/skills/ into the project.
+# lean4 is symlinked as archon-lean4 to avoid conflicting with any existing
+# .claude/skills/lean4 the user may have. Other skills keep their original name.
+SKILL_COUNT=0
+for skill_dir in "${ARCHON_SKILLS_DIR}"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    skill_name="$(basename "$skill_dir")"
+    if [[ "$skill_name" == "lean4" ]]; then
+        ln -sfn "$skill_dir" "${PROJECT_PATH}/.claude/skills/archon-lean4"
+        ok "Skill symlinked: archon-lean4 (from lean4)"
+    else
+        ln -sfn "$skill_dir" "${PROJECT_PATH}/.claude/skills/${skill_name}"
+        ok "Skill symlinked: ${skill_name}"
+    fi
+    SKILL_COUNT=$((SKILL_COUNT + 1))
+done
+ok "${SKILL_COUNT} global skill(s) installed"
 ok "User skill/rule directories created (.claude/skills/, .claude/rules/)"
 
 # Symlink informal agent tool
@@ -223,13 +239,13 @@ except: pass
 fi
 
 if [[ "$GLOBAL_LEAN4_FOUND" == true ]]; then
-    warn "Detected global lean4-skills plugin(s) that would conflict with Archon's skills:"
+    warn "Found existing lean4-skills plugin(s) in your global config:"
     for name in "${GLOBAL_LEAN4_NAMES[@]}"; do
         warn "  - ${name}"
     done
     info ""
-    info "Disabling for this project to avoid duplicate skill conflicts."
-    info "Archon's modified lean4 skills (symlinked) will be used instead."
+    info "Archon uses its own modified version (archon-lean4) in this project."
+    info "Disabling the original(s) here so only Archon's version is active."
     info ""
 
     cd "$PROJECT_PATH"
@@ -240,8 +256,9 @@ if [[ "$GLOBAL_LEAN4_FOUND" == true ]]; then
     done
 
     info ""
-    info "${BOLD}NOTE:${NC} Your global lean4-skills is NOT removed — it still works in other projects."
-    info "To re-enable it in this project, run:"
+    info "${BOLD}What happened:${NC} Your global lean4-skills is untouched and still works in all other projects."
+    info "In this project only, Archon's modified version (archon-lean4) will be used."
+    info "To restore the original here:"
     for name in "${GLOBAL_LEAN4_NAMES[@]}"; do
         info "  ${CYAN}cd ${PROJECT_PATH} && claude plugin enable ${name} --scope project${NC}"
     done

@@ -61,131 +61,78 @@ The loop alternates plan and prover agents through stages:
 | `prover` | Proving — fill `sorry` placeholders with verified proofs |
 | `polish` | Verification and polish — golf, refactor, extract reusable lemmas |
 
-The loop exits automatically when the stage reaches `COMPLETE`.
+The loop exits automatically when the stage reaches `COMPLETE`. You can run `archon-loop.sh` on multiple projects in parallel from separate terminals — each project's state is independent.
 
-### 3. Multiple projects
+### Guiding agents
 
-```bash
-./init.sh ~/repos/project-A
-./init.sh ~/repos/project-B
+There are three ways to influence Archon's behavior. Each serves a different purpose:
 
-# Run in parallel from separate terminals:
-./archon-loop.sh ~/repos/project-A
-./archon-loop.sh ~/repos/project-B
-```
+| Mechanism | When to use | Lifetime | Who reads it |
+|-----------|-------------|----------|-------------|
+| **USER_HINTS.md** | Mid-run course corrections | One-shot — cleared after each plan cycle | Plan agent |
+| **/- USER: ... -/ comments** | File-specific proof guidance | Persistent — stays in the `.lean` file | Prover agent |
+| **Prompts** | Change how agents think and operate | Permanent — applies every iteration | All agents |
 
-Each project gets `.archon/` (runtime state) and `.claude/skills/archon-lean4` (symlink to Archon skills).
+**USER_HINTS.md** — for things that change between iterations. Examples: "prioritize theorem X next", "stop trying approach Y, it's a dead end". The plan agent reads this once, acts on it, and clears the file. Don't put permanent instructions here — they'll be lost.
 
-### Guiding agents while the loop runs
+**/- USER: ... -/ comments** — for proof-level guidance tied to a specific `.lean` file. Examples: "try using Finset.sum_comm here", "this sorry depends on the helper lemma above". These persist in the source file and are visible to whichever prover agent owns that file.
 
-No need to stop the loop — provide hints in two places:
+**Prompts** — for changing how agents behave across all iterations. Edit prompts when you want to change the plan agent's strategy, the prover's proof style, or the review agent's analysis. Archon has two layers — local overrides global:
 
-- **`<project>/.archon/USER_HINTS.md`** — strategic guidance for the plan agent
-- **`/- USER: ... -/` comments in `.lean` files** — file-specific hints for the prover
+| Layer | Location | Scope |
+|-------|----------|-------|
+| **Global** | `Archon/.archon-src/prompts/*.md` | All projects |
+| **Local** | `<project>/.archon/prompts/*.md` | One project only |
 
-### Monitoring
+By default, local prompts are symlinks to the global ones — so edits to the global prompt are picked up automatically by every project on the next iteration. To override a prompt for one project, replace the symlink with a copy and edit it. Note that once you do this, future updates to the global prompt will no longer propagate to that project — you are responsible for keeping the local copy up to date.
 
-```bash
-# Structured log
-tail -f /path/to/project/.archon/logs/archon-*.jsonl
+### Customizing skills
 
-# Check prover results
-watch -n10 'ls -lt /path/to/project/.archon/task_results/'
-```
+Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfreer/lean4-skills), installed as `archon-lean4` (providing `/archon-lean4:prove`, `/archon-lean4:doctor`, etc.). Skills follow a global-vs-local layering:
+
+| Layer | Location | What it provides |
+|-------|----------|-----------------|
+| **Global** | `Archon/.archon-src/skills/*/` | Skills symlinked into every project on init |
+| **Local** | `<project>/.claude/skills/<name>/` | Project-specific skills you create |
+
+**Modifying global skills**: You can edit files directly under `Archon/.archon-src/skills/lean4/`. Since projects symlink to this directory, changes take effect on the next Claude Code session in any project. Be aware that this affects all projects.
+
+**Adding new global skills**: Create a new directory under `Archon/.archon-src/skills/<your-skill-name>/` with a `SKILL.md` or `.claude-plugin/plugin.json` inside. Run `./init.sh` again on your project to pick up the new skill — init symlinks all directories under `.archon-src/skills/` automatically.
+
+**Modifying local (project-only) skills**: To customize a global skill for one project without affecting others, replace the symlink with a local copy. As with prompts, once you replace the symlink, future updates to the global skill will no longer propagate to this project.
+
+**Adding local skills**: Place them in `<project>/.claude/skills/<your-skill-name>/SKILL.md`. They are discovered by Claude Code automatically and won't conflict with Archon's `/archon-lean4:*` commands. No re-init needed.
+
+### Monitoring progress
+
+To check how the formalization is going, look at these files in your project:
+
+- **`.archon/PROJECT_STATUS.md`** — overall progress: total sorries, what's solved, what's blocked, and reusable proof patterns. This is the best starting point.
+- **`.archon/proof-journal/sessions/session_N/summary.md`** — detailed record of a specific iteration: what was attempted, what succeeded, what failed, and why.
+
+These are updated automatically by the review agent after each iteration. If the loop has finished with `--no-review` and you want to generate a review manually, run `./review.sh /path/to/your-project`.
 
 ### Existing lean4-skills and lean-lsp MCP installations
 
-If you already have the standard `lean4-skills` plugin or a `lean-lsp` MCP server installed globally, `init.sh` will automatically detect them and **disable them for this project only**. This prevents Claude Code from seeing two conflicting skill sets or MCP servers and not knowing which to use.
+If you already have `lean4-skills` or `lean-lsp` MCP installed globally, `init.sh` detects them and disables them **for this project only** — so only Archon's modified versions are active. Your global installations are untouched and continue working in all other projects.
 
-Your global installations are **not removed** — they continue to work in all other projects.
-
-To re-enable them in an Archon project:
+To restore the originals in an Archon project:
 ```bash
 cd /path/to/your-project
-# Re-enable standard skills:
-claude plugin enable lean4-skills --scope project
-# Re-enable standard MCP (replace <original command> with your setup):
-claude mcp add lean-lsp -s project -- <original command>
+claude plugin enable lean4-skills --scope project     # re-enable standard skills
+claude mcp add lean-lsp -s project -- uvx lean-lsp-mcp  # re-enable standard MCP
 ```
-
-To check which plugins are active, run `/plugin` inside Claude Code. To check MCP servers, run `claude mcp list`.
 
 ### CLI options
 
 | Flag | Description |
 |------|-------------|
-| `--max-iterations N` | Max loop iterations (default: 10) |
-| `--stage STAGE` | Override the current stage |
-| `--serial` | Use a single prover instead of parallel agents |
-| `--verbose-logs` | Also save raw Claude stream events to `.raw.jsonl` |
-| `--no-review` | Skip review phase after prover |
-| `--dry-run` | Print prompts without launching Claude |
-
-### Review and proof journal
-
-After each prover round, a **review agent** analyzes what happened — adding a third phase to each iteration: Plan → Prover → Review.
-
-The review agent:
-1. Reads structured attempt data extracted from the prover log (code changes, goal states, errors, lemma searches)
-2. Writes a session journal (`summary.md` + `milestones.jsonl`) with per-target, per-attempt detail
-3. Updates `PROJECT_STATUS.md` with cumulative progress and known blockers
-4. Writes `recommendations.md` with suggestions for the next plan iteration
-
-The plan agent reads the latest review findings when setting objectives for the next round, closing the feedback loop. Use `--no-review` to skip the review phase if needed — the plan agent still functions normally without it.
-
-Journal data lives in `.archon/proof-journal/sessions/session_N/`.
-
-#### Standalone review
-
-You can also run the review independently of the loop — useful for reviewing a completed session or re-reviewing with different context:
-
-```bash
-./review.sh /path/to/your-lean-project              # review latest log
-./review.sh /path/to/your-lean-project --log FILE    # review a specific log
-```
-
-### Customization: global vs. local
-
-Archon uses a two-layer system for prompts and skills. Both layers are visible to Claude Code when it runs inside a project, but local definitions take precedence over global ones.
-
-**Global layer** — defined under the Archon installation directory, shared across all projects:
-
-| What | Location | Effect |
-|------|----------|--------|
-| Prompts | `Archon/.archon-src/prompts/*.md` | Agent instructions for plan/prover stages |
-| Skills | `Archon/.archon-src/skills/lean4/` | Lean4 slash commands and agents |
-
-Editing these files changes behavior for every project that Archon initializes.
-
-**Local layer** — defined inside each project, affects only that project:
-
-| What | Location | Effect |
-|------|----------|--------|
-| Prompts | `<project>/.archon/prompts/*.md` | Override specific prompts for this project |
-| Skills | `<project>/.claude/skills/<name>/` | Add project-specific slash commands |
-| Rules | `<project>/.claude/rules/*.md` | Add passive guidance loaded every session |
-
-**How overrides work:**
-
-By default, `.archon/prompts/` contains symlinks pointing back to Archon's global prompts. To override a prompt for a single project, replace the symlink with your own file:
-
-```bash
-cd /path/to/your-project
-rm .archon/prompts/plan.md                    # remove the symlink
-cp /path/to/Archon/.archon-src/prompts/plan.md .archon/prompts/plan.md  # start from the original
-# now edit .archon/prompts/plan.md freely
-```
-
-The local file wins because `archon-loop.sh` always reads from `.archon/prompts/` — it doesn't know or care whether the file is a symlink or a real file.
-
-For skills, `.claude/skills/archon-lean4` is a symlink to Archon's global skills. You can add your own project-specific skills alongside it without conflict:
-
-```bash
-mkdir -p .claude/skills/my-workflow
-# Create .claude/skills/my-workflow/SKILL.md with your custom slash command
-```
-
-Your custom `/my-workflow` command coexists with Archon's `/lean4:*` commands.
+| `--max-iterations N` | Max plan→prover→review cycles (default: 10). Exits early if stage reaches `COMPLETE`. |
+| `--stage STAGE` | Force a stage (`autoformalize`, `prover`, `polish`) instead of reading from PROGRESS.md. |
+| `--serial` | One prover at a time instead of parallel (one per file). |
+| `--verbose-logs` | Save raw Claude stream events to `.raw.jsonl` for debugging. |
+| `--no-review` | Skip review phase. Saves time/cost; plan agent still works without it. |
+| `--dry-run` | Print prompts without launching Claude. |
 
 ## Why orchestrating Claude Code works
 
