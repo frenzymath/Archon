@@ -176,6 +176,6 @@ In standard mode, `archon-loop.sh` enforces a fixed cycle: plan→prover→revie
 
 **Flexibility** — the orchestrator decides when to plan, prove, or review based on current state rather than following a fixed sequence, making it adaptable to a wider range of formalization tasks.
 
-**Evolvability** - by design, orchestrators like OpenClaw can author and refine skills and prompts over time. The global/local skill and prompt slots are designed not only for human experts but also for orchestrators: they can analyze failure modes and update skills or prompts accordingly (with your permission), making the system progressively more powerful.
-
 **Stability** — a supervisor layer catches errors that a fixed loop cannot: crashed sessions, malformed state files, stuck provers, or plan agents that set unreasonable objectives. The orchestrator acts as a safety net that keeps the process running correctly over hours or days without manual intervention.
+
+**Evolvability** - by design, orchestrators like OpenClaw can author and refine skills and prompts over time. The global/local skill and prompt slots are designed not only for human experts but also for orchestrators: they can analyze failure modes and update skills or prompts accordingly (with your permission), making the system progressively more powerful.
