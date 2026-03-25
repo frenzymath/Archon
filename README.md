@@ -13,7 +13,9 @@ cd Archon
 ./setup.sh
 ```
 
-`setup.sh` installs system-level dependencies (uv, tmux, Claude Code) and verifies your Lean toolchain.
+`setup.sh` installs system-level dependencies (uv, tmux, Claude Code) and verifies your Lean toolchain. It also checks for API keys needed by the informal agent (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENROUTER_API_KEY`) — at least one is recommended but not required.
+
+Note: the bundled informal agent is a simplified demonstration — it makes a single API call to an external model for proof sketches. Our internal implementation is more involved but not yet ready for open-sourcing. In practice, the one-shot approach does not show an obvious performance drop, likely because Claude Code performs its own verification and refinement on the returned sketches.
 
 ## Usage
 
@@ -136,13 +138,13 @@ claude mcp add lean-lsp -s project -- uvx lean-lsp-mcp  # re-enable standard MCP
 
 ## Why orchestrating Claude Code works
 
-Archon's `archon-loop.sh` is a distillation of a workflow we originally ran by hand using an outer orchestrator (such as OpenClaw) to drive Claude Code. Understanding that origin explains why the architecture looks the way it does — and why you might want to return to the full orchestrator-driven setup for harder problems.
+Archon's `archon-loop.sh` is a distillation of a workflow we originally built using an outer orchestrator (such as OpenClaw) to drive Claude Code. Understanding that origin explains why the architecture looks the way it does — and why you might want to return to the full orchestrator-driven setup for harder problems.
 
 ### The original workflow
 
 If you already have OpenClaw or a similar terminal orchestrator, the end-to-end flow is straightforward:
 
-1. **Bootstrap** — OpenClaw can clone and install Archon, then run `init.sh` against your target project. Whether you start with a configured Lean 4 repository or only natural-language material (a paper, lecture notes, a textbook chapter), Archon's init stage handles the rest.
+1. **Environment setup** — OpenClaw can help set up and debug the various environments needed for formalization: installing dependencies, configuring Lean toolchains, resolving Mathlib cache issues, and verifying that skills and MCP are working correctly. These are tasks that often require back-and-forth troubleshooting — an orchestrator handles them naturally.
 
 2. **Drive Claude Code directly** — With skills and MCP correctly installed in the project, give the orchestrator enough context about the formalization goal and let it invoke Claude Code sessions. Set up cron jobs or polling loops so the orchestrator continuously supervises Claude Code's work.
 

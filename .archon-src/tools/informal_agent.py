@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Informal mathematical reasoning via external LLMs (OpenAI / Gemini).
+"""Informal mathematical reasoning via external LLMs (OpenAI / Gemini / OpenRouter).
 
 No dependencies beyond Python 3.10+ stdlib.
 
 Environment variables:
     OPENAI_API_KEY      Required for --provider openai
     GEMINI_API_KEY      Required for --provider gemini
+    OPENROUTER_API_KEY  Required for --provider openrouter
 
 Usage:
-    python3 .claude/tools/informal_agent.py --provider openai "Prove that ..."
-    python3 .claude/tools/informal_agent.py --provider gemini --think "Prove that ..."
-    python3 .claude/tools/informal_agent.py --provider openai --model gpt-5.4 "..."
+    python3 archon-informal-agent.py --provider openai "Prove that ..."
+    python3 archon-informal-agent.py --provider gemini --think "Prove that ..."
+    python3 archon-informal-agent.py --provider openrouter "Prove that ..."
+    python3 archon-informal-agent.py --provider openrouter --model deepseek/deepseek-r1 "..."
+
+OpenRouter (https://openrouter.ai) provides access to 200+ models through a single
+API key. Set OPENROUTER_API_KEY and use any model ID from their catalog, e.g.:
+    --provider openrouter --model google/gemini-3.1-pro-preview   (default)
+    --provider openrouter --model deepseek/deepseek-r1
+    --provider openrouter --model anthropic/claude-sonnet-4
 """
 
 import argparse
@@ -23,6 +31,7 @@ import urllib.request
 DEFAULTS = {
     "openai": "gpt-5.4",
     "gemini": "gemini-3.1-pro-preview",
+    "openrouter": "google/gemini-3.1-pro-preview",
 }
 
 SYSTEM_PROMPT = (
@@ -127,16 +136,29 @@ def _openai_chat(prompt: str, model: str, auth: dict, base: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def call_openrouter(prompt: str, model: str, think: bool) -> str:
+    key = _require_key("OPENROUTER_API_KEY")
+    auth = {"Authorization": f"Bearer {key}"}
+    data = _post("https://openrouter.ai/api/v1/chat/completions", auth, {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    })
+    return data["choices"][0]["message"]["content"]
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("prompt")
-    p.add_argument("--provider", choices=["openai", "gemini"], required=True)
+    p.add_argument("--provider", choices=["openai", "gemini", "openrouter"], required=True)
     p.add_argument("--model", default=None)
     p.add_argument("--think", action="store_true")
     args = p.parse_args()
 
     model = args.model or DEFAULTS[args.provider]
-    fn = call_gemini if args.provider == "gemini" else call_openai
+    fn = {"gemini": call_gemini, "openai": call_openai, "openrouter": call_openrouter}[args.provider]
     print(fn(args.prompt, model, args.think))
 
 

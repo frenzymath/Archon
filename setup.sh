@@ -204,6 +204,25 @@ else
 fi
 
 # ============================================================
+# Phase 4: Check API keys for informal agent (optional)
+# ============================================================
+info "=== Phase 4: Informal agent API keys (optional) ==="
+
+info "The informal agent lets Claude Code request proof sketches from external models."
+info "This does not affect the rest of the Archon workflow — everything else works without it."
+info ""
+
+[[ -n "${OPENAI_API_KEY:-}" ]]      && ok "OPENAI_API_KEY is set (OpenAI)" \
+                                     || info "  OPENAI_API_KEY not set.      To use OpenAI:      export OPENAI_API_KEY=sk-..."
+[[ -n "${GEMINI_API_KEY:-}" ]]      && ok "GEMINI_API_KEY is set (Gemini)" \
+                                     || info "  GEMINI_API_KEY not set.      To use Gemini:      export GEMINI_API_KEY=AI..."
+[[ -n "${OPENROUTER_API_KEY:-}" ]]  && ok "OPENROUTER_API_KEY is set (OpenRouter)" \
+                                     || info "  OPENROUTER_API_KEY not set.  To use OpenRouter:  export OPENROUTER_API_KEY=sk-or-..."
+
+info ""
+info "Set any key(s) for the provider(s) you want, then add to ~/.bashrc or ~/.zshrc to persist."
+
+# ============================================================
 # Done
 # ============================================================
 echo ""
