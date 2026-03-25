@@ -485,7 +485,7 @@ For these complex cases, use `lean_leansearch` with a natural language descripti
 
 LeanSearch works by converting Mathlib theorems into informal natural language descriptions (via data augmentation with LLMs), then storing both formal and informal versions as embeddings. When you query, it finds the **nearest neighbors** in this embedding space — which means it can find theorems that are **close to but not exactly** what you described.
 
-**This is its killer feature:** The exact theorem you want often does not exist in Mathlib, but a closely related one does. LeanSearch surfaces these neighbors. A strong model like Claude can then bridge the gap with a few lines of proof.
+**This is its feature:** If a precise, well-formulated query returns no relevant results from LeanSearch, you can trust that the theorem does not exist in Mathlib. Do not waste time rephrasing the query or searching with other methods — instead, prove the result yourself or find an alternative approach.
 
 **Parameters:**
 - `query` (required): Natural language description (must end with `.` or `?`)

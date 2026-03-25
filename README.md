@@ -2,6 +2,15 @@
 
 Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. Built on Claude Code and Claude Opus 4.6, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw — see [Why orchestrating Claude Code works](#why-orchestrating-claude-code-works). See also our [blog](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
 
+Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. Single-problem benchmarks are not specifically optimized for. For model choice, **Opus is strongly recommended**; Sonnet also works well. Other models have not been tested — weaker models may fail to handle the complex skills and prompt structures, which can be counterproductive rather than merely slower.
+
+**Security note:** `archon-loop.sh` runs Claude Code with `--dangerously-skip-permissions --permission-mode bypassPermissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests — all without asking for confirmation. This is necessary for unattended operation but carries real risk: a misbehaving model could delete files, overwrite code, or run unintended commands. To reduce exposure:
+
+- Run Archon under a **dedicated, low-privilege user** that only has access to the project directory
+- Run inside a **Docker container** or VM with no access to sensitive data or credentials
+- Avoid running as root or with access to production systems
+- Review `.archon/proof-journal/` after each run to audit what the agents did
+
 ## Setup
 
 Prerequisites: git, Python 3.10+, curl, elan (Lean toolchain).
@@ -146,22 +155,24 @@ If you already have OpenClaw or a similar terminal orchestrator, the end-to-end 
 
 1. **Environment setup** — OpenClaw can help set up and debug the various environments needed for formalization: installing dependencies, configuring Lean toolchains, resolving Mathlib cache issues, and verifying that skills and MCP are working correctly. These are tasks that often require back-and-forth troubleshooting — an orchestrator handles them naturally.
 
-2. **Drive Claude Code directly** — With skills and MCP correctly installed in the project, give the orchestrator enough context about the formalization goal and let it invoke Claude Code sessions. Set up cron jobs or polling loops so the orchestrator continuously supervises Claude Code's work.
+2. **Drive Claude Code directly** — With skills and MCP correctly installed in the project, give the orchestrator enough context about the formalization goal and let it invoke Claude Code sessions. Set up cron jobs or heartbeat loops so the orchestrator continuously supervises Claude Code's work. The entire process is automated — no manual intervention is needed once the orchestrator is running.
 
 3. **Supervise persistence** — This is the critical part. Claude Code, left to its own devices, tends to give up early. For many theorems it will claim that Mathlib lacks the necessary infrastructure, or that the proof would be too long, and stop pushing forward. For research-grade formalization this is unacceptable — the interesting results live precisely in the territory where the model's first instinct is to quit. An outer orchestrator can detect these surrender patterns and push the prover back in with refined hints, decomposed subgoals, or alternative proof strategies.
 
-4. **Multi-window intelligence** — If the orchestrator has a second Claude Code session available, it can use that instance to gather information, search Mathlib, read papers, and organize context — effectively serving as a research assistant for its own planning. The plan agent in `archon-loop.sh` is a simplified version of this pattern.
+4. **Multi-window intelligence** — OpenClaw itself can gather information, search Mathlib, read papers, and organize context to improve its planning — no second Claude Code session or extra configuration needed. It has access to the same tools and context that the plan and prover agents use. The plan agent in `archon-loop.sh` is a simplified version of this pattern.
 
-### From orchestrator to script
+### What the open-source version simplifies
 
-We took that manual orchestrator-driven workflow and condensed it into `archon-loop.sh`: the plan/prover alternation, the parallel agent dispatch, the cross-iteration memory, and the stage-driven progression all come from observing what an effective outer orchestrator actually does when supervising Claude Code over many hours.
+We condensed the orchestrator-driven workflow into `archon-loop.sh`: the plan/prover alternation, the parallel agent dispatch, the cross-iteration memory, and the stage-driven progression all come from observing what an effective outer orchestrator actually does when supervising Claude Code over many hours.
 
-The script is sufficient for most formalization tasks. But the orchestrator-driven approach remains strictly more powerful, because a live orchestrator can:
+The script is sufficient for most formalization tasks. But the full orchestrator-driven approach remains more powerful:
 
-- Intervene in real time when the model is stuck, rather than waiting for the next plan cycle
-- Maintain richer context across sessions than markdown state files allow
-- Adapt its supervision strategy on the fly based on what it observes
+- **Real-time intervention** — an orchestrator can step in the moment the model is stuck, rather than waiting for the next plan cycle
+- **Richer cross-session context** — an orchestrator maintains live state beyond what markdown files can capture
+- **Adaptive supervision** — an orchestrator adjusts its strategy on the fly based on what it observes, rather than following a fixed plan/prover/review loop
 
-### Why this pairing works
+### Benefits of orchestrator-driven workflow
 
-The deepest advantage of pairing an orchestrator with Claude Code — rather than writing a custom proving system from scratch — is **transparency**. Everything happens in a terminal session that a human can read, interrupt, and redirect. When something goes wrong, you can talk directly to the model to diagnose and fix the issue, rather than debugging opaque internal state on the machine. This makes the system dramatically easier to debug, easier to oversee, and easier to trust with ambitious formalization targets.
+**Why run Claude Code in a visible terminal:** Claude Code runs in a terminal session where every action is visible, interruptible, and redirectable. When something goes wrong, a human (or an orchestrator) can talk directly to the session to diagnose and fix issues, rather than digging through logs of a fully automated pipeline. This transparency is what makes ambitious formalization tractable — and debuggable.
+
+**Why an orchestrator on top:** Claude Code alone lacks persistence — it gives up, loses context across sessions, and cannot supervise itself over hours or days. An orchestrator like OpenClaw provides the continuity layer: it keeps the model on task, detects failure patterns, retries with better context, and maintains state across arbitrarily many sessions. The combination — Claude Code's proving ability plus an orchestrator's persistence — is what makes the system work end to end without manual intervention.
