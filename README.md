@@ -145,34 +145,29 @@ claude mcp add lean-lsp -s project -- uvx lean-lsp-mcp  # re-enable standard MCP
 | `--no-review` | Skip review phase. Saves time/cost; plan agent still works without it. |
 | `--dry-run` | Print prompts without launching Claude. |
 
-## Why orchestrating Claude Code works
+## Standard vs. orchestrator-scheduled mode
 
-Archon's `archon-loop.sh` is a distillation of a workflow we originally built using an outer orchestrator (such as OpenClaw) to drive Claude Code. Understanding that origin explains why the architecture looks the way it does — and why you might want to return to the full orchestrator-driven setup for harder problems.
+`archon-loop.sh` is the **standard mode** — a fixed plan→prover→review loop that runs unattended. It is sufficient for most formalization tasks.
 
-### The original workflow
+In our experiments, replacing the fixed loop with an **orchestrator-scheduled mode** — where an outer orchestrator like OpenClaw drives Claude Code directly — yielded stronger results. Instead of following a rigid pipeline, the orchestrator can freely choose when to plan, prove, or review based on the current state, and can supervise the model continuously to prevent premature termination.
 
-If you already have OpenClaw or a similar terminal orchestrator, the end-to-end flow is straightforward:
+### How to use orchestrator-scheduled mode
 
-1. **Environment setup** — OpenClaw can help set up and debug the various environments needed for formalization: installing dependencies, configuring Lean toolchains, resolving Mathlib cache issues, and verifying that skills and MCP are working correctly. These are tasks that often require back-and-forth troubleshooting — an orchestrator handles them naturally.
+> This section was produced independently by OpenClaw based on its accumulated experience orchestrating Claude Code across multiple formalization projects.
 
-2. **Drive Claude Code directly** — With skills and MCP correctly installed in the project, give the orchestrator enough context about the formalization goal and let it invoke Claude Code sessions. Set up cron jobs or heartbeat loops so the orchestrator continuously supervises Claude Code's work. The entire process is automated — no manual intervention is needed once the orchestrator is running.
+Point your orchestrator (e.g., OpenClaw) at [`ORCHESTRATOR_GUIDE.md`](ORCHESTRATOR_GUIDE.md) — it should read this file before starting. The guide teaches the orchestrator how to read Archon's state files, decide which stage to run next, compose prompts from `.archon/prompts/`, and invoke `claude -p` with those prompts. It covers prompt composition, adaptive scheduling logic, failure recovery, and operational rules learned from production use.
 
-3. **Supervise persistence** — This is the critical part. Claude Code, left to its own devices, tends to give up early. For many theorems it will claim that Mathlib lacks the necessary infrastructure, or that the proof would be too long, and stop pushing forward. For research-grade formalization this is unacceptable — the interesting results live precisely in the territory where the model's first instinct is to quit. An outer orchestrator can detect these surrender patterns and push the prover back in with refined hints, decomposed subgoals, or alternative proof strategies.
+### What changes compared to the standard loop
 
-4. **Multi-window intelligence** — OpenClaw itself can gather information, search Mathlib, read papers, and organize context to improve its planning — no second Claude Code session or extra configuration needed. It has access to the same tools and context that the plan and prover agents use. The plan agent in `archon-loop.sh` is a simplified version of this pattern.
+In standard mode, `archon-loop.sh` enforces a fixed cycle: plan→prover→review, repeated up to `--max-iterations`. The orchestrator-scheduled mode differs in several ways:
 
-### What the open-source version simplifies
+- **Environment management** — the orchestrator handles setup and debugging: installing dependencies, resolving Mathlib cache issues, verifying that skills and MCP work correctly. These tasks often require back-and-forth troubleshooting that a fixed script cannot do.
+- **Flexible phase ordering** — the orchestrator decides when to plan, prove, or review based on what it observes, rather than following a fixed sequence. It might skip planning when the current objectives are still valid.
+- **Real-time intervention** — the orchestrator can step in the moment the model is stuck. It detects surrender patterns (e.g., "Mathlib lacks infrastructure") and pushes the prover back in with refined hints or alternative strategies.
+- **Richer cross-session context** — the orchestrator has its own memory. It can retain whatever state matters for adaptive routing — failure histories, proof patterns, mathematical context — accumulating richer context over time than a script that only persists a few markdown artifacts between iterations.
 
-We condensed the orchestrator-driven workflow into `archon-loop.sh`: the plan/prover alternation, the parallel agent dispatch, the cross-iteration memory, and the stage-driven progression all come from observing what an effective outer orchestrator actually does when supervising Claude Code over many hours.
+### Why orchestrator-scheduled mode is more effective
 
-The script is sufficient for most formalization tasks. But the full orchestrator-driven approach remains more powerful:
+**Persistence** — Claude Code alone tends to give up early: it claims Mathlib lacks infrastructure, or that the proof would be too long, and stops pushing forward. An orchestrator provides the continuity layer — it keeps the model on task, detects failure patterns, retries with better context, and maintains state across arbitrarily many sessions. For research-grade formalization, the interesting results live precisely in the territory where the model's first instinct is to quit.
 
-- **Real-time intervention** — an orchestrator can step in the moment the model is stuck, rather than waiting for the next plan cycle
-- **Richer cross-session context** — an orchestrator maintains live state beyond what markdown files can capture
-- **Adaptive supervision** — an orchestrator adjusts its strategy on the fly based on what it observes, rather than following a fixed plan/prover/review loop
-
-### Benefits of orchestrator-driven workflow
-
-**Why run Claude Code in a visible terminal:** Claude Code runs in a terminal session where every action is visible, interruptible, and redirectable. When something goes wrong, a human (or an orchestrator) can talk directly to the session to diagnose and fix issues, rather than digging through logs of a fully automated pipeline. This transparency is what makes ambitious formalization tractable — and debuggable.
-
-**Why an orchestrator on top:** Claude Code alone lacks persistence — it gives up, loses context across sessions, and cannot supervise itself over hours or days. An orchestrator like OpenClaw provides the continuity layer: it keeps the model on task, detects failure patterns, retries with better context, and maintains state across arbitrarily many sessions. The combination — Claude Code's proving ability plus an orchestrator's persistence — is what makes the system work end to end without manual intervention.
+**Stability** — adding a supervisor to the workflow catches errors that a fixed loop cannot: crashed sessions, malformed state files, stuck provers, or plan agents that set unreasonable objectives. The orchestrator acts as a safety net that keeps the overall process running correctly over hours or days without manual intervention.
