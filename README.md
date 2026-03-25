@@ -7,37 +7,40 @@ Archon is an agentic system that autonomously formalizes research-level mathemat
 Prerequisites: git, Python 3.10+, curl, elan (Lean toolchain).
 
 ```bash
-git clone <repo-url> /path/to/Archon
-cd /path/to/Archon
+cd /path/where/you/want/Archon
+git clone <repo-url>
+cd Archon
 ./setup.sh
 ```
 
-Clone Archon to a **persistent location** — avoid ephemeral directories that may be lost on VM reboot (e.g., `/tmp/`, or root-only paths without backups). Your home directory or a dedicated work volume are good choices.
-
-`setup.sh` installs system-level dependencies (uv, tmux, Claude Code) and verifies your Lean toolchain. Run it once — it does not touch your projects.
+`setup.sh` installs system-level dependencies (uv, tmux, Claude Code) and verifies your Lean toolchain.
 
 ## Usage
 
-In the examples below, `ARCHON` refers to wherever you cloned Archon.
+All commands below assume you are inside the Archon directory:
+
+```bash
+cd /path/to/Archon
+```
 
 ### 1. Initialize a project
 
 **Option A — Use an existing project in-place** (recommended):
 ```bash
-$ARCHON/init.sh /path/to/your-lean-project
+./init.sh /path/to/your-lean-project
 ```
 
 **Option B — Use Archon's built-in workspace**:
 ```bash
-mkdir -p $ARCHON/workspace/my-project
-$ARCHON/init.sh $ARCHON/workspace/my-project
+mkdir -p workspace/my-project
+./init.sh workspace/my-project
 ```
 
 If no path is given, `init.sh` defaults to the current directory and prints a clear message.
 
 `init.sh` does the following inside your project:
 - Creates `.archon/` with runtime state files and symlinked prompts
-- Symlinks Archon's lean4 skills into `.claude/skills/lean4`
+- Symlinks Archon's lean4 skills into `.claude/skills/archon-lean4`
 - Configures lean-lsp MCP server at project scope
 - Detects and disables any conflicting global lean4-skills (see [Existing lean4-skills installations](#existing-lean4-skills-installations))
 - Launches Claude Code interactively to detect project state, set up lakefile/Mathlib if needed, and write initial objectives
@@ -52,15 +55,8 @@ claude
 
 ### 2. Start the automated loop
 
-From the project directory:
 ```bash
-cd /path/to/your-lean-project
-$ARCHON/archon-loop.sh
-```
-
-Or specify the path explicitly:
-```bash
-$ARCHON/archon-loop.sh /path/to/your-lean-project
+./archon-loop.sh /path/to/your-lean-project
 ```
 
 The loop alternates plan and prover agents through stages:
@@ -76,16 +72,15 @@ The loop exits automatically when the stage reaches `COMPLETE`.
 ### 3. Multiple projects
 
 ```bash
-# Initialize multiple projects
-$ARCHON/init.sh ~/repos/project-A
-$ARCHON/init.sh ~/repos/project-B
+./init.sh ~/repos/project-A
+./init.sh ~/repos/project-B
 
 # Run in parallel from separate terminals:
-$ARCHON/archon-loop.sh ~/repos/project-A
-$ARCHON/archon-loop.sh ~/repos/project-B
+./archon-loop.sh ~/repos/project-A
+./archon-loop.sh ~/repos/project-B
 ```
 
-Each project gets `.archon/` (runtime state) and `.claude/skills/lean4` (symlink to Archon skills).
+Each project gets `.archon/` (runtime state) and `.claude/skills/archon-lean4` (symlink to Archon skills).
 
 ### Guiding agents while the loop runs
 
@@ -153,8 +148,8 @@ Archon uses a two-layer system for prompts and skills. Both layers are visible t
 
 | What | Location | Effect |
 |------|----------|--------|
-| Prompts | `$ARCHON/.claude/prompts/*.md` | Agent instructions for plan/prover stages |
-| Skills | `$ARCHON/.claude/skills/lean4/` | Lean4 slash commands and agents |
+| Prompts | `Archon/.claude/prompts/*.md` | Agent instructions for plan/prover stages |
+| Skills | `Archon/.claude/skills/archon-lean4/` | Lean4 slash commands and agents |
 
 Editing these files changes behavior for every project that Archon initializes.
 
@@ -173,13 +168,13 @@ By default, `.archon/prompts/` contains symlinks pointing back to Archon's globa
 ```bash
 cd /path/to/your-project
 rm .archon/prompts/plan.md                    # remove the symlink
-cp $ARCHON/.claude/prompts/plan.md .archon/prompts/plan.md  # start from the original
+cp /path/to/Archon/.claude/prompts/plan.md .archon/prompts/plan.md  # start from the original
 # now edit .archon/prompts/plan.md freely
 ```
 
 The local file wins because `archon-loop.sh` always reads from `.archon/prompts/` — it doesn't know or care whether the file is a symlink or a real file.
 
-For skills, `.claude/skills/lean4` is a symlink to Archon's global skills. You can add your own project-specific skills alongside it without conflict:
+For skills, `.claude/skills/archon-lean4` is a symlink to Archon's global skills. You can add your own project-specific skills alongside it without conflict:
 
 ```bash
 mkdir -p .claude/skills/my-workflow

@@ -136,9 +136,10 @@ fi
 # Create .claude/skills/ and .claude/rules/ in the project
 mkdir -p "${PROJECT_PATH}/.claude/skills" "${PROJECT_PATH}/.claude/rules"
 
-# Symlink Archon's lean4 skills into the project
-ln -sfn "${ARCHON_SKILLS}" "${PROJECT_PATH}/.claude/skills/lean4"
-ok "Archon lean4 skills symlinked to .claude/skills/lean4"
+# Symlink Archon's lean4 skills into the project (as archon-lean4 to avoid
+# conflicting with any existing .claude/skills/lean4 the user may have)
+ln -sfn "${ARCHON_SKILLS}" "${PROJECT_PATH}/.claude/skills/archon-lean4"
+ok "Archon lean4 skills symlinked to .claude/skills/archon-lean4"
 ok "User skill/rule directories created (.claude/skills/, .claude/rules/)"
 
 # ============================================================

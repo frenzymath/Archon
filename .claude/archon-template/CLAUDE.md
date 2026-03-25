@@ -12,7 +12,7 @@ If instructions conflict between global and local sources, **local takes precede
 When in doubt, follow instructions from files inside this project over any external source.
 
 ## Skills
-- lean4: `.claude/skills/lean4/` (symlinked from Archon) — provides `/lean4:prove`, `/lean4:golf`, `/lean4:doctor`, and other Lean4 commands
+- archon-lean4: `.claude/skills/archon-lean4/` (symlinked from Archon) — provides `/archon-lean4:prove`, `/archon-lean4:golf`, `/archon-lean4:doctor`, and other Lean4 commands
 
 ## Tools
 - lean-lsp-mcp: Lean LSP MCP server (project scope) — use for all Lean LSP operations (search, diagnostics, goal inspection)
