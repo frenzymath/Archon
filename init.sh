@@ -70,7 +70,8 @@ fi
 # ============================================================
 info "=== Step 1: Setting up .archon/ state directory ==="
 
-mkdir -p "${STATE_DIR}/task_results" "${STATE_DIR}/logs" "${STATE_DIR}/prompts"
+mkdir -p "${STATE_DIR}/task_results" "${STATE_DIR}/logs" "${STATE_DIR}/prompts" \
+         "${STATE_DIR}/proof-journal/sessions" "${STATE_DIR}/proof-journal/current_session"
 
 for f in PROGRESS.md CLAUDE.md USER_HINTS.md task_pending.md task_done.md; do
     if [[ ! -f "${STATE_DIR}/${f}" ]]; then

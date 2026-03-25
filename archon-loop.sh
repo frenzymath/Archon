@@ -26,6 +26,7 @@ FORCE_STAGE=""
 DRY_RUN=false
 PARALLEL=true
 VERBOSE_LOGS=false
+ENABLE_REVIEW=false
 LOG_BASE=""
 
 # -- Color helpers with JSONL logging --
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)        DRY_RUN=true;        shift   ;;
         --serial)         PARALLEL=false;      shift   ;;
         --verbose-logs)   VERBOSE_LOGS=true;   shift   ;;
+        --review)         ENABLE_REVIEW=true;  shift   ;;
         -h|--help)
             echo "Usage: archon-loop.sh [OPTIONS] [/path/to/lean-project]"
             echo ""
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --stage STAGE        Override stage (autoformalize|prover|polish)"
             echo "  --serial             Use a single prover (default: parallel, one per sorry-file)"
             echo "  --verbose-logs       Also save raw Claude stream events to .raw.jsonl"
+            echo "  --review             Enable review phase after prover (experimental)"
             echo "  --dry-run            Print prompts without launching Claude"
             echo "  -h, --help           Show this help"
             echo ""
@@ -504,6 +507,62 @@ with open('${LOG_BASE}.jsonl', 'a') as f:
 }
 
 # ============================================================
+#  Review phase
+# ============================================================
+
+next_session_num() {
+    local journal_dir="${STATE_DIR}/proof-journal/sessions"
+    local max_n=0
+    if [[ -d "$journal_dir" ]]; then
+        for d in "$journal_dir"/session_*; do
+            [[ -d "$d" ]] || continue
+            local n="${d##*session_}"
+            [[ "$n" =~ ^[0-9]+$ ]] && (( n > max_n )) && max_n=$n
+        done
+    fi
+    echo $(( max_n + 1 ))
+}
+
+run_review_phase() {
+    local stage="$1"
+
+    local session_num
+    session_num=$(next_session_num)
+    local journal_dir="${STATE_DIR}/proof-journal"
+    local session_dir="${journal_dir}/sessions/session_${session_num}"
+    local current_session_dir="${journal_dir}/current_session"
+    local attempts_file="${current_session_dir}/attempts_raw.jsonl"
+
+    mkdir -p "$session_dir" "$current_session_dir"
+
+    # Phase 3a: Extract attempt data from prover log (deterministic, no LLM)
+    info "Extracting attempt data from prover log..."
+    python3 "${ARCHON_DIR}/scripts/extract-attempts.py" \
+        "${LOG_BASE}.jsonl" "$attempts_file" 2>&1 || true
+
+    # Phase 3b: Run review agent
+    local review_prompt
+    review_prompt=$(cat <<EOF
+You are the review agent for project '${PROJECT_NAME}'. Current stage: ${stage}.
+Project directory: ${PROJECT_PATH}
+Project state directory: ${STATE_DIR}
+Read ${STATE_DIR}/CLAUDE.md for your role, then read ${STATE_DIR}/prompts/review.md.
+Session number: ${session_num}.
+Pre-processed attempt data: ${attempts_file} (READ THIS FIRST).
+Prover log: ${LOG_BASE}.jsonl
+Write your output to: ${session_dir}/
+EOF
+    )
+
+    run_claude "$review_prompt" || true
+
+    # Phase 3c: Validate review output
+    info "Validating review output..."
+    python3 "${ARCHON_DIR}/scripts/validate-review.py" \
+        "$session_dir" "$attempts_file" 2>&1 || true
+}
+
+# ============================================================
 #  Main
 # ============================================================
 
@@ -536,7 +595,8 @@ fi
 
 # -- Logging setup --
 if [[ "$DRY_RUN" != true ]]; then
-    mkdir -p "$LOG_DIR" "${STATE_DIR}/task_results"
+    mkdir -p "$LOG_DIR" "${STATE_DIR}/task_results" \
+             "${STATE_DIR}/proof-journal/sessions" "${STATE_DIR}/proof-journal/current_session"
     LOG_BASE="${LOG_DIR}/archon-$(date +%Y%m%d-%H%M%S)"
 fi
 
@@ -547,6 +607,8 @@ info "Max iterations: ${MAX_ITERATIONS}"
 [[ -n "$FORCE_STAGE" ]] && info "Forced stage: ${FORCE_STAGE}"
 [[ "$PARALLEL" == true ]] && info "Prover mode: parallel (agent teams)"
 [[ "$PARALLEL" != true ]] && info "Prover mode: serial"
+[[ "$ENABLE_REVIEW" == true ]] && info "Review: enabled (experimental)"
+[[ "$ENABLE_REVIEW" != true ]] && info "Review: disabled (enable with --review)"
 [[ "$DRY_RUN" == true ]] && warn "DRY RUN mode"
 [[ -n "$LOG_BASE" ]] && info "Log: ${LOG_BASE}.jsonl"
 [[ "$VERBOSE_LOGS" == true && -n "$LOG_BASE" ]] && info "Raw: ${LOG_BASE}.raw.jsonl" || true
@@ -627,8 +689,23 @@ for (( i=0; i<MAX_ITERATIONS; i++ )); do
     fi
 
     PROVER_SECS=$(( SECONDS - PROVER_START ))
-    ITER_SECS=$(( SECONDS - ITER_START ))
     info "Prover phase finished. (${PROVER_SECS}s)"
+    echo ""
+
+    # --- Review phase ---
+    if [[ "$ENABLE_REVIEW" == true && "$DRY_RUN" != true ]]; then
+        info "Phase 3: Review agent"
+        info "────────────────────────────────────────"
+
+        REVIEW_START=$SECONDS
+        run_review_phase "$STAGE" || true
+
+        REVIEW_SECS=$(( SECONDS - REVIEW_START ))
+        info "Review phase finished. (${REVIEW_SECS}s)"
+        echo ""
+    fi
+
+    ITER_SECS=$(( SECONDS - ITER_START ))
     info "Iteration $((i+1)) complete. Wall time: ${ITER_SECS}s"
     show_cost_summary "  Iteration $((i+1)) totals:" "$ITER_COST_OFFSET"
     echo ""

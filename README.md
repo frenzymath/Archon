@@ -7,26 +7,30 @@ Archon is an agentic system that autonomously formalizes research-level mathemat
 Prerequisites: git, Python 3.10+, curl, elan (Lean toolchain).
 
 ```bash
-git clone <repo-url> ~/Archon
-cd ~/Archon
+git clone <repo-url> /path/to/Archon
+cd /path/to/Archon
 ./setup.sh
 ```
+
+Clone Archon to a **persistent location** — avoid ephemeral directories that may be lost on VM reboot (e.g., `/tmp/`, or root-only paths without backups). Your home directory or a dedicated work volume are good choices.
 
 `setup.sh` installs system-level dependencies (uv, tmux, Claude Code) and verifies your Lean toolchain. Run it once — it does not touch your projects.
 
 ## Usage
 
+In the examples below, `ARCHON` refers to wherever you cloned Archon.
+
 ### 1. Initialize a project
 
 **Option A — Use an existing project in-place** (recommended):
 ```bash
-~/Archon/init.sh /path/to/your-lean-project
+$ARCHON/init.sh /path/to/your-lean-project
 ```
 
 **Option B — Use Archon's built-in workspace**:
 ```bash
-mkdir -p ~/Archon/workspace/my-project
-~/Archon/init.sh ~/Archon/workspace/my-project
+mkdir -p $ARCHON/workspace/my-project
+$ARCHON/init.sh $ARCHON/workspace/my-project
 ```
 
 If no path is given, `init.sh` defaults to the current directory and prints a clear message.
@@ -51,12 +55,12 @@ claude
 From the project directory:
 ```bash
 cd /path/to/your-lean-project
-~/Archon/archon-loop.sh
+$ARCHON/archon-loop.sh
 ```
 
 Or specify the path explicitly:
 ```bash
-~/Archon/archon-loop.sh /path/to/your-lean-project
+$ARCHON/archon-loop.sh /path/to/your-lean-project
 ```
 
 The loop alternates plan and prover agents through stages:
@@ -73,12 +77,12 @@ The loop exits automatically when the stage reaches `COMPLETE`.
 
 ```bash
 # Initialize multiple projects
-~/Archon/init.sh ~/repos/project-A
-~/Archon/init.sh ~/repos/project-B
+$ARCHON/init.sh ~/repos/project-A
+$ARCHON/init.sh ~/repos/project-B
 
 # Run in parallel from separate terminals:
-~/Archon/archon-loop.sh ~/repos/project-A
-~/Archon/archon-loop.sh ~/repos/project-B
+$ARCHON/archon-loop.sh ~/repos/project-A
+$ARCHON/archon-loop.sh ~/repos/project-B
 ```
 
 Each project gets `.archon/` (runtime state) and `.claude/skills/lean4` (symlink to Archon skills).
@@ -122,7 +126,67 @@ To check which plugins are active, run `/plugin` inside Claude Code and check th
 | `--stage STAGE` | Override the current stage |
 | `--serial` | Use a single prover instead of parallel agents |
 | `--verbose-logs` | Also save raw Claude stream events to `.raw.jsonl` |
+| `--review` | Enable review phase after prover (experimental) |
 | `--dry-run` | Print prompts without launching Claude |
+
+### Review and proof journal (experimental)
+
+> **This feature is experimental and disabled by default.** Enable it with `--review`.
+
+When enabled, a **review agent** runs after each prover round, adding a third phase to each iteration: Plan → Prover → Review.
+
+The review agent:
+1. Reads structured attempt data extracted from the prover log (code changes, goal states, errors, lemma searches)
+2. Writes a session journal (`summary.md` + `milestones.jsonl`) with per-target, per-attempt detail
+3. Updates `PROJECT_STATUS.md` with cumulative progress and known blockers
+4. Writes `recommendations.md` with suggestions for the next plan iteration
+
+The plan agent reads the latest review findings when setting objectives for the next round, closing the feedback loop. If review is disabled, the plan agent still functions normally using task_results and existing state files.
+
+Journal data lives in `.archon/proof-journal/sessions/session_N/`.
+
+### Customization: global vs. local
+
+Archon uses a two-layer system for prompts and skills. Both layers are visible to Claude Code when it runs inside a project, but local definitions take precedence over global ones.
+
+**Global layer** — defined under the Archon installation directory, shared across all projects:
+
+| What | Location | Effect |
+|------|----------|--------|
+| Prompts | `$ARCHON/.claude/prompts/*.md` | Agent instructions for plan/prover stages |
+| Skills | `$ARCHON/.claude/skills/lean4/` | Lean4 slash commands and agents |
+
+Editing these files changes behavior for every project that Archon initializes.
+
+**Local layer** — defined inside each project, affects only that project:
+
+| What | Location | Effect |
+|------|----------|--------|
+| Prompts | `<project>/.archon/prompts/*.md` | Override specific prompts for this project |
+| Skills | `<project>/.claude/skills/<name>/` | Add project-specific slash commands |
+| Rules | `<project>/.claude/rules/*.md` | Add passive guidance loaded every session |
+
+**How overrides work:**
+
+By default, `.archon/prompts/` contains symlinks pointing back to Archon's global prompts. To override a prompt for a single project, replace the symlink with your own file:
+
+```bash
+cd /path/to/your-project
+rm .archon/prompts/plan.md                    # remove the symlink
+cp $ARCHON/.claude/prompts/plan.md .archon/prompts/plan.md  # start from the original
+# now edit .archon/prompts/plan.md freely
+```
+
+The local file wins because `archon-loop.sh` always reads from `.archon/prompts/` — it doesn't know or care whether the file is a symlink or a real file.
+
+For skills, `.claude/skills/lean4` is a symlink to Archon's global skills. You can add your own project-specific skills alongside it without conflict:
+
+```bash
+mkdir -p .claude/skills/my-workflow
+# Create .claude/skills/my-workflow/SKILL.md with your custom slash command
+```
+
+Your custom `/my-workflow` command coexists with Archon's `/lean4:*` commands.
 
 ## Why orchestrating Claude Code works
 
