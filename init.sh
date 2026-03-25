@@ -138,7 +138,8 @@ try:
     with open('$HOME/.claude/settings.json') as f:
         data = json.load(f)
     for key in data.get('mcpServers', {}):
-        if 'lean' in key.lower() and 'lsp' in key.lower():
+        k = key.lower()
+        if 'lean' in k and 'lsp' in k and 'archon' not in k:
             print(key)
 except: pass
 " 2>/dev/null)
@@ -214,7 +215,8 @@ try:
     with open('$USER_SETTINGS') as f:
         data = json.load(f)
     for key in data.get('enabledPlugins', {}):
-        if 'lean4' in key.lower() or 'lean4-skills' in key.lower():
+        k = key.lower()
+        if ('lean4' in k or 'lean4-skills' in k) and 'archon' not in k:
             print(key)
 except: pass
 " 2>/dev/null)
