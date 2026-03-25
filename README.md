@@ -2,10 +2,11 @@
 
 Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. Built on Claude Code and Claude Opus 4.6, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw — see [Why orchestrating Claude Code works](#why-orchestrating-claude-code-works). See also our [blog](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
 
-Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. Single-problem benchmarks are not specifically optimized for. For model choice, **Opus is strongly recommended**; Sonnet also works well. Other models have not been tested — weaker models may fail to handle the complex skills and prompt structures, which can be counterproductive rather than merely slower.
+Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. As such, single-problem benchmarks are not a specific optimization target. For model choice, **Opus 4.6 is strongly recommended**; Sonnet also works well but is less capable. Other models have not been tested — weaker models may struggle with the complex skills and prompt structures, in which case Archon's system design could hurt performance rather than help it.                                                          
 
-**Security note:** `archon-loop.sh` runs Claude Code with `--dangerously-skip-permissions --permission-mode bypassPermissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests — all without asking for confirmation. This is necessary for unattended operation but carries real risk: a misbehaving model could delete files, overwrite code, or run unintended commands. To reduce exposure:
+**Security note:** `archon-loop.sh` runs Claude Code with `--dangerously-skip-permissions --permission-mode bypassPermissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests — all without asking for confirmation. This is necessary for unattended operation but carries real risk: a misbehaving model could delete files, overwrite code, or run unintended commands. **While Opus 4.6 NEVER caused harm across all of our experiments,** the following measures can further reduce exposure:
 
+- **Commit and push your project before running Archon, so any unintended changes can be easily reverted.**
 - Run Archon under a **dedicated, low-privilege user** that only has access to the project directory
 - Run inside a **Docker container** or VM with no access to sensitive data or credentials
 - Avoid running as root or with access to production systems
@@ -118,6 +119,7 @@ Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfr
 
 To check how the formalization is going, look at these files in your project:
 
+- **`.archon/logs/archon-<timestamp>.jsonl`** — running log of agent activity. Check the latest timestamp to monitor whether agents are still working.
 - **`.archon/PROJECT_STATUS.md`** — overall progress: total sorries, what's solved, what's blocked, and reusable proof patterns. This is the best starting point.
 - **`.archon/proof-journal/sessions/session_N/summary.md`** — detailed record of a specific iteration: what was attempted, what succeeded, what failed, and why.
 
