@@ -1,6 +1,6 @@
 # Archon
 
-Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. Built on Claude Code and Claude Opus 4.6, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw — see [Why orchestrating Claude Code works](#why-orchestrating-claude-code-works). See also our [first proof writeup](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
+Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. Built on Claude Code and Claude Opus 4.6, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw — see [Why orchestrating Claude Code works](#why-orchestrating-claude-code-works). See also our [blog](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
 
 ## Setup
 
@@ -42,7 +42,7 @@ If no path is given, `init.sh` prompts you for a project name and creates it und
 - Symlinks Archon's lean4 skills into `.claude/skills/archon-lean4`
 - Symlinks the informal agent into `.claude/tools/archon-informal-agent.py`
 - Installs Archon's lean-lsp MCP server as `archon-lean-lsp` at project scope
-- Detects and disables any conflicting global lean4-skills and lean-lsp MCP (see [Existing lean4-skills installations](#existing-lean4-skills-installations))
+- Detects and disables any conflicting global lean4-skills and lean-lsp MCP (see [Existing lean4-skills and lean-lsp MCP installations](#existing-lean4-skills-and-lean-lsp-mcp-installations))
 - Launches Claude Code interactively to detect project state, set up lakefile/Mathlib if needed, and write initial objectives
 
 Init automatically runs `/archon-lean4:doctor` at the end to verify the full setup (Lean environment, MCP, skills, state files).
@@ -152,8 +152,8 @@ Archon uses a two-layer system for prompts and skills. Both layers are visible t
 
 | What | Location | Effect |
 |------|----------|--------|
-| Prompts | `Archon/.claude/prompts/*.md` | Agent instructions for plan/prover stages |
-| Skills | `Archon/.claude/skills/archon-lean4/` | Lean4 slash commands and agents |
+| Prompts | `Archon/.archon-src/prompts/*.md` | Agent instructions for plan/prover stages |
+| Skills | `Archon/.archon-src/skills/lean4/` | Lean4 slash commands and agents |
 
 Editing these files changes behavior for every project that Archon initializes.
 
@@ -172,7 +172,7 @@ By default, `.archon/prompts/` contains symlinks pointing back to Archon's globa
 ```bash
 cd /path/to/your-project
 rm .archon/prompts/plan.md                    # remove the symlink
-cp /path/to/Archon/.claude/prompts/plan.md .archon/prompts/plan.md  # start from the original
+cp /path/to/Archon/.archon-src/prompts/plan.md .archon/prompts/plan.md  # start from the original
 # now edit .archon/prompts/plan.md freely
 ```
 

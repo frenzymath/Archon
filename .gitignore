@@ -3,8 +3,8 @@ workspace/*
 !workspace/.gitkeep
 
 # Legacy artifacts (safe to delete)
-.claude/tools/lean4/
-.claude/docs/lean4/
+.archon-src/tools/lean4/
+.archon-src/docs/lean4/
 
 # Root-level files not needed in repo
 mathlib_preferred_idioms.md

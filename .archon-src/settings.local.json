@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/claudeuser2/.cache/uv/**)",
+      "Read(//root/.cache/uv/**)",
+      "Read(//home/**)",
+      "Bash(mkdir -p /AI4M/users/wb/CLI/Archon-preopen/Archon/.claude/tools/lean-lsp-mcp/src)",
+      "Bash(cp -r /home/claudeuser2/.cache/uv/archive-v0/6ql_dgJTiw5gOI7q0L-Bi/lean_lsp_mcp /AI4M/users/wb/CLI/Archon-preopen/Archon/.claude/tools/lean-lsp-mcp/src/)",
+      "WebFetch(domain:frenzymath.com)",
+      "Bash(ls /AI4M/users/wb/CLI/Archon-test/Archon/logs/*.jsonl)",
+      "Bash(ls /AI4M/users/wb/CLI/Archon-test/Archon/logs/*.cost.jsonl)",
+      "Bash(ls /AI4M/users/wb/CLI/Archon-test/Archon/logs/*.readable.log)",
+      "Bash(find ~/.claude -name *.json -path *session*)",
+      "Bash(python3:*)",
+      "Bash(find /AI4M/users/wb/CLI/Archon-test -name *.log -o -name *.jsonl)"
+    ]
+  }
+}

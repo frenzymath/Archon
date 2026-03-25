@@ -88,7 +88,7 @@ mkdir -p "${STATE_DIR}/task_results" "${STATE_DIR}/logs" "${STATE_DIR}/prompts" 
 
 for f in PROGRESS.md CLAUDE.md USER_HINTS.md task_pending.md task_done.md; do
     if [[ ! -f "${STATE_DIR}/${f}" ]]; then
-        cp "${ARCHON_DIR}/.claude/archon-template/${f}" "${STATE_DIR}/${f}"
+        cp "${ARCHON_DIR}/.archon-src/archon-template/${f}" "${STATE_DIR}/${f}"
     fi
 done
 ok "State directory ready"
@@ -107,7 +107,7 @@ fi
 # ============================================================
 info "=== Step 2: Linking prompts ==="
 
-for f in "${ARCHON_DIR}"/.claude/prompts/*.md; do
+for f in "${ARCHON_DIR}"/.archon-src/prompts/*.md; do
     local_name="${STATE_DIR}/prompts/$(basename "$f")"
     # Create or update symlink (remove stale copies/links first)
     rm -f "$local_name"
@@ -120,7 +120,7 @@ ok "Prompts symlinked to .archon/prompts/ (auto-updated from Archon source)"
 # ============================================================
 info "=== Step 3: Installing lean-lsp MCP server (project scope) ==="
 
-LEAN_LSP_MCP_DIR="${ARCHON_DIR}/.claude/tools/lean-lsp-mcp"
+LEAN_LSP_MCP_DIR="${ARCHON_DIR}/.archon-src/tools/lean-lsp-mcp"
 
 # Detect and disable any existing global lean-lsp MCP to avoid conflicts
 cd "$PROJECT_PATH"
@@ -167,11 +167,11 @@ fi
 # ============================================================
 info "=== Step 4: Linking Archon skills ==="
 
-ARCHON_SKILLS="${ARCHON_DIR}/.claude/skills/lean4"
+ARCHON_SKILLS="${ARCHON_DIR}/.archon-src/skills/lean4"
 
 # Verify Archon skills are present
 if [ ! -f "${ARCHON_SKILLS}/.claude-plugin/plugin.json" ]; then
-    err "Archon lean4 skills not found at .claude/skills/lean4/"
+    err "Archon lean4 skills not found at .archon-src/skills/lean4/"
     err "The repo may be incomplete — try re-cloning."
     exit 1
 fi
@@ -187,7 +187,7 @@ ok "User skill/rule directories created (.claude/skills/, .claude/rules/)"
 
 # Symlink informal agent tool
 mkdir -p "${PROJECT_PATH}/.claude/tools"
-ln -sfn "${ARCHON_DIR}/.claude/tools/informal_agent.py" \
+ln -sfn "${ARCHON_DIR}/.archon-src/tools/informal_agent.py" \
         "${PROJECT_PATH}/.claude/tools/archon-informal-agent.py"
 ok "Informal agent symlinked to .claude/tools/archon-informal-agent.py"
 
@@ -268,7 +268,11 @@ info "Claude will check the project state and guide you through setup."
 echo ""
 
 cd "$PROJECT_PATH"
-claude "You are in the init stage for project '${PROJECT_NAME}' at ${PROJECT_PATH}. Read ${STATE_DIR}/CLAUDE.md, then read ${STATE_DIR}/prompts/init.md and follow its instructions. Project state files are in ${STATE_DIR}/. Write PROGRESS.md and other state files there, not in the project directory. When you have finished the init steps, run /archon-lean4:doctor to verify the full setup before exiting." || true
+claude "You are in the init stage for project '${PROJECT_NAME}' at ${PROJECT_PATH}. Read ${STATE_DIR}/CLAUDE.md, then read ${STATE_DIR}/prompts/init.md and follow its instructions. Project state files are in ${STATE_DIR}/. Write PROGRESS.md and other state files there, not in the project directory.
+
+IMPORTANT: After checking the project state, do NOT write initial objectives on your own. Instead, propose what you think the objectives should be, then ask the user to confirm or adjust before writing them to PROGRESS.md. Wait for the user's reply.
+
+When the user has confirmed and you have finished the init steps, run /archon-lean4:doctor to verify the full setup before exiting." || true
 
 # -- Check if init completed --
 NEW_STAGE=$(awk '/^## Current Stage/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "${STATE_DIR}/PROGRESS.md")
