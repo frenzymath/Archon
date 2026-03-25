@@ -25,18 +25,17 @@ cd /path/to/Archon
 
 ### 1. Initialize a project
 
-**Option A — Use an existing project in-place** (recommended):
+**Option A — Initialize an existing project**:
 ```bash
 ./init.sh /path/to/your-lean-project
 ```
 
-**Option B — Use Archon's built-in workspace**:
+**Option B — Create a new project in Archon's workspace**:
 ```bash
-mkdir -p workspace/my-project
 ./init.sh workspace/my-project
 ```
 
-If no path is given, `init.sh` defaults to the current directory and prints a clear message.
+If no path is given, `init.sh` prompts you for a project name and creates it under `workspace/`.
 
 `init.sh` does the following inside your project:
 - Creates `.archon/` with runtime state files and symlinked prompts

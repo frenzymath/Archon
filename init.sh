@@ -29,17 +29,30 @@ err()   { echo -e "${RED}[ARCHON]${NC}  $*"; }
 
 # -- Determine project path --
 if [[ $# -ge 1 && "$1" != -* ]]; then
-    PROJECT_PATH="$(cd "$1" 2>/dev/null && pwd)" || { err "Directory not found: $1"; exit 1; }
+    # Explicit path given — use it (create if it doesn't exist)
+    if [[ ! -d "$1" ]]; then
+        mkdir -p "$1"
+        info "Created directory: $1"
+    fi
+    PROJECT_PATH="$(cd "$1" && pwd)"
     info "Using specified project path: ${PROJECT_PATH}"
 else
-    PROJECT_PATH="$(pwd)"
+    # No path given — prompt for a project name under workspace/
     echo ""
-    info "${BOLD}No project path specified — using current directory:${NC}"
-    info "  ${PROJECT_PATH}"
+    info "${BOLD}No project path specified.${NC}"
     info ""
-    info "To initialize an existing project elsewhere, run:"
+    info "Enter a name to create a new project under workspace/,"
+    info "or press Ctrl-C and re-run with a path:"
     info "  ${CYAN}./init.sh /path/to/your-lean-project${NC}"
     echo ""
+    read -rp "  Project name: " PROJECT_INPUT
+    if [[ -z "$PROJECT_INPUT" ]]; then
+        err "No project name entered."
+        exit 1
+    fi
+    PROJECT_PATH="${ARCHON_DIR}/workspace/${PROJECT_INPUT}"
+    mkdir -p "$PROJECT_PATH"
+    info "Created project at: ${PROJECT_PATH}"
 fi
 
 # Don't use Archon dir itself as project
