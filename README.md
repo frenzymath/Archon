@@ -159,9 +159,9 @@ In our experiments, replacing the fixed loop with an **orchestrator-scheduled mo
 
 ### How to use orchestrator-scheduled mode
 
-> This section was produced independently by OpenClaw based on its accumulated experience orchestrating Claude Code across multiple formalization projects.
+Ensure your orchestrator has access to the project directory, and ask it to read README.md for an overview of the project.
 
-Point your orchestrator (e.g., OpenClaw) at [`ORCHESTRATOR_GUIDE.md`](ORCHESTRATOR_GUIDE.md) — it should read this file before starting. The guide teaches the orchestrator how to read Archon's state files, decide which stage to run next, compose prompts from `.archon/prompts/`, and invoke `claude -p` with those prompts. It covers prompt composition, adaptive scheduling logic, failure recovery, and operational rules learned from production use.
+We provide [`ORCHESTRATOR_GUIDE.md`](ORCHESTRATOR_GUIDE.md) as a companion guide for your orchestrator. It was authored by our own OpenClaw based on its accumulated experience orchestrating Claude Code across multiple formalization projects. The guide covers how to read Archon's state files, decide which stage to run next, compose prompts from `.archon/prompts/`, and invoke `claude -p` — including prompt composition, adaptive scheduling logic, failure recovery, and operational rules learned from production use.
 
 ### What changes compared to the standard loop
 
@@ -174,6 +174,8 @@ In standard mode, `archon-loop.sh` enforces a fixed cycle: plan→prover→revie
 
 ### Why orchestrator-scheduled mode is more effective
 
-**Persistence** — Claude Code alone tends to give up early: it claims Mathlib lacks infrastructure, or that the proof would be too long, and stops pushing forward. An orchestrator provides the continuity layer — it keeps the model on task, detects failure patterns, retries with better context, and maintains state across arbitrarily many sessions. For research-grade formalization, the interesting results live precisely in the territory where the model's first instinct is to quit.
+**Flexibility** — the orchestrator decides when to plan, prove, or review based on current state rather than following a fixed sequence, making it adaptable to a wider range of formalization tasks.
 
-**Stability** — adding a supervisor to the workflow catches errors that a fixed loop cannot: crashed sessions, malformed state files, stuck provers, or plan agents that set unreasonable objectives. The orchestrator acts as a safety net that keeps the overall process running correctly over hours or days without manual intervention.
+**Evolvability** - by design, orchestrators like OpenClaw can author and refine skills and prompts over time. The global/local skill and prompt slots are designed not only for human experts but also for orchestrators: they can analyze failure modes and update skills or prompts accordingly (with your permission), making the system progressively more powerful.
+
+**Stability** — a supervisor layer catches errors that a fixed loop cannot: crashed sessions, malformed state files, stuck provers, or plan agents that set unreasonable objectives. The orchestrator acts as a safety net that keeps the process running correctly over hours or days without manual intervention.
