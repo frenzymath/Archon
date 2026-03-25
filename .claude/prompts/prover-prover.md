@@ -42,7 +42,7 @@ If you encounter obstacles:
 
 Do NOT just report "Mathlib lacks X" and stop. Before giving up on a sorry, you must try to find an alternative yourself:
 
-1. **Use the informal agent** (`.claude/tools/informal_agent.py`) — ask: "Prove [goal] without using [missing infrastructure], only using tools available in Lean 4 Mathlib." Even an imperfect sketch is valuable.
+1. **Use the informal agent** (`.claude/tools/archon-informal-agent.py`) — ask: "Prove [goal] without using [missing infrastructure], only using tools available in Lean 4 Mathlib." Even an imperfect sketch is valuable.
 2. **Try the alternative** — if the informal agent gives you a route, attempt to formalize it.
 3. **If you still can't solve it**, save what you learned for the plan agent:
    - Write the informal agent's alternative proof sketch to `informal/<theorem_name>.md`

@@ -206,6 +206,63 @@ No changes made. Run `/lean4:doctor cleanup --apply` to remove.
 | `rg` not found | Install via package manager — see [ripgrep](../../../INSTALLATION.md#optional-ripgrep) |
 | Lean LSP MCP tools unavailable | Check `claude mcp list` (Claude Code); if missing, `claude mcp add lean-lsp uvx lean-lsp-mcp` or see [INSTALLATION.md](../../../INSTALLATION.md#lean-lsp-mcp-server-all-hosts) |
 
+### 6. Archon Setup Check
+
+When running inside an Archon-initialized project (`.archon/` exists), verify the Archon-specific setup:
+
+**State files** — check all required files exist in `.archon/`:
+```
+.archon/PROGRESS.md
+.archon/CLAUDE.md
+.archon/task_pending.md
+.archon/task_done.md
+.archon/USER_HINTS.md
+```
+`✓ … exists` or `✗ … missing`
+
+**Prompts** — check `.archon/prompts/` for each expected prompt:
+```
+plan.md, prover-autoformalize.md, prover-prover.md, prover-polish.md, review.md
+```
+For each: report whether it's a valid symlink, a local override (real file), or missing/broken.
+
+**Skills symlink** — check `.claude/skills/archon-lean4`:
+- Exists and is a valid symlink → `✓`
+- Broken symlink → `✗ broken symlink`
+- Missing → `✗ not found`
+- Also warn if `.claude/skills/lean4` exists alongside (potential confusion)
+
+**MCP server** — check `.claude/settings.json`:
+- Contains `archon-lean-lsp` → `✓`
+- Contains `lean-lsp` but not `archon-lean-lsp` → `⚠ may conflict with global MCP`
+- Neither → `✗ not configured`
+
+**Informal agent** — check `.claude/tools/archon-informal-agent.py`:
+- Valid symlink or file → `✓`
+- Missing → `✗ not found`
+
+**Git protection** — if `.git/` exists, check `.gitignore` contains `.archon/`:
+- Present → `✓`
+- Missing → `⚠ .archon/ may be committed accidentally`
+
+**Proof journal** — check `.archon/proof-journal/sessions/`:
+- Exists → report session count
+- Missing → `⚠ not yet created`
+
+**Output:**
+```markdown
+### Archon Setup
+✓ State files complete
+✓ Prompts: 5/5 (4 symlinks, 1 local override)
+✓ archon-lean4 skills symlinked
+✓ archon-lean-lsp MCP configured
+✓ archon-informal-agent.py available
+✓ .archon/ in .gitignore
+⚠ proof-journal: 0 sessions
+
+### Archon Status: Ready
+```
+
 ## Safety
 
 - All modes are read-only by default
@@ -217,6 +274,6 @@ No changes made. Run `/lean4:doctor cleanup --apply` to remove.
 
 ## See Also
 
-- `/lean4:prove` - Guided cycle-by-cycle proving
-- `/lean4:checkpoint` - Save progress
+- `/archon-lean4:prove` - Guided cycle-by-cycle proving
+- `/archon-lean4:checkpoint` - Save progress
 - [Examples](../skills/lean4/references/command-examples.md#doctor)

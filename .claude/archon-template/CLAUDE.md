@@ -15,7 +15,8 @@ When in doubt, follow instructions from files inside this project over any exter
 - archon-lean4: `.claude/skills/archon-lean4/` (symlinked from Archon) — provides `/archon-lean4:prove`, `/archon-lean4:golf`, `/archon-lean4:doctor`, and other Lean4 commands
 
 ## Tools
-- lean-lsp-mcp: Lean LSP MCP server (project scope) — use for all Lean LSP operations (search, diagnostics, goal inspection)
+- archon-lean-lsp: Lean LSP MCP server (project scope) — use for all Lean LSP operations (search, diagnostics, goal inspection)
+- archon-informal-agent: `.claude/tools/archon-informal-agent.py` (symlinked from Archon) — call external LLMs (OpenAI/Gemini) for informal mathematical reasoning
 
 ## Key Files & Permissions
 

@@ -40,17 +40,12 @@ If no path is given, `init.sh` prompts you for a project name and creates it und
 `init.sh` does the following inside your project:
 - Creates `.archon/` with runtime state files and symlinked prompts
 - Symlinks Archon's lean4 skills into `.claude/skills/archon-lean4`
-- Configures lean-lsp MCP server at project scope
-- Detects and disables any conflicting global lean4-skills (see [Existing lean4-skills installations](#existing-lean4-skills-installations))
+- Symlinks the informal agent into `.claude/tools/archon-informal-agent.py`
+- Installs Archon's lean-lsp MCP server as `archon-lean-lsp` at project scope
+- Detects and disables any conflicting global lean4-skills and lean-lsp MCP (see [Existing lean4-skills installations](#existing-lean4-skills-installations))
 - Launches Claude Code interactively to detect project state, set up lakefile/Mathlib if needed, and write initial objectives
 
-After init, verify:
-```bash
-cd /path/to/your-lean-project
-claude
-# Inside Claude Code:
-/lean4:doctor
-```
+Init automatically runs `/archon-lean4:doctor` at the end to verify the full setup (Lean environment, MCP, skills, state files).
 
 ### 2. Start the automated loop
 
@@ -98,19 +93,22 @@ tail -f /path/to/project/.archon/logs/archon-*.jsonl
 watch -n10 'ls -lt /path/to/project/.archon/task_results/'
 ```
 
-### Existing lean4-skills installations
+### Existing lean4-skills and lean-lsp MCP installations
 
-If you already have the standard `lean4-skills` plugin installed globally, `init.sh` will automatically detect it and **disable it for this project only**. This prevents Claude Code from seeing two conflicting skill sets (Archon's modified version and the standard one) and not knowing which to use.
+If you already have the standard `lean4-skills` plugin or a `lean-lsp` MCP server installed globally, `init.sh` will automatically detect them and **disable them for this project only**. This prevents Claude Code from seeing two conflicting skill sets or MCP servers and not knowing which to use.
 
-Your global installation is **not removed** — it continues to work in all other projects.
+Your global installations are **not removed** — they continue to work in all other projects.
 
-To re-enable the standard lean4-skills in an Archon project:
+To re-enable them in an Archon project:
 ```bash
 cd /path/to/your-project
+# Re-enable standard skills:
 claude plugin enable lean4-skills --scope project
+# Re-enable standard MCP (replace <original command> with your setup):
+claude mcp add lean-lsp -s project -- <original command>
 ```
 
-To check which plugins are active, run `/plugin` inside Claude Code and check the Installed tab.
+To check which plugins are active, run `/plugin` inside Claude Code. To check MCP servers, run `claude mcp list`.
 
 ### CLI options
 

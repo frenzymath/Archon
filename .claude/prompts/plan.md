@@ -32,7 +32,7 @@ The prover performs significantly better when given rich informal mathematical g
 **No matter which method you choose, always record in `PROGRESS.md`** where the informal content is located, so the prover can obtain it without searching.
 
 **When the blueprint is vague or only gives a reference** (e.g., "by Hiblot 1975" without proof details):
-1. Use `.claude/tools/informal_agent.py` to generate an informal proof sketch from an external model
+1. Use `.claude/tools/archon-informal-agent.py` to generate an informal proof sketch from an external model
 2. Use Web Search to find the referenced paper and extract the key proof steps
 3. Write the result into a file and record the path in `PROGRESS.md`
 4. Do this **before** assigning the task to the prover — don't send the prover in blind
@@ -41,7 +41,7 @@ The prover performs significantly better when given rich informal mathematical g
 
 If the prover reports that a proof is conceptually clear but hard to formalize (e.g., the standard approach uses infrastructure Mathlib lacks, or the proof steps don't map cleanly to available lemmas), use the informal agent to generate an **alternative proof** — one that routes around the missing infrastructure:
 
-1. Run `.claude/tools/informal_agent.py` with a prompt describing the goal AND the constraint (e.g., "Prove X without using residue calculus, only tools available in Lean 4 Mathlib")
+1. Run `.claude/tools/archon-informal-agent.py` with a prompt describing the goal AND the constraint (e.g., "Prove X without using residue calculus, only tools available in Lean 4 Mathlib")
 2. Write the full re-routed informal proof as a `/- ... -/` block comment above the declaration in the `.lean` file, or in a separate file (e.g., `informal/theorem_name.md`). **Do not put long proofs in `task_pending.md`** — that file must stay brief and navigable.
 3. In `task_pending.md`, record only a one-line pointer: "Re-routed informal proof at `informal/theorem_name.md`" or "See block comment above declaration in `Core.lean:156`"
 4. Record in `PROGRESS.md` that the informal proof was re-routed and where to find it
@@ -56,7 +56,7 @@ The #1 failure mode. The prover reports a sorry is unfillable because Mathlib la
 
 **Your response:** This is YOUR job to solve, not the prover's. Never just pass it back with "try harder." You must actively find an alternative proof route:
 
-1. **Use the informal agent** (`.claude/tools/informal_agent.py`) — ask it: "Prove X without using [the missing infrastructure]. Only use tools available in Lean 4 Mathlib." Get a concrete alternative proof sketch.
+1. **Use the informal agent** (`.claude/tools/archon-informal-agent.py`) — ask it: "Prove X without using [the missing infrastructure]. Only use tools available in Lean 4 Mathlib." Get a concrete alternative proof sketch.
 2. **Use Web Search** — find the referenced paper or alternative proofs of the same result that avoid the missing infrastructure.
 3. **Decompose differently** — break the problem into sub-lemmas where each sub-lemma only needs available infrastructure. The prover can implement Mathlib-level lemmas if you give it clear, self-contained goals.
 4. **Check `mathlib-unavailable-theorems.md`** — if the missing infrastructure is in a known-unavailable domain, don't waste time looking for it. Focus on detours.

@@ -122,14 +122,43 @@ info "=== Step 3: Installing lean-lsp MCP server (project scope) ==="
 
 LEAN_LSP_MCP_DIR="${ARCHON_DIR}/.claude/tools/lean-lsp-mcp"
 
+# Detect and disable any existing global lean-lsp MCP to avoid conflicts
 cd "$PROJECT_PATH"
-MCP_OUTPUT=$(claude mcp add lean-lsp -s project -- uv run --directory "${LEAN_LSP_MCP_DIR}" lean-lsp-mcp 2>&1)
+if [[ -f "$HOME/.claude/settings.json" ]] && command -v python3 &>/dev/null; then
+    GLOBAL_MCP_FOUND=false
+    while IFS= read -r mcp_name; do
+        [[ -z "$mcp_name" ]] && continue
+        GLOBAL_MCP_FOUND=true
+        warn "Detected global MCP server '${mcp_name}' that may conflict with Archon's lean-lsp."
+        claude mcp remove "$mcp_name" -s project 2>/dev/null || true
+        info "Disabled '${mcp_name}' for this project."
+    done < <(python3 -c "
+import json
+try:
+    with open('$HOME/.claude/settings.json') as f:
+        data = json.load(f)
+    for key in data.get('mcpServers', {}):
+        if 'lean' in key.lower() and 'lsp' in key.lower():
+            print(key)
+except: pass
+" 2>/dev/null)
+
+    if [[ "$GLOBAL_MCP_FOUND" == true ]]; then
+        info ""
+        info "${BOLD}NOTE:${NC} Your global lean-lsp MCP is NOT removed — it still works in other projects."
+        info "To re-enable it here: ${CYAN}claude mcp add lean-lsp -s project -- <original command>${NC}"
+        echo ""
+    fi
+fi
+
+# Install Archon's lean-lsp MCP under the name archon-lean-lsp
+MCP_OUTPUT=$(claude mcp add archon-lean-lsp -s project -- uv run --directory "${LEAN_LSP_MCP_DIR}" lean-lsp-mcp 2>&1)
 if [ $? -eq 0 ]; then
-    ok "lean-lsp MCP server added (project scope)"
+    ok "archon-lean-lsp MCP server added (project scope)"
 elif echo "$MCP_OUTPUT" | grep -qi "already exists"; then
-    ok "lean-lsp MCP server already configured"
+    ok "archon-lean-lsp MCP server already configured"
 else
-    warn "Failed to add lean-lsp MCP server: $MCP_OUTPUT"
+    warn "Failed to add archon-lean-lsp MCP server: $MCP_OUTPUT"
 fi
 
 # ============================================================
@@ -154,6 +183,12 @@ mkdir -p "${PROJECT_PATH}/.claude/skills" "${PROJECT_PATH}/.claude/rules"
 ln -sfn "${ARCHON_SKILLS}" "${PROJECT_PATH}/.claude/skills/archon-lean4"
 ok "Archon lean4 skills symlinked to .claude/skills/archon-lean4"
 ok "User skill/rule directories created (.claude/skills/, .claude/rules/)"
+
+# Symlink informal agent tool
+mkdir -p "${PROJECT_PATH}/.claude/tools"
+ln -sfn "${ARCHON_DIR}/.claude/tools/informal_agent.py" \
+        "${PROJECT_PATH}/.claude/tools/archon-informal-agent.py"
+ok "Informal agent symlinked to .claude/tools/archon-informal-agent.py"
 
 # ============================================================
 #  Step 5: Detect and disable conflicting global lean4-skills
@@ -231,7 +266,7 @@ info "Claude will check the project state and guide you through setup."
 echo ""
 
 cd "$PROJECT_PATH"
-claude "You are in the init stage for project '${PROJECT_NAME}' at ${PROJECT_PATH}. Read ${STATE_DIR}/CLAUDE.md, then read ${STATE_DIR}/prompts/init.md and follow its instructions. Project state files are in ${STATE_DIR}/. Write PROGRESS.md and other state files there, not in the project directory." || true
+claude "You are in the init stage for project '${PROJECT_NAME}' at ${PROJECT_PATH}. Read ${STATE_DIR}/CLAUDE.md, then read ${STATE_DIR}/prompts/init.md and follow its instructions. Project state files are in ${STATE_DIR}/. Write PROGRESS.md and other state files there, not in the project directory. When you have finished the init steps, run /archon-lean4:doctor to verify the full setup before exiting." || true
 
 # -- Check if init completed --
 NEW_STAGE=$(awk '/^## Current Stage/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "${STATE_DIR}/PROGRESS.md")
@@ -243,7 +278,5 @@ if [[ "$NEW_STAGE" == "init" ]]; then
 else
     ok "Init complete. Stage is now: ${NEW_STAGE}"
     ok ""
-    ok "Next steps:"
-    ok "  1. Verify: cd ${PROJECT_PATH} && claude → /lean4:doctor"
-    ok "  2. Start loop: ./archon-loop.sh ${PROJECT_PATH}"
+    ok "Next step: ./archon-loop.sh ${PROJECT_PATH}"
 fi
