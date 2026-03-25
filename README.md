@@ -121,14 +121,12 @@ To check which plugins are active, run `/plugin` inside Claude Code and check th
 | `--stage STAGE` | Override the current stage |
 | `--serial` | Use a single prover instead of parallel agents |
 | `--verbose-logs` | Also save raw Claude stream events to `.raw.jsonl` |
-| `--review` | Enable review phase after prover (experimental) |
+| `--no-review` | Skip review phase after prover |
 | `--dry-run` | Print prompts without launching Claude |
 
-### Review and proof journal (experimental)
+### Review and proof journal
 
-> **This feature is experimental and disabled by default.** Enable it with `--review`.
-
-When enabled, a **review agent** runs after each prover round, adding a third phase to each iteration: Plan → Prover → Review.
+After each prover round, a **review agent** analyzes what happened — adding a third phase to each iteration: Plan → Prover → Review.
 
 The review agent:
 1. Reads structured attempt data extracted from the prover log (code changes, goal states, errors, lemma searches)
@@ -136,9 +134,18 @@ The review agent:
 3. Updates `PROJECT_STATUS.md` with cumulative progress and known blockers
 4. Writes `recommendations.md` with suggestions for the next plan iteration
 
-The plan agent reads the latest review findings when setting objectives for the next round, closing the feedback loop. If review is disabled, the plan agent still functions normally using task_results and existing state files.
+The plan agent reads the latest review findings when setting objectives for the next round, closing the feedback loop. Use `--no-review` to skip the review phase if needed — the plan agent still functions normally without it.
 
 Journal data lives in `.archon/proof-journal/sessions/session_N/`.
+
+#### Standalone review
+
+You can also run the review independently of the loop — useful for reviewing a completed session or re-reviewing with different context:
+
+```bash
+./review.sh /path/to/your-lean-project              # review latest log
+./review.sh /path/to/your-lean-project --log FILE    # review a specific log
+```
 
 ### Customization: global vs. local
 

@@ -26,7 +26,7 @@ FORCE_STAGE=""
 DRY_RUN=false
 PARALLEL=true
 VERBOSE_LOGS=false
-ENABLE_REVIEW=false
+ENABLE_REVIEW=true
 LOG_BASE=""
 
 # -- Color helpers with JSONL logging --
@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)        DRY_RUN=true;        shift   ;;
         --serial)         PARALLEL=false;      shift   ;;
         --verbose-logs)   VERBOSE_LOGS=true;   shift   ;;
-        --review)         ENABLE_REVIEW=true;  shift   ;;
+        --no-review)      ENABLE_REVIEW=false; shift   ;;
         -h|--help)
             echo "Usage: archon-loop.sh [OPTIONS] [/path/to/lean-project]"
             echo ""
@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --stage STAGE        Override stage (autoformalize|prover|polish)"
             echo "  --serial             Use a single prover (default: parallel, one per sorry-file)"
             echo "  --verbose-logs       Also save raw Claude stream events to .raw.jsonl"
-            echo "  --review             Enable review phase after prover (experimental)"
+            echo "  --no-review          Skip review phase after prover"
             echo "  --dry-run            Print prompts without launching Claude"
             echo "  -h, --help           Show this help"
             echo ""
@@ -607,8 +607,8 @@ info "Max iterations: ${MAX_ITERATIONS}"
 [[ -n "$FORCE_STAGE" ]] && info "Forced stage: ${FORCE_STAGE}"
 [[ "$PARALLEL" == true ]] && info "Prover mode: parallel (agent teams)"
 [[ "$PARALLEL" != true ]] && info "Prover mode: serial"
-[[ "$ENABLE_REVIEW" == true ]] && info "Review: enabled (experimental)"
-[[ "$ENABLE_REVIEW" != true ]] && info "Review: disabled (enable with --review)"
+[[ "$ENABLE_REVIEW" == true ]] && info "Review: enabled"
+[[ "$ENABLE_REVIEW" != true ]] && info "Review: disabled (--no-review)"
 [[ "$DRY_RUN" == true ]] && warn "DRY RUN mode"
 [[ -n "$LOG_BASE" ]] && info "Log: ${LOG_BASE}.jsonl"
 [[ "$VERBOSE_LOGS" == true && -n "$LOG_BASE" ]] && info "Raw: ${LOG_BASE}.raw.jsonl" || true
