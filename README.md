@@ -73,9 +73,13 @@ The loop alternates plan and prover agents through stages:
 | `prover` | Proving — fill `sorry` placeholders with verified proofs |
 | `polish` | Verification and polish — golf, refactor, extract reusable lemmas |
 
+**NOTE:** The prover agent is instructed to push formalization as far as possible, so the first few runs typically take **several hours** as it clears all low-hanging fruits. Once only genuinely difficult sorrys remain, each iteration becomes much shorter. To confirm the agent is running, check the latest log in `.archon/logs/archon-<timestamp>.jsonl` in your project directory; the agent also writes Lean files when running, which you can see directly.
+
 The loop exits automatically when the stage reaches `COMPLETE`. You can run `archon-loop.sh` on multiple projects in parallel from separate terminals — each project's state is independent.
 
 ### Guiding agents
+
+Archon runs fully autonomously, but guiding it with your expertise will speed it up, align it with your preferred proof style, and help it overcome mathematical and Lean challenges.
 
 There are three ways to influence Archon's behavior. Each serves a different purpose:
 
