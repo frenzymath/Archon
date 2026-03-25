@@ -21,7 +21,7 @@ trap 'echo ""; err "Interrupted by user."; exit 130' INT
 ARCHON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # -- Defaults --
-MAX_ITERATIONS=50
+MAX_ITERATIONS=10
 FORCE_STAGE=""
 DRY_RUN=false
 PARALLEL=true
@@ -62,7 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "If no path given, uses current directory."
             echo ""
             echo "Options:"
-            echo "  --max-iterations N   Max loop iterations (default: 50)"
+            echo "  --max-iterations N   Max loop iterations (default: 10)"
             echo "  --stage STAGE        Override stage (autoformalize|prover|polish)"
             echo "  --serial             Use a single prover (default: parallel, one per sorry-file)"
             echo "  --verbose-logs       Also save raw Claude stream events to .raw.jsonl"
