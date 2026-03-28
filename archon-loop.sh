@@ -443,7 +443,20 @@ run_parallel_provers() {
         local rel
         rel=$(relpath "$(echo "$sorry_files" | head -1)" "$PROJECT_PATH")
         info "Only 1 file (${rel}) — running serial prover"
-        run_claude "$(build_prompt "prover" "$stage")" || true
+
+        # Align log path & metadata with parallel branch so dashboard works
+        local file_slug
+        file_slug=$(echo "$rel" | sed 's|/|_|g; s|\.lean$||')
+        local prover_log="${ITER_DIR}/provers/${file_slug}"
+        LOG_BASE="$prover_log"
+
+        write_meta "$ITER_META" "provers.${file_slug}.file=${rel}" "provers.${file_slug}.status=running"
+
+        if run_claude "$(build_prompt "prover" "$stage")"; then
+            write_meta "$ITER_META" "provers.${file_slug}.status=done"
+        else
+            write_meta "$ITER_META" "provers.${file_slug}.status=error"
+        fi
         return 0
     fi
 
