@@ -378,6 +378,8 @@ show_cost_summary() {
 import sys, json, os, glob
 rows = []
 for jsonl in glob.glob(os.path.join('$iter_dir', '**', '*.jsonl'), recursive=True):
+    if os.path.basename(jsonl) == 'provers-combined.jsonl':
+        continue
     for l in open(jsonl):
         l = l.strip()
         if not l: continue
