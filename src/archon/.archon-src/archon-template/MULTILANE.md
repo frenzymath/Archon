@@ -31,17 +31,13 @@ That's it. You don't need to touch any CLI flag.
 | Anthropic (Claude Code) | `anthropic` | (Claude Code login) | Claude Code's own auth |
 | Moonshot (Kimi) | `moonshot` | `MOONSHOT_API_KEY` | Provider's `/anthropic` endpoint (native) |
 | DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | Provider's `/anthropic` endpoint (native) |
-| OpenAI (GPT) | `openai` | `OPENAI_API_KEY` | Bundled proxy ↔ LiteLLM ↔ OpenAI |
-| Google Gemini | `gemini` | `GEMINI_API_KEY` | Bundled proxy ↔ LiteLLM ↔ Gemini |
 
-If a provider speaks the Anthropic API natively, archon points the lane's
-Claude Code session at the provider's `/anthropic` endpoint via
-`ANTHROPIC_BASE_URL`. If it doesn't (OpenAI, Gemini), archon spawns
-`archon.proxy.server` on a free port for that lane and points the session
-there; the proxy translates each request to LiteLLM under the hood.
-**No extra install step needed** — the proxy's dependencies (fastapi,
-uvicorn, litellm, python-dotenv) are part of the default
-`pip install archon`.
+Every supported provider speaks the Anthropic API natively — archon points the
+lane's Claude Code session at the provider's `/anthropic` endpoint via
+`ANTHROPIC_BASE_URL`. OpenAI and Gemini are intentionally not in the list:
+Claude Code's tool-use semantics don't translate cleanly through a wire-format
+proxy, so those models work better in their own native CLIs (codex,
+gemini-cli) — out of scope for this multilane runner.
 
 ## Per-provider env vars
 
@@ -62,27 +58,6 @@ MOONSHOT_API_KEY=sk-...
 DEEPSEEK_API_KEY=sk-...
 # DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic    # default
 # DEEPSEEK_MODEL=deepseek-coder                            # default
-```
-
-### OpenAI (GPT)
-
-```bash
-OPENAI_API_KEY=sk-...
-# OPENAI_BIG_MODEL=gpt-5.4         # mapped from sonnet/opus
-# OPENAI_SMALL_MODEL=gpt-5.4-mini  # mapped from haiku
-# OPENAI_BASE_URL=https://api.openai.com/v1   # rare to override
-```
-
-The proxy maps Claude model aliases: `*opus*`/`*sonnet*` → `OPENAI_BIG_MODEL`,
-`*haiku*` → `OPENAI_SMALL_MODEL`. You don't pass the OpenAI model id from the
-loop's `--model` flag — that one stays as `opus` and gets remapped per-lane.
-
-### Gemini (regular API, not Vertex)
-
-```bash
-GEMINI_API_KEY=...
-# GEMINI_BIG_MODEL=gemini-2.5-pro      # mapped from sonnet/opus
-# GEMINI_SMALL_MODEL=gemini-2.5-flash  # mapped from haiku
 ```
 
 ## Example: run Anthropic + Kimi side by side

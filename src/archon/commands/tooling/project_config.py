@@ -81,16 +81,6 @@ def default_config() -> dict[str, Any]:
                     '_env': "Set DEEPSEEK_API_KEY in .archon/.env (optional: DEEPSEEK_BASE_URL, DEEPSEEK_MODEL).",
                     '_extras': "No extras package needed — DeepSeek speaks the Anthropic API natively.",
                 },
-                "openai": {
-                    'lane_id': 'gpt',
-                    'provider': 'openai',
-                    '_env': "Set OPENAI_API_KEY in .archon/.env (optional: OPENAI_BIG_MODEL, OPENAI_SMALL_MODEL, OPENAI_BASE_URL).",
-                },
-                "gemini": {
-                    'lane_id': 'gemini',
-                    'provider': 'gemini',
-                    '_env': "Set GEMINI_API_KEY in .archon/.env (optional: GEMINI_BIG_MODEL, GEMINI_SMALL_MODEL). Uses the regular Gemini API (no Vertex AI).",
-                },
             },
         },
     }

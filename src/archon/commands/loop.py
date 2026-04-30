@@ -1278,38 +1278,21 @@ def _run_multilane_assignment(
 def _autogen_lane_settings(
     state_dir: Path,
     config: MultiLaneConfig,
-) -> tuple[MultiLaneConfig, list]:
+) -> MultiLaneConfig:
     """Materialize per-lane Claude settings files for non-Anthropic providers.
 
-    Two paths:
-
-    - **Direct-API providers** (kimi, deepseek): the lane settings
-      file points at the provider's own Anthropic-compatible endpoint
-      with the user's auth token.
-    - **Proxy-mediated providers** (openai, gemini): we spawn the
-      bundled ``archon.proxy`` server on a free port, the lane points
-      at ``http://127.0.0.1:<port>``, and the proxy translates each
-      request to LiteLLM under the hood.
-
-    Returns ``(config, cleanups)`` where each cleanup is a zero-arg
-    callable the caller MUST run after the multilane round finishes
-    (typically in a ``finally`` block) — they kill the spawned proxy
-    subprocesses.
+    Each lane's provider must speak the Anthropic API natively (kimi,
+    deepseek). The settings file points at the provider's
+    Anthropic-compatible endpoint with the user's auth token via
+    ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN``.
 
     Lanes whose API key is missing are disabled in-place with a warning
     so a single missing credential doesn't take down the whole round.
     """
-    from archon.commands.tooling.env_loader import (
-        PROXY_PROVIDERS,
-        lane_proxy_settings,
-        provider_env,
-        proxy_spawn_env,
-    )
+    from archon.commands.tooling.env_loader import provider_env
 
     lanes_dir = state_dir / 'multilane' / 'lanes'
     lanes_dir.mkdir(parents=True, exist_ok=True)
-
-    cleanups: list = []
 
     for lane in config.lanes:
         if lane.provider == 'anthropic':
@@ -1318,58 +1301,20 @@ def _autogen_lane_settings(
             # Respect a lane that brought its own pre-baked settings file.
             continue
 
-        if lane.provider in PROXY_PROVIDERS:
-            spawn_env = proxy_spawn_env(lane.provider)
-            if spawn_env is None:
-                log.warn(
-                    f"Lane '{lane.lane_id}': missing API key for proxy provider "
-                    f"'{lane.provider}' — disabling this lane."
-                )
-                lane.enabled = False
-                continue
-            try:
-                from archon.proxy import find_free_port, start_proxy, stop_proxy, wait_for_proxy_ready
-            except ImportError as e:
-                # Should never fire on a default install — the proxy
-                # deps live in [project.dependencies] now. Left as a
-                # defensive net for unusual environments where someone
-                # stripped them out manually.
-                log.error(
-                    f"Lane '{lane.lane_id}': provider '{lane.provider}' needs the "
-                    f"bundled proxy and its imports failed. Re-install archon: "
-                    f"`pip install --force-reinstall archon`. ({e})"
-                )
-                lane.enabled = False
-                continue
-            port = find_free_port()
-            proxy_log = lanes_dir / f'{lane.lane_id}-proxy.log'
-            log.step(f"  starting {lane.provider} proxy for lane {lane.lane_id} on port {port}")
-            proc = start_proxy(port=port, env=spawn_env, log_path=proxy_log)
-            cleanups.append(lambda p=proc: stop_proxy(p))
-            if not wait_for_proxy_ready(port, timeout=20.0):
-                log.warn(
-                    f"Lane '{lane.lane_id}': proxy on port {port} did not become "
-                    f"ready in 20s — disabling this lane (see {proxy_log})."
-                )
-                stop_proxy(proc)
-                lane.enabled = False
-                continue
-            settings_dict = lane_proxy_settings(port=port)
-        else:
-            settings_dict = provider_env(lane.provider)
-            if settings_dict is None:
-                log.warn(
-                    f"Lane '{lane.lane_id}': no credentials found for provider "
-                    f"'{lane.provider}' in environment / .archon/.env — disabling this lane."
-                )
-                lane.enabled = False
-                continue
+        settings_dict = provider_env(lane.provider)
+        if settings_dict is None:
+            log.warn(
+                f"Lane '{lane.lane_id}': no credentials found for provider "
+                f"'{lane.provider}' in environment / .archon/.env — disabling this lane."
+            )
+            lane.enabled = False
+            continue
 
         settings_file = lanes_dir / f'{lane.lane_id}-settings.json'
         settings_file.write_text(json.dumps({'env': settings_dict}, indent=2) + '\n', encoding='utf-8')
         lane.claude_settings_path = str(settings_file)
 
-    return config, cleanups
+    return config
 
 
 def _run_multilane_execution(
@@ -1403,11 +1348,8 @@ def _run_multilane_execution(
 
     # For lanes whose provider needs external API credentials (kimi,
     # deepseek, …), auto-generate the {ANTHROPIC_BASE_URL, …}-shaped
-    # settings file from the project .env. Proxy-mediated providers
-    # (openai, gemini) get their bundled proxy spawned here too —
-    # ``proxy_cleanups`` are run in the ``finally`` below so the
-    # subprocesses go away even if execution raises.
-    config, proxy_cleanups = _autogen_lane_settings(state_dir, config)
+    # settings file from the project .env.
+    config = _autogen_lane_settings(state_dir, config)
 
     summary, assignments = preview_round(
         config=config,
@@ -1586,11 +1528,6 @@ def _run_multilane_execution(
             except Exception:
                 pass
         _release_multilane_lock(lock_path)
-        for cleanup in proxy_cleanups:
-            try:
-                cleanup()
-            except Exception as e:
-                log.warn(f"proxy cleanup failed: {e}")
 
     contamination = _non_archon_dirty_files(project_path)
     if contamination:
