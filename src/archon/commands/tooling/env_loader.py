@@ -19,8 +19,18 @@ from pathlib import Path
 
 # Provider → list of env var names recognized for that provider. Used
 # both by the .env template generator and by the lane settings writer.
-# These are MULTILANE providers — non-Anthropic Claude-compatible APIs
-# you can run a prover lane through.
+# These are MULTILANE providers — non-Anthropic services you can run
+# a prover lane through.
+#
+# Two flavors:
+# 1. Direct-API providers (kimi/moonshot, deepseek): they already
+#    speak the Anthropic API natively, so the lane settings just
+#    point at their endpoint with their auth token.
+# 2. Proxy-mediated providers (openai, gemini): they speak their
+#    native APIs, so we spawn `archon.proxy.server` per-lane and the
+#    lane points at http://127.0.0.1:<port>. Configured via
+#    BIG_MODEL / SMALL_MODEL env vars (the proxy reads those at
+#    spawn time).
 PROVIDERS: dict[str, list[str]] = {
     'moonshot': [
         'MOONSHOT_API_KEY',
@@ -32,7 +42,24 @@ PROVIDERS: dict[str, list[str]] = {
         'DEEPSEEK_BASE_URL',
         'DEEPSEEK_MODEL',
     ],
+    'openai': [
+        'OPENAI_API_KEY',
+        'OPENAI_BIG_MODEL',
+        'OPENAI_SMALL_MODEL',
+        'OPENAI_BASE_URL',
+    ],
+    'gemini': [
+        'GEMINI_API_KEY',
+        'GEMINI_BIG_MODEL',
+        'GEMINI_SMALL_MODEL',
+    ],
 }
+
+# Providers that need the bundled Anthropic↔LiteLLM proxy because they
+# don't speak Anthropic's API natively. ``provider_env`` returns
+# ``None`` for these — the lane setup path spawns a proxy and writes
+# the lane settings file pointing at it.
+PROXY_PROVIDERS: set[str] = {'openai', 'gemini'}
 
 # Single-key credentials used by the *informal* agent (the tool that
 # generates blueprint sketches / drafts informal proofs / etc.). These
@@ -51,6 +78,12 @@ TEMPLATE_DEFAULTS: dict[str, str] = {
     'MOONSHOT_MODEL': 'kimi-k2.6',
     'DEEPSEEK_BASE_URL': 'https://api.deepseek.com/anthropic',
     'DEEPSEEK_MODEL': 'deepseek-coder',
+    # OpenAI flagship picks as of 2026-04. Override per-project in .env.
+    'OPENAI_BIG_MODEL': 'gpt-5.4',
+    'OPENAI_SMALL_MODEL': 'gpt-5.4-mini',
+    # Gemini regular API (not Vertex).
+    'GEMINI_BIG_MODEL': 'gemini-2.5-pro',
+    'GEMINI_SMALL_MODEL': 'gemini-2.5-flash',
 }
 
 
@@ -141,15 +174,21 @@ def write_env_template(project_path: Path, *, force: bool = False) -> bool:
 
 
 def provider_env(provider: str) -> dict[str, str] | None:
-    """Return the {ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …} dict for a
-    non-Anthropic provider, sourced from os.environ.
+    """Direct-API provider settings (kimi/moonshot, deepseek).
 
-    None if the provider's API key is missing — the caller should warn
-    and skip that lane rather than crash. ``provider == "anthropic"``
-    returns ``{}`` because Anthropic lanes use Claude Code's own auth.
+    Returns the {ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …} dict the
+    lane settings file needs. None if:
+    - the API key is missing (caller should warn + skip the lane),
+    - the provider is proxy-mediated (use ``proxy_spawn_env`` instead),
+    - the provider is unknown.
+
+    ``provider == "anthropic"`` returns ``{}`` because Anthropic lanes
+    use Claude Code's own auth.
     """
     if provider == 'anthropic':
         return {}
+    if provider in PROXY_PROVIDERS:
+        return None
     keys = PROVIDERS.get(provider)
     if not keys:
         return None
@@ -171,3 +210,53 @@ def provider_env(provider: str) -> dict[str, str] | None:
             'ANTHROPIC_DEFAULT_HAIKU_MODEL': model,
         })
     return settings
+
+
+def proxy_spawn_env(provider: str) -> dict[str, str] | None:
+    """Env vars to spawn the bundled proxy for a proxy-mediated provider.
+
+    Returns ``None`` when the API key is missing so the caller can
+    disable that lane and continue with the others. The returned dict
+    is what gets passed to ``archon.proxy.start_proxy(env=...)`` —
+    don't ship it to Claude Code directly.
+    """
+    if provider not in PROXY_PROVIDERS:
+        return None
+    if provider == 'openai':
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            return None
+        env: dict[str, str] = {
+            'PREFERRED_PROVIDER': 'openai',
+            'OPENAI_API_KEY': api_key,
+            'BIG_MODEL': os.environ.get('OPENAI_BIG_MODEL') or TEMPLATE_DEFAULTS['OPENAI_BIG_MODEL'],
+            'SMALL_MODEL': os.environ.get('OPENAI_SMALL_MODEL') or TEMPLATE_DEFAULTS['OPENAI_SMALL_MODEL'],
+        }
+        if os.environ.get('OPENAI_BASE_URL'):
+            env['OPENAI_BASE_URL'] = os.environ['OPENAI_BASE_URL']
+        return env
+    if provider == 'gemini':
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            return None
+        return {
+            'PREFERRED_PROVIDER': 'google',
+            'GEMINI_API_KEY': api_key,
+            'BIG_MODEL': os.environ.get('GEMINI_BIG_MODEL') or TEMPLATE_DEFAULTS['GEMINI_BIG_MODEL'],
+            'SMALL_MODEL': os.environ.get('GEMINI_SMALL_MODEL') or TEMPLATE_DEFAULTS['GEMINI_SMALL_MODEL'],
+        }
+    return None
+
+
+def lane_proxy_settings(*, port: int) -> dict[str, str]:
+    """Lane settings file shape pointing at a local proxy on ``port``.
+
+    The auth token is a placeholder: the proxy ignores it (the real key
+    lives in the proxy's process env). Claude Code refuses to start
+    without *some* token, so we provide a non-empty dummy.
+    """
+    return {
+        'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{port}',
+        'ANTHROPIC_AUTH_TOKEN': 'archon-proxy',
+        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
+    }

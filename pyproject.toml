@@ -12,6 +12,17 @@ dependencies = [
     "pydantic",
 ]
 
+[project.optional-dependencies]
+# Required only when running OpenAI / Gemini multilane lanes through
+# the bundled Anthropic-API proxy (`archon.proxy.server`). Heavy enough
+# that a default install stays slim without them.
+proxy = [
+    "fastapi[standard]>=0.115",
+    "uvicorn>=0.34",
+    "litellm>=1.77",
+    "python-dotenv>=1.0",
+]
+
 [project.scripts]
 archon = "archon.cli:app"
 
