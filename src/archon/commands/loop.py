@@ -1110,6 +1110,7 @@ def _run_multilane_assignment(
     model: str,
     iter_dir: Path | None = None,
     lane_provider: str | None = None,
+    lane_env: dict[str, str] | None = None,
     cancel_event: 'threading.Event | None' = None,
 ) -> dict[str, object]:
     lane_path = Path(assignment.worktree_path)
@@ -1192,17 +1193,23 @@ def _run_multilane_assignment(
         role_tag += f"/{lane_provider}"
     role_tag += "]"
     before_files = set(_git_diff_files(lane_path))
+    # Build env: prover-runtime vars first, then lane provider vars on
+    # top so e.g. an empty ``ANTHROPIC_API_KEY`` from the lane settings
+    # overrides anything inherited from the parent shell.
+    run_env = _prover_env(
+        snap_dir=snap_dir,
+        prover_jsonl=Path(raw_log_path),
+        project_path=lane_path,
+    )
+    if lane_env:
+        run_env = {**run_env, **lane_env}
     try:
         ok = ClaudeAgent(model=model, role=role_tag).run(
             prompt,
             cwd=lane_path,
             log_base=Path(assignment.log_path),
             verbose_logs=verbose_logs,
-            env_overrides=_prover_env(
-                snap_dir=snap_dir,
-                prover_jsonl=Path(raw_log_path),
-                project_path=lane_path,
-            ),
+            env_overrides=run_env,
             cancel_event=cancel_event,
         )
     except Exception as e:  # noqa: BLE001 — we record + re-raise
@@ -1445,6 +1452,22 @@ def _run_multilane_execution(
             # Map lane_id -> provider so each assignment's log line tells
             # the user whether it's hitting Anthropic, Moonshot, OpenAI, ...
             lane_providers = {lane.lane_id: lane.provider for lane in config.lanes}
+            # Per-lane env overlay for the spawned ``claude`` process.
+            # The same dict was already written to the lane's
+            # ``.claude/settings.local.json``, but Claude Code's env-merge
+            # semantics across versions are inconsistent — empty values
+            # may get dropped, leaving an inherited ``ANTHROPIC_API_KEY``
+            # from the parent shell to override the proxy redirect.
+            # Setting them on the subprocess directly is unambiguous.
+            lane_envs: dict[str, dict[str, str]] = {}
+            for lane in config.lanes:
+                if not lane.claude_settings_path:
+                    continue
+                try:
+                    raw = Path(lane.claude_settings_path).read_text(encoding='utf-8')
+                    lane_envs[lane.lane_id] = json.loads(raw).get('env', {}) or {}
+                except (OSError, json.JSONDecodeError):
+                    lane_envs[lane.lane_id] = {}
             # Per-(lane, file) cancel event. When one lane finishes a
             # file cleanly, we set the cancel events of all OTHER lanes
             # working on that same file after a grace period — that's
@@ -1500,6 +1523,7 @@ def _run_multilane_execution(
                         model=model,
                         iter_dir=iter_dir,
                         lane_provider=lane_providers.get(assignment.lane_id),
+                        lane_env=lane_envs.get(assignment.lane_id),
                         cancel_event=cancel_events[assignment.assignment_id],
                     ): assignment
                     for assignment in assignments

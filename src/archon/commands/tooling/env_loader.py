@@ -256,9 +256,19 @@ def lane_proxy_settings(*, port: int) -> dict[str, str]:
     The auth token is a placeholder: the proxy ignores it (the real key
     lives in the proxy's process env). Claude Code refuses to start
     without *some* token, so we provide a non-empty dummy.
+
+    ``ANTHROPIC_API_KEY`` is explicitly cleared to defeat any inherited
+    interactive-login credential — Claude Code's auth precedence picks
+    ``ANTHROPIC_API_KEY`` (or stored OAuth) over ``ANTHROPIC_AUTH_TOKEN``
+    when both are present, and a real key in the parent env will trigger
+    OAuth-refresh requests against ``ANTHROPIC_BASE_URL`` that the proxy
+    doesn't speak. Forcing it empty makes Claude Code use the dummy
+    bearer token, which the proxy ignores.
     """
     return {
         'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{port}',
         'ANTHROPIC_AUTH_TOKEN': 'archon-proxy',
+        # Empty string — defeats inherited Claude Code login creds.
+        'ANTHROPIC_API_KEY': '',
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
     }
