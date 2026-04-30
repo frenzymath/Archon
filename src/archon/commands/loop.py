@@ -531,25 +531,44 @@ def _start_dashboard(project_path: Path, open_browser: bool) -> tuple[subprocess
         log.warn("Dashboard skipped: could not find a free port in 8080–8099")
         return None, None
 
+    # Tee stdout/stderr to a file under .archon/logs/ so the user can
+    # inspect build failures (vite missing deps, port already in use,
+    # etc.) instead of guessing from a generic warning.
+    log_path = project_path / ".archon" / "logs" / "dashboard.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["archon", "dashboard", str(project_path), "--port", str(port)]
     try:
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=open(log_path, "a", buffering=1),
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     except Exception as e:
         log.warn(f"Dashboard failed to start: {e}")
         return None, None
 
-    for _ in range(10):
-        time.sleep(0.5)
+    # Poll fast so a quick build failure doesn't hide behind a long wait.
+    # Total budget ≈ 8 s; checked at 100 ms granularity. We probe the
+    # process first because a crashed proc means the port will never
+    # bind, no matter how long we sleep.
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            log.warn(
+                f"Dashboard process exited before binding its port "
+                f"(exit code {proc.returncode}). See {log_path}."
+            )
+            return None, None
         if not _port_free(port):
             break
-        if proc.poll() is not None:
-            log.warn("Dashboard process exited before binding its port")
-            return None, None
+        time.sleep(0.1)
+    else:
+        log.warn(
+            f"Dashboard did not bind port {port} within 8s; continuing without it. "
+            f"See {log_path} for details."
+        )
+        return None, None
 
     url = f"http://localhost:{port}"
     log.panel(
