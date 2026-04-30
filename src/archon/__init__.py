@@ -1,3 +1,8 @@
 """Archon: Autonomous Lean 4 formalization system."""
 
-__version__ = "0.1.0"
+import importlib.metadata
+
+try:
+    __version__ = importlib.metadata.version("archon")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "unknown"

@@ -32,7 +32,8 @@ class _BannerGroup(typer.core.TyperGroup):
             "  [bold cyan]2.[/bold cyan] cd project/dir     → navigate to your project directory\n"
             "  [bold cyan]3.[/bold cyan] archon init .      → create a project and initialize it with Lean 4\n"
             "  [bold cyan]4.[/bold cyan] archon loop        → run autonomous formalization\n"
-            "  [bold cyan]5.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
+            "  [bold cyan]5.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
+            "  [bold cyan]6.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
             "[dim]Run [bold]archon <command> -h[/bold] for details on any command.[/dim]"
         )
         console.print(Panel(
@@ -83,6 +84,8 @@ from archon.commands.dashboard import dashboard  # noqa: E402
 from archon.commands.setup import setup  # noqa: E402
 from archon.commands.prove import prove  # noqa: E402
 from archon.commands.update import update  # noqa: E402
+from archon.commands.discuss import discuss  # noqa: E402
+from archon.commands.version import version as version_cmd  # noqa: E402
 
 app.command()(init)
 app.command()(loop)
@@ -91,6 +94,8 @@ app.command()(dashboard)
 app.command()(prove)
 app.command()(setup)
 app.command()(update)
+app.command()(discuss)
+app.command("version")(version_cmd)
 
 if __name__ == "__main__":
     app()
