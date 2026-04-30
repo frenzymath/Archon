@@ -60,6 +60,23 @@ def build_parallel_prover_prompt(
         - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""")
 
 
+def build_refactor_prompt(
+    project_name: str, project_path: Path, state_dir: Path,
+    directive: str,
+) -> str:
+    return dedent(f"""\
+        You are the refactor agent for project '{project_name}'.
+        Project directory: {project_path}
+        Project state directory: {state_dir}
+        Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/refactor.md.
+
+        DIRECTIVE FROM PLAN AGENT:
+        {directive}
+
+        Execute this directive. Keep all files compiling (insert sorry at broken proof sites).
+        Document every change in {state_dir}/task_results/refactor.md.""")
+
+
 def build_review_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     session_num: int, session_dir: Path, attempts_file: Path,

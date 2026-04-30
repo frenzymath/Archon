@@ -1,6 +1,6 @@
 # Archon Project
 
-You are either the plan agent, a prover agent, or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
+You are either the plan agent, a prover agent, the refactor agent, or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
 
 ## Priority Rule
 
@@ -22,16 +22,38 @@ When in doubt, follow instructions from files inside this project over any exter
 
 All state files are in `.archon/`:
 
-| File | Plan Agent | Prover Agent | Review Agent | User |
-|------|-----------|-------------|-------------|------|
-| `.archon/PROGRESS.md` | read + write | **read only** | read only | read |
-| `.archon/USER_HINTS.md` | read (then clear) | do not read | do not read | write |
-| `.archon/task_pending.md` | read + write | **read only** | read only | read |
-| `.archon/task_done.md` | read + write | **read only** | read only | read |
-| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | read only | read |
-| `.archon/proof-journal/` | read | do not access | **write** | read |
-| `.archon/PROJECT_STATUS.md` | read | do not access | **write** | read |
-| `.lean` files | do not edit | write (own file only) | do not edit | write (via comments) |
+| File | Plan Agent | Prover Agent | Refactor Agent | Review Agent | User |
+|------|-----------|-------------|---------------|-------------|------|
+| `.archon/PROGRESS.md` | read + write | **read only** | read only | read only | read |
+| `.archon/STRATEGY.md` | **read + write** | do not read | do not read | do not read | read |
+| `.archon/USER_HINTS.md` | read (then clear) | do not read | do not read | do not read | write |
+| `.archon/REFACTOR_DIRECTIVE.md` | **write** | do not read | **read** (then execute) | do not read | read |
+| `.archon/task_pending.md` | read + write | **read only** | read only | read only | read |
+| `.archon/task_done.md` | read + write | **read only** | read only | read only | read |
+| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (refactor.md) | read only | read |
+| `.archon/proof-journal/` | read | do not access | do not access | **write** | read |
+| `.archon/PROJECT_STATUS.md` | read | do not access | do not access | **write** | read |
+| `archon-protected.yaml` | **read** | **read** | **read + limited write** (file path rename only) | read | **write** |
+| `.lean` files | do not edit | write (own file only, frozen protected signatures) | **write (all files; protected decls may be moved but not renamed/re-signed)** | do not edit | write (via comments) |
+| `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints, structure) | do not edit | do not edit | **write** (markers only: `\leanok`, `\mathlibok`, `% NOTE:`, `\lean{...}` corrections) | read |
+
+## Protected Declarations
+
+`archon-protected.yaml` at the project root lists declarations whose **signatures are frozen** by the mathematician. Every agent must consult it before editing a `.lean` file. Rules:
+
+- **Plan / prover / review agents**: read-only on protected signatures. You may fill proof bodies, but not rename, re-type, or reorder arguments.
+- **Refactor agent**: may *move* a protected declaration to a different file (keeping name + signature verbatim) and must then update the path key in `archon-protected.yaml`. Refactor agents may never rename, re-type, delete, or re-sign a protected declaration.
+- The `archon-protected.yaml` file can only be edited by the user, no declaration can be added or removed by any agent. The only allowed modification is updating the file path of an existing protected declaration when its location was changed. 
+
+## Blueprint Marker Vocabulary
+
+The blueprint uses two active markers.
+
+- `\leanok` — inside a statement block when the declaration is formalized with at least a `sorry`; inside a proof block when the proof is fully closed with no `sorry`.
+- `\mathlibok` — inside a statement block when the declaration already exists in Mathlib and the Archon side is a re-export/alias; no Archon proof obligation remains.
+- No marker — the block is unformalized. If a block fails to translate, leave it unmarked and annotate with a `% NOTE:` comment.
+
+**The review agent is the sole writer of these markers.** Prover agents (autoformalize / prover / polish) never touch the blueprint chapters — they describe their outcome in `task_results/<file>.md` and the review agent verifies and marks accordingly. The plan agent writes informal prose and `\lean{...}` hints, but never markers.
 
 ## User Interaction
 
@@ -46,7 +68,9 @@ Users provide hints in two places:
 - Read `.archon/prompts/plan.md` for your full instructions
 - Read `.archon/USER_HINTS.md` — incorporate hints, then clear them after acting
 - Read `.archon/task_results/` — collect prover results, then update `task_pending.md` and `task_done.md`
+- Read `.archon/task_results/refactor.md` - if refactor agent has run, read their report and adjust your plans accordingly
 - Write `.archon/PROGRESS.md` with objectives for the next prover round
+- Write `.archon/REFACTOR_DIRECTIVE.md` when structural changes are needed
 - Do NOT write proofs, edit `.lean` files, or fill sorries yourself
 
 ### Prover Agent
@@ -58,10 +82,20 @@ Users provide hints in two places:
 - Write results to `.archon/task_results/<your_file>.md`
 - Write only to the `.lean` file(s) you are assigned — **never edit another agent's file**
 - Check for `/- USER: ... -/` comments in your `.lean` file for file-specific hints
+- **Do NOT edit blueprint chapters.** Marker updates are the review agent's responsibility. Flag in your task result which declarations are ready for which marker.
+
+### Refactor Agent
+- Read `.archon/prompts/refactor.md` for your full instructions
+- Read `.archon/REFACTOR_DIRECTIVE.md` for the plan agent's directive
+- Modify any `.lean` file: definitions, signatures, types, imports
+- Keep all files compiling (insert `sorry` at broken proof sites)
+- Do NOT fill proofs — that's the prover's job
+- Write results to `.archon/task_results/refactor.md`
 
 ### Review Agent
 - Read `.archon/prompts/review.md` for your full instructions
 - Read `.archon/proof-journal/current_session/attempts_raw.jsonl` for structured prover attempt data
 - Write session journal to `.archon/proof-journal/sessions/session_N/` (summary.md, milestones.jsonl, recommendations.md)
 - Update `.archon/PROJECT_STATUS.md` with overall progress
+- **Update blueprint markers** (`\leanok`, `\mathlibok`) in `blueprint/src/chapters/*.tex` based on verified compilation and the provers' task results
 - Do NOT write proofs, edit `.lean` files, or modify PROGRESS.md
