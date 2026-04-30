@@ -26,20 +26,22 @@ That's it. You don't need to touch any CLI flag.
 
 ## Provider matrix
 
-| Provider | `provider` value | API key env var | Speaks Anthropic API natively? | Needs `archon[proxy]`? |
-|---|---|---|---|---|
-| Anthropic (Claude Code) | `anthropic` | (Claude Code login) | ✓ | no |
-| Moonshot (Kimi) | `moonshot` | `MOONSHOT_API_KEY` | ✓ | no |
-| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | ✓ | no |
-| OpenAI (GPT) | `openai` | `OPENAI_API_KEY` | no — bundled proxy translates | **yes** |
-| Google Gemini | `gemini` | `GEMINI_API_KEY` | no — bundled proxy translates | **yes** |
+| Provider | `provider` value | API key env var | How it talks to its API |
+|---|---|---|---|
+| Anthropic (Claude Code) | `anthropic` | (Claude Code login) | Claude Code's own auth |
+| Moonshot (Kimi) | `moonshot` | `MOONSHOT_API_KEY` | Provider's `/anthropic` endpoint (native) |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | Provider's `/anthropic` endpoint (native) |
+| OpenAI (GPT) | `openai` | `OPENAI_API_KEY` | Bundled proxy ↔ LiteLLM ↔ OpenAI |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | Bundled proxy ↔ LiteLLM ↔ Gemini |
 
 If a provider speaks the Anthropic API natively, archon points the lane's
 Claude Code session at the provider's `/anthropic` endpoint via
 `ANTHROPIC_BASE_URL`. If it doesn't (OpenAI, Gemini), archon spawns
 `archon.proxy.server` on a free port for that lane and points the session
-there; the proxy translates each request to LiteLLM under the hood. Install
-once: `pip install archon[proxy]`.
+there; the proxy translates each request to LiteLLM under the hood.
+**No extra install step needed** — the proxy's dependencies (fastapi,
+uvicorn, litellm, python-dotenv) are part of the default
+`pip install archon`.
 
 ## Per-provider env vars
 

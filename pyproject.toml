@@ -10,13 +10,10 @@ requires-python = ">=3.10"
 dependencies = [
     "typer",
     "pydantic",
-]
-
-[project.optional-dependencies]
-# Required only when running OpenAI / Gemini multilane lanes through
-# the bundled Anthropic-API proxy (`archon.proxy.server`). Heavy enough
-# that a default install stays slim without them.
-proxy = [
+    # Used by the bundled Anthropic↔LiteLLM proxy (archon.proxy.server)
+    # for OpenAI / Gemini multilane lanes. Could be optional, but a
+    # single `pip install archon` covering every multilane provider is
+    # less footgun than `archon[proxy]`.
     "fastapi[standard]>=0.115",
     "uvicorn>=0.34",
     "litellm>=1.77",

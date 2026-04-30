@@ -6,14 +6,11 @@ translates them to LiteLLM (OpenAI / Gemini) calls. Each lane gets
 its own proxy subprocess on a free port; ``ANTHROPIC_BASE_URL`` for
 the lane points at ``http://127.0.0.1:<port>``.
 
-The heavy dependencies (fastapi, uvicorn, litellm) are guarded behind
-the ``proxy`` extras group:
-
-    pip install archon[proxy]
-
-so a default install stays small. Direct-API providers (kimi,
-deepseek) don't need the proxy because they already speak the
-Anthropic API.
+The proxy's dependencies (fastapi, uvicorn, litellm, python-dotenv)
+ship in archon's main dependency list, so a default
+``pip install archon`` already covers OpenAI and Gemini lanes.
+Direct-API providers (kimi, deepseek) don't need the proxy at all
+because they already speak the Anthropic API.
 """
 
 from __future__ import annotations

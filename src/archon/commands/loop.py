@@ -1323,9 +1323,14 @@ def _autogen_lane_settings(
             try:
                 from archon.proxy import find_free_port, start_proxy, stop_proxy, wait_for_proxy_ready
             except ImportError as e:
+                # Should never fire on a default install — the proxy
+                # deps live in [project.dependencies] now. Left as a
+                # defensive net for unusual environments where someone
+                # stripped them out manually.
                 log.error(
                     f"Lane '{lane.lane_id}': provider '{lane.provider}' needs the "
-                    f"bundled proxy. Install with `pip install archon[proxy]`. ({e})"
+                    f"bundled proxy and its imports failed. Re-install archon: "
+                    f"`pip install --force-reinstall archon`. ({e})"
                 )
                 lane.enabled = False
                 continue
