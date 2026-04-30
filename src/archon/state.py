@@ -42,13 +42,13 @@ def is_complete(progress_file: Path, force_stage: str | None = None) -> bool:
 def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]:
     """Extract assigned .lean objective files from ## Current Objectives.
 
-    The plan agent writes objectives in two shapes — a per-objective
-    ``###`` heading whose title contains the file, or a flat bullet list.
-    We prefer headings (one objective per file is the new convention)
-    and fall back to bullets only when no heading matches. Bullets that
-    contain a ``:`` before the file token are skipped because those tend
-    to describe sub-tasks (``- depends on: Foo.lean``) rather than
-    assignments.
+    The plan agent writes objectives in three shapes — a per-objective
+    ``###`` heading whose title contains the file, an unordered bullet
+    list (``-``/``*``), or an ordered numbered list (``1.``/``2.``/…).
+    We prefer headings; if none, we accept bulleted AND numbered list
+    items. Bullets/numbered lines that contain a ``:`` before the file
+    token are skipped because those tend to describe sub-tasks
+    (``- depends on: Foo.lean``) rather than assignments.
     """
     if not progress_file.exists():
         return []
@@ -67,7 +67,20 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
             section_lines.append(line)
 
     heading_pattern = re.compile(r'^\s*###\s+.*?(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)')
+    # "- " / "* "-style: accept any `.lean` reference on the line — the
+    # planner sometimes writes "- work on `Foo.lean`" without bolding
+    # the file. Reference mentions ("- see also `Bar.lean` for …") get
+    # excluded by the colon-prefix check below.
     bullet_pattern = re.compile(r'^\s*[-*]\s+.*?(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)')
+    # "N. "-style numbered lists: stricter — require the file marker to
+    # appear right after the number with at most an opening ``**``
+    # between them. The planner's iteration templates write
+    # "1. **`Foo.lean`** …", so this still matches the legit case but
+    # excludes Strategy-notes-style sub-points like
+    # "1. compare with `Foo.lean`" that share the section.
+    numbered_pattern = re.compile(
+        r'^\s*\d+\.\s+(?:\*\*\s*)?(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)'
+    )
 
     candidates: list[str] = []
     for line in section_lines:
@@ -77,7 +90,7 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
 
     if not candidates:
         for line in section_lines:
-            match = bullet_pattern.search(line)
+            match = bullet_pattern.search(line) or numbered_pattern.search(line)
             if not match:
                 continue
             prefix = line[:match.start(1)]

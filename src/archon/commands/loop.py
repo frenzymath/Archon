@@ -662,15 +662,26 @@ def _count_sorries(project_path: Path) -> int | None:
     analyzer = _data_path("skills/lean4/lib/scripts/sorry_analyzer.py")
     if analyzer.exists():
         try:
+            # --exit-zero-on-findings: by default the analyzer returns
+            # non-zero when it finds any sorries, which used to make
+            # us fall through to a bash `grep -c sorry` that picks up
+            # comments, sorryAx references, identifiers ending in
+            # `sorry`, etc. and over-counts by an order of magnitude.
             r = subprocess.run(
-                [sys.executable, str(analyzer), str(project_path), "--format=summary"],
+                [sys.executable, str(analyzer), str(project_path),
+                 "--format=summary", "--exit-zero-on-findings"],
                 capture_output=True, text=True, timeout=60,
             )
-            if r.returncode == 0 and r.stdout.strip():
-                last_line = r.stdout.strip().splitlines()[-1]
-                m = re.search(r"(\d+)", last_line)
+            if r.stdout.strip():
+                # The summary's first line is "Sorry Summary: N total across M file(s)".
+                # Match the leading number explicitly instead of parsing
+                # an arbitrary downstream row.
+                first = r.stdout.strip().splitlines()[0]
+                m = re.search(r"Sorry Summary:\s*(\d+)\s+total", first)
                 if m:
                     return int(m.group(1))
+                # Older script versions may put the total elsewhere — fall
+                # through to the bash counter rather than guess.
         except Exception:
             pass
 
