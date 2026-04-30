@@ -282,6 +282,31 @@ def _select_writeback_rows(
     return candidates
 
 
+def _group_writeback_candidates_by_file(
+    results: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    """Group successful, eligible result rows by their assigned file.
+
+    A row is eligible iff it succeeded, did not escape its worktree,
+    actually changed its assigned file, and has a worktree we can read
+    from. The grouping preserves the order in which lanes finished
+    (first-clean-wins) by sorting on assignment_id, so the merger can
+    be told which candidate is the "first" if it falls back.
+    """
+    groups: dict[str, list[dict[str, object]]] = {}
+    for row in sorted(results, key=lambda r: str(r.get('assignment_id', ''))):
+        if not row.get('success'):
+            continue
+        if not row.get('assigned_file_only') or not row.get('verification_passed'):
+            continue
+        rel = str(row.get('assigned_file') or '')
+        worktree_path = str(row.get('worktree_path') or '')
+        if not rel or not worktree_path:
+            continue
+        groups.setdefault(rel, []).append(row)
+    return groups
+
+
 def _git_commit_paths(repo_path: Path, paths: list[str], message: str) -> str | None:
     """Commit specific paths in the outer git repo. Returns the commit SHA, or
     None if there was nothing to commit OR the outer git is unavailable. Any
@@ -344,6 +369,86 @@ def _promote_writeback_rows(
     for row in rows:
         row['promotion_commit'] = commit_sha
     return {'promoted_files': promoted_files, 'promotion_commit': commit_sha}
+
+
+def _merge_and_promote_writeback(
+    *,
+    project_path: Path,
+    state_dir: Path,
+    groups: dict[str, list[dict[str, object]]],
+    iteration: int,
+    model: str,
+    verbose_logs: bool,
+) -> dict[str, object]:
+    """Per-file merge across all successful lanes, then commit the result.
+
+    For files with one successful lane, this collapses to the same
+    behavior as ``_promote_writeback_rows`` (verbatim copy). For files
+    with multiple successful lanes, the merge agent picks the best
+    proof per declaration. Either way, every row in ``groups`` gets
+    its ``promoted_to_main`` flag set so the results JSONL stays
+    correct.
+    """
+    from archon.multilane.merge_agent import LaneCandidate, merge_file_versions
+
+    promoted_files: list[str] = []
+    merge_records: list[dict[str, object]] = []
+
+    for rel, rows in sorted(groups.items()):
+        candidates: list[LaneCandidate] = []
+        for row in rows:
+            worktree_path = str(row.get('worktree_path') or '')
+            if not worktree_path:
+                continue
+            candidates.append(LaneCandidate(
+                lane_id=str(row.get('lane_id') or 'unknown'),
+                source_path=Path(worktree_path) / rel,
+            ))
+        if not candidates:
+            for row in rows:
+                row['promoted_to_main'] = False
+            continue
+
+        outcome = merge_file_versions(
+            project_path=project_path,
+            state_dir=state_dir,
+            target_rel=rel,
+            candidates=candidates,
+            iteration=iteration,
+            model=model,
+            verbose_logs=verbose_logs,
+        )
+        promoted_files.append(rel)
+        for row in rows:
+            row['promoted_to_main'] = True
+            row['merge_outcome'] = 'merged' if outcome.merged else 'copied'
+            row['merge_chosen_lane'] = outcome.chosen_lane
+        merge_records.append({
+            'file': rel,
+            'merged': outcome.merged,
+            'chosen_lane': outcome.chosen_lane,
+            'lane_count': len(candidates),
+            'lanes': [c.lane_id for c in candidates],
+        })
+
+    commit_sha = None
+    if promoted_files:
+        message = (
+            f"multilane merge: iter-{iteration:03d} "
+            + ', '.join(promoted_files)
+        )
+        commit_sha = _git_commit_paths(project_path, promoted_files, message)
+    for rows in groups.values():
+        for row in rows:
+            row.setdefault('promotion_commit', commit_sha)
+            if 'promotion_commit' in row and row['promotion_commit'] is None:
+                row['promotion_commit'] = commit_sha
+
+    return {
+        'promoted_files': promoted_files,
+        'promotion_commit': commit_sha,
+        'merges': merge_records,
+    }
 
 
 def _assignment_success(
@@ -1128,15 +1233,26 @@ def _run_multilane_execution(
         for path in contamination:
             log.warn(f'  contaminated: {path}')
 
-    promotion_info = {'promoted_files': [], 'promotion_commit': None, 'preferred_lane_id': None}
+    promotion_info: dict[str, object] = {
+        'promoted_files': [],
+        'promotion_commit': None,
+        'preferred_lane_id': None,
+        'merges': [],
+    }
     if not contamination:
-        preferred_lane_id = _preferred_writeback_lane(config)
-        promotion_info['preferred_lane_id'] = preferred_lane_id
-        promote_rows = _select_writeback_rows(results, preferred_lane_id=preferred_lane_id, limit=1)
-        if promote_rows:
+        # Preferred-lane id is still recorded for the report, but the
+        # merge agent now considers every successful lane per file.
+        promotion_info['preferred_lane_id'] = _preferred_writeback_lane(config)
+        groups = _group_writeback_candidates_by_file(results)
+        if groups:
             promotion_info.update(
-                _promote_writeback_rows(
-                    project_path=project_path, rows=promote_rows, iteration=iteration,
+                _merge_and_promote_writeback(
+                    project_path=project_path,
+                    state_dir=state_dir,
+                    groups=groups,
+                    iteration=iteration,
+                    model=model,
+                    verbose_logs=verbose_logs,
                 )
             )
 
@@ -1156,6 +1272,13 @@ def _run_multilane_execution(
         lines.extend(['', '## Promoted to main', *[f'- {path}' for path in promotion_info['promoted_files']]])
         if promotion_info.get('promotion_commit'):
             lines.append(f"- commit: {promotion_info['promotion_commit']}")
+    merges = promotion_info.get('merges') or []
+    if merges:
+        lines.extend(['', '## Per-file merges'])
+        for entry in merges:
+            shape = 'merged' if entry.get('merged') else f"copied from lane={entry.get('chosen_lane')}"
+            lanes = ', '.join(entry.get('lanes') or [])
+            lines.append(f"- {entry['file']}: {shape} (lanes: {lanes})")
     if restored_main_paths:
         lines.extend([
             '', '## Escaped main-checkout edits reverted to HEAD',
