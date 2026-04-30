@@ -1,6 +1,19 @@
-"""Initialize a new Archon project."""
+"""Initialize a new Archon project.
+
+This command does all deterministic setup in Python (lake, git, mathlib,
+blueprint, workspace skeletons) and *then* invokes Claude Code for the
+semantic pass only: reorganize loose reference files, fill in README.md
+and references/summary.md prose, and propose initial objectives.
+
+This split matters: anything that can fail deterministically should fail
+the same way every time and be cheap to re-run. Claude should only be
+spending tokens on decisions that actually need judgment.
+"""
+
+from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import textwrap
@@ -10,7 +23,20 @@ from pathlib import Path
 import typer
 
 from archon import log
-
+from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.commands.tooling import protect
+from archon.commands.tooling.blueprint import Blueprint
+from archon.commands.tooling.git import Git
+from archon.commands.tooling.inner_git import InnerGit
+from archon.commands.tooling.lake import Lake
+from archon.commands.tooling.project import (
+    BootstrapOptions,
+    BootstrapReport,
+    ProjectBootstrap,
+    ProjectLayout,
+    WorkspaceTemplates,
+)
+from archon.commands.tooling.version import ProjectVersion, warn_if_mismatch
 
 # ── helpers ───────────────────────────────────────────────────────────
 
@@ -30,8 +56,33 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
+def _fail_permission(path: Path, err: Exception | None) -> None:
+    """Stop init with a clear message when the project dir isn't writable."""
+    log.error(f"Cannot write to project directory: {path}")
+    if err is not None:
+        log.step(f"  {err}")
+    try:
+        stat = path.stat() if path.exists() else path.parent.stat()
+        try:
+            import pwd
+            owner = pwd.getpwuid(stat.st_uid).pw_name
+        except Exception:
+            owner = str(stat.st_uid)
+        log.step(f"  Owner: {owner}   Mode: {oct(stat.st_mode & 0o777)}")
+    except Exception:
+        pass
+    import getpass
+    user = getpass.getuser()
+    log.step("This usually means the directory was created by a different user")
+    log.step("(for example, cloned with sudo) or has restrictive permissions.")
+    log.step("")
+    log.step("Fix it with one of the following, then re-run 'archon init':")
+    log.step(f"  sudo chown -R {user}:{user} {path}")
+    log.step(f"  chmod u+w {path}")
+    raise typer.Exit(1)
+
+
 def _parse_stage(progress_md: Path) -> str:
-    """Extract the current stage from PROGRESS.md."""
     if not progress_md.exists():
         return "init"
     lines = progress_md.read_text().splitlines()
@@ -43,7 +94,6 @@ def _parse_stage(progress_md: Path) -> str:
 
 
 def _data_path(sub_path: str = "") -> Path:
-    """Resolve a path inside the bundled archon/.archon-src/."""
     root = resources.files("archon").joinpath(".archon-src")
     if sub_path:
         return Path(str(root.joinpath(sub_path)))
@@ -51,8 +101,9 @@ def _data_path(sub_path: str = "") -> Path:
 
 
 def _copy_file(src: Path, dst: Path, overwrite: bool = False) -> None:
-    """Copy a single file, skipping if dst exists (unless overwrite)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and overwrite:
+        log.warn(f"Overwriting existing file: {dst.name}")
     if overwrite or not dst.exists():
         shutil.copy2(src, dst)
 
@@ -75,27 +126,10 @@ def _find_global_lean4_plugins() -> list[str]:
     ]
 
 
-def _update_gitignore(project_path: Path, entry: str) -> None:
-    """Add entry to .gitignore if this is a git repo."""
-    if not (project_path / ".git").is_dir():
-        return
-    gitignore = project_path / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text(f"{entry}\n", encoding="utf-8")
-        log.success(f"Created .gitignore with {entry}")
-        return
-    lines = gitignore.read_text(encoding="utf-8").splitlines()
-    if entry not in [line.strip() for line in lines]:
-        with gitignore.open("a", encoding="utf-8") as f:
-            f.write(f"\n# Archon state directory\n{entry}\n")
-        log.success(f"Added {entry} to .gitignore")
-
-
 # ── re-init detection ─────────────────────────────────────────────────
 
 
 def _detect_existing_archon(state_dir: Path) -> dict:
-    """Detect whether the project has already been initialized (by any Archon version)."""
     info = {
         "exists": state_dir.is_dir(),
         "has_progress": False,
@@ -106,7 +140,6 @@ def _detect_existing_archon(state_dir: Path) -> dict:
     }
     if not info["exists"]:
         return info
-
     progress = state_dir / "PROGRESS.md"
     info["has_progress"] = progress.exists()
     if info["has_progress"]:
@@ -121,12 +154,10 @@ def _detect_existing_archon(state_dir: Path) -> dict:
             info["version"] = "legacy-symlink"
         elif md_files:
             info["version"] = "current-copy"
-
     return info
 
 
 def _prompt_reinit_mode(info: dict) -> str:
-    """Ask the user how to handle an already-initialized project."""
     log.warn("This project has already been initialized with Archon.")
     log.key_value({
         "Detected layout": info["version"],
@@ -144,8 +175,8 @@ def _prompt_reinit_mode(info: dict) -> str:
     typer.echo("")
     typer.echo("How would you like to proceed?")
     typer.echo("  [k] keep       — do nothing, use the existing setup as-is")
-    typer.echo("  [m] merge      — compare each file and let Claude help you reconcile differences (recommended)")
-    typer.echo("  [o] overwrite  — replace all Archon files with the current bundled versions (your local edits will be lost)")
+    typer.echo("  [m] merge      — compare each file and let Claude help reconcile (recommended)")
+    typer.echo("  [o] overwrite  — replace all Archon files with the bundled versions")
     typer.echo("  [a] abort      — cancel")
     typer.echo("")
 
@@ -162,11 +193,10 @@ def _prompt_reinit_mode(info: dict) -> str:
             return "abort"
 
 
-# ── merge helpers ─────────────────────────────────────────────────────
+# ── merge helpers (unchanged in spirit from previous version) ─────────
 
 
 def _stage_bundled_prompts(state_dir: Path) -> Path:
-    """Copy bundled prompts to a staging dir so Claude can diff them against existing local copies."""
     staging = state_dir / ".archon-incoming"
     if staging.exists():
         shutil.rmtree(staging)
@@ -185,15 +215,14 @@ def _stage_bundled_prompts(state_dir: Path) -> Path:
             src = template_dir / name
             if src.exists():
                 shutil.copy2(src, staging / name)
-
     return staging
 
 
-def _merge_prompts_with_claude(project_path: Path, state_dir: Path, staging: Path) -> None:
-    """Launch Claude Code in a focused merge session."""
+def _merge_prompts_with_claude(
+    project_path: Path, state_dir: Path, staging: Path, *, model: str = DEFAULT_MODEL,
+) -> None:
     log.phase(0, "Reconciling local vs. bundled Archon files")
     log.step("Launching Claude Code to walk you through the differences file by file.")
-    log.step("For each differing file you can choose: keep local, take new, or merge manually.")
 
     if not _has("claude"):
         log.warn("Claude Code is not installed — falling back to a text-only diff summary.")
@@ -209,39 +238,24 @@ def _merge_prompts_with_claude(project_path: Path, state_dir: Path, staging: Pat
           - Incoming (bundled, new version): {staging}
 
         For every file under {staging} (prompts/*.md and CLAUDE.md), compare against the
-        corresponding file under {state_dir}. For each file where they differ:
-
-          1. Show the user a concise summary of what changed (do NOT dump the whole file).
-          2. Ask the user to choose ONE of:
-               [L] keep local (do nothing)
-               [N] take new (copy incoming over local)
-               [M] merge manually (show a suggested merged version, then let them edit)
-          3. Apply the choice:
-               - For [N]: copy {staging}/<file> to {state_dir}/<file>
-               - For [M]: write a proposed merge to {state_dir}/<file>, then stop so the
-                 user can review it in their editor.
-               - For [L]: do nothing.
+        corresponding file under {state_dir}. For each file that differs, show a concise
+        summary of what changed, then ask the user to choose:
+          [L] keep local   [N] take new   [M] merge manually
 
         Rules:
           - Never edit .lean files.
-          - Never touch {state_dir}/PROGRESS.md, task_pending.md, task_done.md, or USER_HINTS.md.
+          - Never touch {state_dir}/PROGRESS.md, task_pending.md, task_done.md,
+            USER_HINTS.md, or REFACTOR_DIRECTIVE.md.
           - Only reconcile {state_dir}/prompts/*.md and {state_dir}/CLAUDE.md.
-          - When done, delete {staging} and report a one-line summary: "Merged N files, kept M files."
+          - When done, delete {staging} and report: "Merged N files, kept M files."
         """)
 
-    subprocess.run(
-        ["claude", "--dangerously-skip-permissions",
-         "--permission-mode", "bypassPermissions", prompt],
-        cwd=project_path,
-    )
-
-    # Clean up staging if Claude didn't
+    ClaudeAgent(model=model, role="init-merge").run_interactive(prompt, cwd=project_path)
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
 
 
 def _print_diff_summary(state_dir: Path, staging: Path) -> None:
-    """Fallback: just list which files differ without interactive merge."""
     log.step("Files that differ between your local setup and the bundled version:")
     differs = 0
     for incoming in staging.rglob("*"):
@@ -257,46 +271,37 @@ def _print_diff_summary(state_dir: Path, staging: Path) -> None:
             differs += 1
     if differs == 0:
         log.success("No differences — your local setup matches the bundled version.")
-    else:
-        log.step(
-            f"{differs} file(s) differ. Inspect {staging} manually, or install Claude Code "
-            "and re-run to merge interactively."
-        )
 
 
-# ── steps ─────────────────────────────────────────────────────────────
+# ── Archon state directory setup ──────────────────────────────────────
 
 
-def _step1_state_dir(
-    project_path: Path,
-    state_dir: Path,
-    fresh: bool,
-    refresh_claude_md: bool = True,
-) -> None:
-    """Create .archon/ state directory and populate with template files.
-
-    Args:
-      fresh: If False (re-init), preserve existing PROGRESS.md / task_*.md / USER_HINTS.md.
-      refresh_claude_md: If True, overwrite CLAUDE.md with the bundled template.
-        Set to False after a merge run so Claude's merged CLAUDE.md is preserved.
-    """
+def _step_state_dir(project_path: Path, state_dir: Path, fresh: bool) -> None:
     log.phase(1, "Setting up .archon/ state directory")
 
     for subdir in (
-        "task_results",
-        "logs",
-        "prompts",
-        "proof-journal/sessions",
-        "proof-journal/current_session",
+        "task_results", "logs", "prompts",
+        "proof-journal/sessions", "proof-journal/current_session",
     ):
-        (state_dir / subdir).mkdir(parents=True, exist_ok=True)
+        try:
+            (state_dir / subdir).mkdir(parents=True, exist_ok=True)
+        except PermissionError as e:
+            _fail_permission(state_dir / subdir, e)
     log.step("Created directory tree")
 
     template_dir = _data_path("archon-template")
     copied = 0
     preserved = 0
-    # On re-init, never overwrite user state — only add missing ones.
-    for name in ("PROGRESS.md", "USER_HINTS.md", "task_pending.md", "task_done.md"):
+
+    user_state_files = (
+        "PROGRESS.md",
+        "STRATEGY.md",
+        "USER_HINTS.md",
+        "task_pending.md",
+        "task_done.md",
+        "REFACTOR_DIRECTIVE.md",
+    )
+    for name in user_state_files:
         src = template_dir / name
         dst = state_dir / name
         if not src.exists():
@@ -309,51 +314,19 @@ def _step1_state_dir(
         copied += 1
 
     claude_src = template_dir / "CLAUDE.md"
-    claude_dst = state_dir / "CLAUDE.md"
-    if refresh_claude_md:
-        if claude_dst.exists() and not fresh:
-            log.warn("CLAUDE.md will be overwritten with the latest bundled version "
-                     "to ensure agent roles are up to date.")
-        _copy_file(claude_src, claude_dst, overwrite=True)
+    if claude_src.exists():
+        if (state_dir / "CLAUDE.md").exists() and not fresh:
+            log.warn("CLAUDE.md will be overwritten with the latest bundled version.")
+        _copy_file(claude_src, state_dir / "CLAUDE.md", overwrite=True)
     else:
-        if not claude_dst.exists() and claude_src.exists():
-            _copy_file(claude_src, claude_dst)
-        log.step("Preserved merged CLAUDE.md (skipping overwrite)")
+        log.warn("Template not found: CLAUDE.md")
 
-    log.step(f"Copied {copied} new template file(s), preserved {preserved} existing")
-
-    _update_gitignore(project_path, ".archon/")
+    log.step(f"Copied {copied} new template file(s)" +
+             (f", preserved {preserved} existing" if not fresh else ""))
     log.success("State directory ready")
 
 
-def _step1b_inner_git(project_path: Path) -> None:
-    """Initialize the inner git repo at .archon/git-dir/ if missing.
-
-    Idempotent — does nothing if already initialized. Safe to call on
-    every init (fresh or re-init) since it only creates the bare repo
-    and default excludes; commits happen later, inside the loop.
-    """
-    from archon.commands.tooling.inner_git import InnerGit
-
-    log.phase(1, "Setting up inner git (.archon/git-dir/)")
-    inner = InnerGit(project_path)
-    if inner.init():
-        log.step("Initialized inner git repo")
-    else:
-        inner.ensure_excludes()
-        log.step("Inner git already initialized")
-    log.success("Inner git ready")
-
-
-def _step2_copy_prompts(state_dir: Path, fresh: bool) -> None:
-    """Copy prompt files into .archon/prompts/.
-
-    Args:
-      fresh: If True (first init or 'overwrite' mode), replace existing prompts
-        with the bundled versions. If False (e.g. after a merge), preserve
-        existing local prompts — any reconciliation was already handled by
-        the merge step.
-    """
+def _step_copy_prompts(state_dir: Path, fresh: bool) -> None:
     log.phase(2, "Copying prompts")
 
     prompts_src = _data_path("prompts")
@@ -366,42 +339,93 @@ def _step2_copy_prompts(state_dir: Path, fresh: bool) -> None:
 
     new = 0
     preserved = 0
-    overwritten = 0
     for f in sorted(prompts_src.glob("*.md")):
         dst = prompts_dst / f.name
+        if fresh:
+            _copy_file(f, dst, overwrite=True)
+            new += 1
+            continue
         if dst.exists():
-            # If it's a stale symlink from the old layout, replace it with a real file
-            # regardless of fresh mode — broken symlinks must always be fixed.
             if dst.is_symlink():
                 dst.unlink()
                 _copy_file(f, dst, overwrite=True)
                 new += 1
-                continue
-            if fresh:
-                # Overwrite mode: replace existing prompts with the bundled version.
-                _copy_file(f, dst, overwrite=True)
-                overwritten += 1
             else:
-                # Re-init without overwrite: keep the user's local copy.
                 preserved += 1
             continue
         _copy_file(f, dst)
         new += 1
 
     if fresh:
-        if overwritten:
-            log.success(f"Copied {new} new prompt(s), overwrote {overwritten} existing "
-                        "with bundled versions")
-        else:
-            log.success(f"Copied {new} prompt(s) to .archon/prompts/")
+        log.success(f"Copied {new} prompt(s)")
     else:
         log.success(f"Added {new} new prompt(s), preserved {preserved} existing")
-    log.step("To customize: edit files directly in .archon/prompts/")
 
 
-def _step3_lean_lsp_mcp(project_path: Path, fresh: bool) -> None:
-    """Install lean-lsp MCP server at project scope."""
-    log.phase(3, "Installing lean-lsp MCP server (project scope)")
+# ── deterministic bootstrap step ──────────────────────────────────────
+
+
+def _step_bootstrap(project_path: Path) -> BootstrapReport:
+    """Run the deterministic lake/git/mathlib/blueprint bootstrap.
+
+    This replaces what used to be Claude's job in init.md steps 1–2.
+    Safe to call on an already-initialized project — every sub-step is
+    idempotent, and the bootstrap only commits if it actually did work.
+    """
+    log.phase(3, "Bootstrapping Lean project (lake, git, mathlib, blueprint)")
+
+    # Basic capability checks — warn but don't block if blueprint/lake are missing.
+    if not Lake.available():
+        log.error("`lake` is not on PATH. Run: archon setup")
+        raise typer.Exit(1)
+    if not Git.available():
+        log.error("`git` is not on PATH. Run: archon setup")
+        raise typer.Exit(1)
+    if not Blueprint.available():
+        log.warn("`leanblueprint` is not on PATH — will skip blueprint scaffold (run: archon setup)")
+
+    options = BootstrapOptions(
+        init_lake=True,
+        add_mathlib=True,
+        init_blueprint=Blueprint.available(),
+        fetch_mathlib_cache=True,
+        do_initial_build=True,
+        project_title=project_path.name,
+    )
+
+    bootstrap = ProjectBootstrap(project_path, options)
+    report = bootstrap.run()
+
+    for a in report.actions:
+        log.step(a)
+    for w in report.warnings:
+        log.warn(w)
+    for s in report.skipped:
+        log.info(f"Skipped: {s}")
+
+    # Write README / references summary skeletons.
+    templates = WorkspaceTemplates(project_path)
+    if templates.ensure_readme():
+        log.step("Wrote README.md skeleton")
+    if templates.ensure_references_summary():
+        log.step("Wrote references/summary.md skeleton")
+
+    if report.stage_report:
+        sr = report.stage_report
+        log.info(
+            f"Stage detection: {sr.stage} "
+            f"({sr.lean_file_count} Lean files, {sr.decl_count} declarations, {sr.sorry_count} sorries)"
+        )
+
+    log.success("Bootstrap complete")
+    return report
+
+
+# ── Claude / MCP / plugin registration ────────────────────────────────
+
+
+def _step_lean_lsp_mcp(project_path: Path) -> None:
+    log.phase(4, "Installing lean-lsp MCP server (project scope)")
 
     lean_lsp_dir = _data_path("tools/lean-lsp-mcp")
 
@@ -409,12 +433,11 @@ def _step3_lean_lsp_mcp(project_path: Path, fresh: bool) -> None:
     already_registered = "archon-lean-lsp" in (existing.stdout or "")
 
     if already_registered:
-        log.step("Found existing archon-lean-lsp. Removing old registration to update paths...")
+        log.step("Found existing archon-lean-lsp. Removing to refresh paths...")
         _run(["claude", "mcp", "remove", "archon-lean-lsp", "-s", "project"], cwd=project_path)
 
     for name in _find_global_mcp_lean_lsp():
         log.warn(f"Found conflicting MCP server '{name}' in global config")
-        log.step("Disabling for this project — Archon's version will be used instead")
         _run(["claude", "mcp", "remove", name, "-s", "project"], cwd=project_path)
         log.success(f"Disabled '{name}' for this project")
 
@@ -423,20 +446,17 @@ def _step3_lean_lsp_mcp(project_path: Path, fresh: bool) -> None:
          "uv", "run", "--directory", str(lean_lsp_dir), "lean-lsp-mcp"],
         cwd=project_path,
     )
-
     output = r.stdout + r.stderr
-
     if "already exists" in output.lower():
         log.success("archon-lean-lsp already configured")
     elif r.returncode == 0:
-        log.success("archon-lean-lsp added with updated paths (project scope)")
+        log.success("archon-lean-lsp added")
     else:
         log.error(f"Failed to add archon-lean-lsp: {output.strip()}")
 
 
-def _step4_skills(project_path: Path, fresh: bool) -> None:
-    """Install Archon skills via plugin marketplace."""
-    log.phase(4, "Installing Archon skills")
+def _step_skills(project_path: Path) -> None:
+    log.phase(5, "Installing Archon skills")
 
     home = Path.home()
     skills_dir = _data_path("skills")
@@ -444,14 +464,11 @@ def _step4_skills(project_path: Path, fresh: bool) -> None:
 
     if not plugin_json_path.exists():
         log.error("Archon lean4 skills not found in package data")
-        log.step(f"Searched at {plugin_json_path}")
-        log.step("The installation may be incomplete — try reinstalling")
         raise typer.Exit(1)
 
     (project_path / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
     (project_path / ".claude" / "rules").mkdir(parents=True, exist_ok=True)
 
-    # 4a: Register archon-local marketplace
     log.step("Registering archon-local marketplace")
     market_needs_update = True
     r = _run(["claude", "plugin", "marketplace", "list"])
@@ -460,11 +477,10 @@ def _step4_skills(project_path: Path, fresh: bool) -> None:
         data = _read_json(known_path)
         current = data.get("archon-local", {}).get("source", {}).get("path", "")
         if current == str(skills_dir):
-            log.success("archon-local marketplace already registered at the current path")
+            log.success("archon-local marketplace already up to date")
             market_needs_update = False
         else:
             log.warn(f"archon-local points to a stale path: {current}")
-            log.step(f"Updating to: {skills_dir}")
             _run(["claude", "plugin", "marketplace", "remove", "archon-local"])
 
     if market_needs_update:
@@ -476,18 +492,13 @@ def _step4_skills(project_path: Path, fresh: bool) -> None:
             log.error(f"Failed to register marketplace: {output.strip()}")
             raise typer.Exit(1)
 
-    # 4b: Install lean4 plugin at project scope
     log.step("Installing lean4 plugin (project scope)")
-    plugin_data = _read_json(plugin_json_path)
-    plugin_version = plugin_data.get("version", "4.4.0")
-
     installed_json = home / ".claude" / "plugins" / "installed_plugins.json"
     installed_data = _read_json(installed_json)
     installed_here = any(
         entry.get("projectPath") == str(project_path)
         for entry in installed_data.get("plugins", {}).get("lean4@archon-local", [])
     )
-
     if not installed_here:
         r = _run(
             ["claude", "plugin", "install", "lean4@archon-local", "--scope", "project"],
@@ -495,15 +506,13 @@ def _step4_skills(project_path: Path, fresh: bool) -> None:
         )
         output = r.stdout + r.stderr
         if "success" in output.lower() or r.returncode == 0:
-            log.success("lean4@archon-local installed (project scope)")
+            log.success("lean4@archon-local installed")
         else:
             log.error(f"Failed to install lean4@archon-local: {output.strip()}")
             raise typer.Exit(1)
     else:
         log.success("lean4@archon-local already installed for this project")
 
-    # 4c: Copy informal agent tool into project
-    log.step("Copying informal agent tool")
     tools_dir = project_path / ".claude" / "tools"
     tools_dir.mkdir(parents=True, exist_ok=True)
     agent_src = _data_path("tools/informal_agent.py")
@@ -511,23 +520,15 @@ def _step4_skills(project_path: Path, fresh: bool) -> None:
     if agent_src.exists():
         _copy_file(agent_src, agent_dst, overwrite=True)
         log.success("Informal agent copied to .claude/tools/")
-    else:
-        log.warn("Informal agent not found in package data — skipping")
 
 
-def _step5_disable_conflicting_plugins(project_path: Path) -> None:
-    """Detect and disable conflicting global lean4-skills for this project."""
-    log.phase(5, "Checking for conflicting global lean4-skills")
-
+def _step_disable_conflicting_plugins(project_path: Path) -> None:
+    log.phase(6, "Checking for conflicting global lean4-skills")
     conflicting = _find_global_lean4_plugins()
     if not conflicting:
         log.success("No conflicting global lean4-skills detected")
         return
-
-    log.warn(f"Found {len(conflicting)} conflicting plugin(s) in global config:")
-    for name in conflicting:
-        log.step(f"  {name}")
-
+    log.warn(f"Found {len(conflicting)} conflicting plugin(s) in global config")
     for name in conflicting:
         r = _run(
             ["claude", "plugin", "disable", name, "--scope", "project"],
@@ -538,11 +539,24 @@ def _step5_disable_conflicting_plugins(project_path: Path) -> None:
         else:
             log.warn(f"Could not auto-disable '{name}'")
 
-    log.step("Your global lean4-skills is untouched in all other projects")
+
+# ── Claude semantic pass ──────────────────────────────────────────────
 
 
-def _step6_interactive_claude(project_path: Path, state_dir: Path, fresh: bool) -> None:
-    """Launch interactive Claude Code session if still in init stage."""
+def _step_claude_semantic_pass(
+    project_path: Path,
+    state_dir: Path,
+    report: BootstrapReport,
+    *,
+    model: str = DEFAULT_MODEL,
+) -> None:
+    """Launch Claude for the narrow semantic tasks that remain after bootstrap.
+
+    Claude's job is: verify the bootstrap, reorganize loose reference files,
+    fill in the README / summary.md prose, walk the user through the initial
+    archon-protected.yaml, and propose initial objectives. Everything
+    deterministic has already happened.
+    """
     stage = _parse_stage(state_dir / "PROGRESS.md")
     project_name = project_path.name
 
@@ -551,8 +565,32 @@ def _step6_interactive_claude(project_path: Path, state_dir: Path, fresh: bool) 
         log.step(f"Next: archon loop {project_path}")
         return
 
+    # Re-inspect to pick up what the bootstrap just did.
+    layout = ProjectLayout.inspect(project_path)
+
     log.header(f"Initializing project: {project_name}")
-    log.step("Claude will check the project state and guide you through setup")
+    log.step("Handing off to Claude for the semantic pass.")
+
+    # Structured report for Claude: exactly what the bootstrap did/didn't do,
+    # so Claude doesn't re-check everything itself.
+    bootstrap_summary = {
+        "actions": report.actions,
+        "warnings": report.warnings,
+        "skipped": report.skipped,
+        "layout": {
+            "has_lakefile": layout.has_lakefile,
+            "lakefile_kind": layout.lakefile_kind,
+            "has_mathlib": layout.has_mathlib,
+            "has_blueprint": layout.has_blueprint,
+            "has_references_dir": layout.has_references_dir,
+            "has_readme": layout.has_readme,
+            "lean_file_count": len(layout.lean_files),
+            "loose_references": [str(p.relative_to(project_path)) for p in layout.loose_references],
+        },
+        "stage": report.stage_report.stage if report.stage_report else "autoformalize",
+        "sorry_count": report.stage_report.sorry_count if report.stage_report else 0,
+        "decl_count": report.stage_report.decl_count if report.stage_report else 0,
+    }
 
     prompt = textwrap.dedent(f"""\
         You are in the init stage for project '{project_name}' at {project_path}. \
@@ -566,13 +604,15 @@ def _step6_interactive_claude(project_path: Path, state_dir: Path, fresh: bool) 
         for the user's reply.
 
         When the user has confirmed and you have finished the init steps, run \
-        /archon-lean4:doctor to verify the full setup before exiting.""")
+        /archon-lean4:doctor to verify the full setup before exiting.
 
-    subprocess.run(
-        ["claude", "--dangerously-skip-permissions", "--permission-mode",
-         "bypassPermissions", prompt],
-        cwd=project_path,
-    )
+        Remark: A bootstrap process has already run to install lake, mathlib, and \
+        other deterministic setup, including creating an empty \
+        {protect.PROTECTED_FILENAME} at the project root. Here is its report:
+        {json.dumps(bootstrap_summary, indent=2)}
+        """)
+
+    ClaudeAgent(model=model, role="init").run_interactive(prompt, cwd=project_path)
 
     new_stage = _parse_stage(state_dir / "PROGRESS.md")
     if new_stage == "init":
@@ -581,6 +621,99 @@ def _step6_interactive_claude(project_path: Path, state_dir: Path, fresh: bool) 
     else:
         log.success(f"Init complete — stage is now: {new_stage}")
         log.step(f"Next: archon loop {project_path}")
+
+
+# ── protected-declarations summary ────────────────────────────────────
+
+
+def _step_report_protected(project_path: Path) -> None:
+    """Log the contents of archon-protected.yaml and remind the user to edit it.
+
+    Always the last phase of init, regardless of whether this was a fresh
+    init or a merge-based re-init. The user should leave the CLI knowing
+    exactly which declarations agents will refuse to touch — or that the
+    list is empty and they should go fill it in.
+    """
+    log.phase(7, "Protected declarations")
+    ps = protect.load(project_path)
+
+    if not ps.entries:
+        log.info(
+            f"{protect.PROTECTED_FILENAME} is empty — no declarations are "
+            "currently protected from agent edits."
+        )
+        log.step(
+            f"List declarations you want Archon to treat as read-only in "
+            f"{protect.PROTECTED_FILENAME} at the project root. "
+            "Agents will refuse to modify their signatures."
+        )
+        return
+
+    total = ps.total_count()
+    log.info(f"{total} protected declaration(s) across {len(ps.entries)} file(s):")
+    shown = 0
+    done = False
+    for file, names in ps.entries.items():
+        if done:
+            break
+        log.step(f"  [bold]{file}[/bold]")
+        for n in names:
+            log.step(f"    - {n}")
+            shown += 1
+            if shown >= 20:
+                done = True
+                break
+    if total > shown:
+        log.step(f"  ... and {total - shown} more")
+    log.step(
+        f"Edit {protect.PROTECTED_FILENAME} to add or remove entries. "
+        "It is committed to git so the whole team shares it."
+    )
+
+
+# ── inner git + version stamp ─────────────────────────────────────────
+
+
+def _step_inner_git(project_path: Path) -> None:
+    """Initialize the inner `.archon/.git` repo and capture the current state.
+
+    Archon keeps its own versioning here — every agent phase commits. The
+    outer (mathematician's) git repo is untouched after init.
+    """
+    log.phase(8, "Inner git (.archon/.git)")
+
+    if not InnerGit.available():
+        log.warn("`git` not on PATH — skipping inner-git setup. Run: archon setup")
+        return
+
+    inner = InnerGit(project_path)
+    created = inner.init()
+    if created:
+        log.step("Initialized inner git at .archon/git-dir")
+    else:
+        log.step("Inner git already present at .archon/git-dir")
+
+    # First commit captures the state at init time so subsequent phase
+    # commits have a baseline to diff against.
+    made_initial = inner.ensure_initial_commit("archon[000/init]: initial state")
+    if made_initial:
+        log.success(f"Inner git first commit: {inner.head_sha() or '?'}")
+    else:
+        log.info(f"Inner git HEAD: {inner.head_sha() or '?'}")
+
+
+def _step_version_stamp(project_path: Path) -> None:
+    """Stamp the current CLI version into .archon/VERSION."""
+    log.phase(9, "Version stamp")
+    pv = ProjectVersion(project_path)
+    previous = pv.read()
+    written = pv.write()
+    if previous is None:
+        log.success(f"Stamped project version: {written}")
+    elif previous != written:
+        log.success(f"Updated project version: {previous} → {written}")
+    else:
+        log.step(f"Project version unchanged: {written}")
 
 
 # ── main command ──────────────────────────────────────────────────────
@@ -594,65 +727,70 @@ def init(
     ),
     force: bool = typer.Option(
         False, "--force",
-        help="Skip the re-init prompt and overwrite existing Archon files. "
-        "Use with care — this discards local prompt/CLAUDE.md edits.",
+        help="Skip the re-init prompt and overwrite existing Archon files.",
+    ),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "--model", "-M",
+        help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
+             "the interactive init pass.",
     ),
 ) -> None:
-    """
-    Initialize a new Archon project.
+    """Initialize a new Archon project.
 
-    Creates .archon/ inside the target project with state files, copied
-    prompts, skills, MCP server, and launches Claude for initial setup.
+    Runs the deterministic bootstrap (lake init, Mathlib, blueprint, workspace
+    skeletons) in Python, then hands off to Claude Code for the semantic pass
+    only: reorganizing reference files, writing README/summary.md prose, and
+    proposing initial objectives.
 
-    You can add context files (pdf, markdown, etc.) directly in the project
-    directory, and Claude will be able to read them during the init session.
-
-    If the project has already been initialized (by this or an older version
-    of Archon), you'll be offered a choice: keep the existing setup, merge
-    changes interactively, or overwrite.
-
-    [bold]Examples of use:[/bold]
-      [cyan]archon init .[/cyan]                          Initialize the current directory.
-      [cyan]archon init /path/to/lean-project[/cyan]      Initialize an existing external project.
+    [bold]Examples:[/bold]
+      [cyan]archon init .[/cyan]
+      [cyan]archon init /path/to/lean-project[/cyan]
     """
     log.header("archon init")
 
     if project_path is None:
         log.info("No project path specified")
-        log.step("Enter a name to create a new project,")
-        log.step("or Ctrl-C and re-run with: archon init /path/to/project")
+        log.step("Enter a name to create a new project, or Ctrl-C and re-run.")
         name = typer.prompt("  Project name")
         if not name:
             log.error("No project name entered")
             raise typer.Exit(1)
         resolved = Path.cwd() / name
-        resolved.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except PermissionError as e:
+            _fail_permission(resolved, e)
         log.success(f"Created project at {resolved}")
     else:
         resolved = Path(project_path).resolve()
         if not resolved.exists():
-            resolved.mkdir(parents=True, exist_ok=True)
+            try:
+                resolved.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                _fail_permission(resolved, e)
             log.success(f"Created directory {resolved}")
 
-    state_dir = resolved / ".archon"
+    # Fail fast if we can't write inside the project dir — otherwise the first
+    # attempt to create .archon/ bombs out mid-phase with a raw Python traceback.
+    if not os.access(resolved, os.W_OK):
+        _fail_permission(resolved, None)
 
+    state_dir = resolved / ".archon"
     log.key_value({
         "Project": str(resolved),
         "State dir": str(state_dir),
     })
 
+    warn_if_mismatch(resolved)
+
     if not _has("claude"):
-        log.error("Claude Code is not installed")
-        log.step("Run: archon setup")
+        log.error("Claude Code is not installed. Run: archon setup")
         raise typer.Exit(1)
 
     # ── Re-init detection ────────────────────────────────────────
     info = _detect_existing_archon(state_dir)
     fresh = True
-    # Track whether the merge step has already reconciled CLAUDE.md so step1
-    # does not clobber the merged result.
-    merged_claude_md = False
-
+    mode = "fresh"
     if info["exists"] and info["has_progress"]:
         if force:
             log.warn("--force passed: overwriting existing Archon setup")
@@ -666,37 +804,41 @@ def init(
 
         if mode == "keep":
             log.info("Keeping existing setup. Verifying MCP / plugin registration only.")
-            _step3_lean_lsp_mcp(resolved, fresh=False)
-            _step4_skills(resolved, fresh=False)
-            _step5_disable_conflicting_plugins(resolved)
+            _step_lean_lsp_mcp(resolved)
+            _step_skills(resolved)
+            _step_disable_conflicting_plugins(resolved)
+            _step_report_protected(resolved)
+            _step_inner_git(resolved)
+            _step_version_stamp(resolved)
             log.success("Verification complete.")
             return
 
         if mode == "merge":
             staging = _stage_bundled_prompts(state_dir)
-            _merge_prompts_with_claude(resolved, state_dir, staging)
+            _merge_prompts_with_claude(resolved, state_dir, staging, model=model)
             fresh = False
-            merged_claude_md = True  # Claude just handled CLAUDE.md; do not overwrite.
 
-        if mode == "overwrite":
-            fresh = True  # proceed through normal init, overwriting where applicable
+    # ── Deterministic setup ──────────────────────────────────────
+    _step_state_dir(resolved, state_dir, fresh=fresh)
+    _step_copy_prompts(state_dir, fresh=fresh)
+    report = _step_bootstrap(resolved)
 
-    _step1_state_dir(
-        resolved,
-        state_dir,
-        fresh=fresh,
-        refresh_claude_md=not merged_claude_md,
-    )
-    _step1b_inner_git(resolved)
-    _step2_copy_prompts(state_dir, fresh=fresh)
-    _step3_lean_lsp_mcp(resolved, fresh=fresh)
-    _step4_skills(resolved, fresh=fresh)
-    _step5_disable_conflicting_plugins(resolved)
+    _step_lean_lsp_mcp(resolved)
+    _step_skills(resolved)
+    _step_disable_conflicting_plugins(resolved)
 
-    # If this was a merge run, PROGRESS.md already exists and the user has
-    # a valid setup — skip the interactive init session.
+    # ── Semantic pass (Claude) ───────────────────────────────────
     if fresh:
-        _step6_interactive_claude(resolved, state_dir, fresh=fresh)
+        _step_claude_semantic_pass(resolved, state_dir, report, model=model)
     else:
         log.success("Merge-based re-init complete.")
         log.step(f"Next: archon loop {resolved}")
+
+    # Always show the protected-declarations summary.
+    _step_report_protected(resolved)
+
+    # Inner-git setup + version stamp are last so the initial inner-git
+    # commit captures the full post-init state (including whatever Claude
+    # wrote during the semantic pass).
+    _step_inner_git(resolved)
+    _step_version_stamp(resolved)

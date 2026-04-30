@@ -21,11 +21,10 @@ class _BannerGroup(typer.core.TyperGroup):
         log.banner(__version__)
         super().format_help(ctx, formatter)
 
-        # ── Examples panel ────────────────────────────────────
+        # ── Remark panel ──────────────────────────────────────
         
         console = Console()
 
-        # ── Remark panel ──────────────────────────────────────
         remark = (
             "If you don't know where to start, the typical workflow is:\n\n"
             "  [bold cyan]1.[/bold cyan] archon setup       → install system dependencies\n"
@@ -85,9 +84,9 @@ from archon.commands.setup import setup  # noqa: E402
 from archon.commands.prove import prove  # noqa: E402
 from archon.commands.update import update  # noqa: E402
 from archon.commands.discuss import discuss  # noqa: E402
-from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.refactor import app as refactor_app  # noqa: E402
 from archon.commands.branch import branch, inner_log  # noqa: E402
+from archon.commands.version import version as version_cmd  # noqa: E402
 
 app.command()(init)
 app.command()(loop)
@@ -97,10 +96,10 @@ app.command()(prove)
 app.command()(setup)
 app.command()(update)
 app.command()(discuss)
-app.command("version")(version_cmd)
-app.add_typer(refactor_app, name="refactor")
 app.command("branch")(branch)
 app.command("log")(inner_log)
+app.command("version")(version_cmd)
+app.add_typer(refactor_app, name="refactor")
 
 if __name__ == "__main__":
     app()

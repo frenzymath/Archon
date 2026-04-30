@@ -212,19 +212,41 @@ def cost_summary(directory: Path) -> CostData | None:
 # ── task results ──────────────────────────────────────────────────────
 
 
-def archive_task_results(state_dir: Path, log_dir: Path) -> None:
-    """Move existing task_results/*.md to a timestamped archive."""
+def archive_task_results(state_dir: Path, dest_dir: Path) -> None:
+    """Move existing task_results/*.md to an archive directory.
+
+    If `dest_dir` is an iteration directory (name matches `iter-*`), archives
+    land in `{dest_dir}/task_results-archive/` (single subdir per iteration).
+    Otherwise — for backwards compatibility with code that passes `logs/` —
+    archives land in `{dest_dir}/task_results-TIMESTAMP/`.
+    """
     results_dir = state_dir / "task_results"
     if not results_dir.exists():
         return
     md_files = list(results_dir.glob("*.md"))
     if not md_files:
         return
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    archive = log_dir / f"task_results-{stamp}"
+
+    if dest_dir.name.startswith("iter-"):
+        # Co-locate archive with iteration data.
+        archive = dest_dir / "task_results-archive"
+    else:
+        # Legacy path: flat at logs/ with timestamp suffix.
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        archive = dest_dir / f"task_results-{stamp}"
+
     archive.mkdir(parents=True, exist_ok=True)
+
+    # When archiving into an iteration directory, a later archive call within
+    # the same iteration would clobber earlier files. Guard by renaming if a
+    # file with the same name already exists.
     for f in md_files:
-        f.rename(archive / f.name)
+        target = archive / f.name
+        if target.exists():
+            # Rare case: two archiving events in the same iteration.
+            stamp = datetime.now().strftime("%H%M%S")
+            target = archive / f"{f.stem}.{stamp}{f.suffix}"
+        f.rename(target)
 
 
 # ── proof journal sessions ───────────────────────────────────────────

@@ -31,6 +31,28 @@ export interface Task {
   proofSketch?: string;
 }
 
+/** Per-phase status as stored in meta.json */
+export interface PhaseStatus {
+  status: string;
+  durationSecs?: number;
+}
+
+/** Full iteration meta.json shape */
+export interface IterationMeta {
+  iteration?: number;
+  stage?: string;
+  mode?: string;
+  startedAt?: string;
+  completedAt?: string;
+  wallTimeSecs?: number;
+  plan?: PhaseStatus;
+  refactor?: PhaseStatus;
+  prover?: PhaseStatus;
+  review?: PhaseStatus;
+  provers?: Record<string, { file: string; status: string }>;
+  sorry_count?: number;
+}
+
 export interface SessionSummary {
   cost: number;
   duration: number;

@@ -1,19 +1,76 @@
-"""Claude Code runner with structured JSONL logging.
+"""Prompt builders and the legacy ``run_claude`` entry point.
 
-Wraps `claude -p` with stream-json parsing, cost tracking, and log output.
+The actual ``claude`` invocation now lives in :mod:`archon.agent`. This
+module keeps the per-phase prompt builders (`build_plan_prompt`,
+`build_prover_prompt`, …) and a thin ``run_claude`` shim that delegates
+to a ``ClaudeAgent`` so existing call sites keep working without a
+big-bang rename. New code should construct a ``ClaudeAgent`` directly
+to take advantage of role tagging and explicit model selection.
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
-import os
 
-from archon import log
+from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.commands.tooling.blueprint import lean_file_to_chapter_slug
+
+
+# ── context injection helpers ─────────────────────────────────────────
+
+
+def _references_summary(state_dir: Path | None, project_path: Path | None = None, max_chars: int = 3000) -> str:
+    """Read references/summary.md and return a bounded chunk for prompts.
+
+    Empty string if the file doesn't exist or is just the template.
+    """
+    if project_path is None and state_dir is not None:
+        # state_dir is <project>/.archon — its parent is the project.
+        project_path = state_dir.parent
+
+    if project_path is None:
+        return ""
+    summary = project_path / "references" / "summary.md"
+    if not summary.exists():
+        return ""
+    try:
+        content = summary.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+    # Strip the template placeholder; if only placeholder text remains, skip.
+    non_meta = [
+        l for l in content.splitlines()
+        if l.strip() and not l.strip().startswith("<!--")
+    ]
+    if len(non_meta) <= 3:  # only heading + table header + separator row
+        return ""
+
+    if len(content) > max_chars:
+        content = content[:max_chars] + "\n\n... (truncated)"
+    return content
+
+
+def _blueprint_chapter_hint(
+    project_path: Path,
+    rel_lean_path: str,
+) -> str:
+    """Build the 'your blueprint chapter is at X; create it if missing' hint.
+
+    Empty string if no blueprint exists.
+    """
+    if not (project_path / "blueprint" / "src").is_dir():
+        return ""
+    slug = lean_file_to_chapter_slug(rel_lean_path)
+    rel_chapter = f"blueprint/src/chapters/{slug}.tex"
+    return dedent(f"""\
+        Blueprint chapter for your file: {rel_chapter}
+        - Read it BEFORE writing any Lean code — it contains the informal proof sketch
+          written by the plan agent.
+        - After you formalize a declaration, mark its blueprint environment with \\leanok.
+        - If the chapter file does not yet exist, create it with a minimal \\chapter block
+          and note in your task_results that the plan agent should flesh it out.""")
 
 
 # ── prompt building ───────────────────────────────────────────────────
@@ -22,13 +79,46 @@ from archon import log
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
 ) -> str:
+    refs = _references_summary(state_dir, project_path)
+    refs_block = ""
+    if refs:
+        refs_block = dedent(f"""
+
+            ## References available for this project
+
+            The file {project_path / 'references' / 'summary.md'} lists the informal sources backing this project.
+            Re-read the relevant source (from the `references/` directory) before assigning
+            or re-scoping any objective whose target theorem is drawn from it.
+
+            ```markdown
+            {refs}
+            ```""")
+
+    blueprint_block = ""
+    if (project_path / "blueprint" / "src").is_dir():
+        blueprint_block = dedent(f"""
+
+            ## Blueprint
+
+            This project has a blueprint at {project_path / 'blueprint'}. Informal proof
+            sketches live in {project_path / 'blueprint' / 'src' / 'chapters'}/<slug>.tex,
+            one file per Lean source file. The slug mapping is:
+              Lean file  Algebra/WLocal.lean  →  chapter  Algebra_WLocal.tex
+
+            When you set objectives, write or update the corresponding chapter .tex file
+            with the informal proof sketch BEFORE assigning the prover. The prover reads
+            its chapter file and uses it as the source of truth for mathematical content.
+
+            This REPLACES the older informal/*.md convention. Do not write new informal/*.md
+            files — write to chapters/*.tex instead.""")
+
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""")
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block
 
 
 def build_prover_prompt(
@@ -44,7 +134,22 @@ def build_prover_prompt(
 
 def build_parallel_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
+    assigned_rel_lean_path: str | None = None,
 ) -> str:
+    """Build the prover prompt, optionally tailored to a specific assigned file.
+
+    When `assigned_rel_lean_path` is provided, the prompt includes a pointer
+    to the blueprint chapter for that file. The calling code still appends
+    the `Your assigned file: <rel>` line itself (for backwards compatibility
+    with existing loop.py code), but now the blueprint hint is ALSO in the
+    base prompt so the prover can't miss it.
+    """
+    bp_hint = ""
+    if assigned_rel_lean_path:
+        hint = _blueprint_chapter_hint(project_path, assigned_rel_lean_path)
+        if hint:
+            bp_hint = "\n\n" + hint
+
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Project directory: {project_path}
@@ -57,7 +162,7 @@ def build_parallel_prover_prompt(
         - Write your results to {state_dir}/task_results/<your_file>.md when done.
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
-        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""")
+        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") + bp_hint
 
 
 def build_refactor_prompt(
@@ -98,116 +203,7 @@ def build_review_prompt(
           {state_dir}/PROJECT_STATUS.md""")
 
 
-# ── JSONL log stream parser (embedded Python script) ──────────────────
-
-# This is the Python script that gets piped Claude's stream-json output.
-# It parses events, writes structured JSONL, and prints cost summaries.
-_STREAM_PARSER = r'''
-import sys, json, datetime
-
-VERBOSE = '{verbose}' == 'True'
-RAW = open('{raw_log}', 'a') if VERBOSE else None
-JSONL = open('{jsonl}', 'a')
-
-def emit(event_type, **fields):
-    row = {{'ts': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'), 'event': event_type, **fields}}
-    JSONL.write(json.dumps(row) + '\n')
-    JSONL.flush()
-
-def terminal(s):
-    print(s, flush=True)
-
-last_result = ''
-
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    if RAW:
-        RAW.write(line + '\n')
-        RAW.flush()
-
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-
-    t = obj.get('type', '')
-
-    if t == 'assistant' and 'message' in obj:
-        msg = obj['message']
-        if not isinstance(msg, dict):
-            continue
-        for block in msg.get('content', []):
-            bt = block.get('type', '')
-            if bt == 'thinking':
-                thinking = block.get('thinking', '').strip()
-                if thinking:
-                    emit('thinking', content=thinking)
-            elif bt == 'text':
-                text = block.get('text', '').strip()
-                if text:
-                    emit('text', content=text)
-                    last_result = text
-            elif bt == 'tool_use':
-                name = block.get('name', '?')
-                inp = block.get('input', {{}})
-                emit('tool_call', tool=name, input=inp)
-
-    elif t == 'user' and 'message' in obj:
-        msg = obj['message']
-        if not isinstance(msg, dict):
-            continue
-        for block in msg.get('content', []):
-            if block.get('type') == 'tool_result':
-                content = block.get('content', '')
-                if isinstance(content, str):
-                    emit('tool_result', content=content)
-                elif isinstance(content, list):
-                    texts = [p.get('text','') for p in content if isinstance(p,dict) and p.get('type')=='text']
-                    emit('tool_result', content='\n'.join(texts))
-
-    elif t == 'result':
-        cost = obj.get('total_cost_usd', 0) or obj.get('cost_usd', 0) or 0
-        duration = obj.get('duration_ms', 0) or 0
-        turns = obj.get('num_turns', 0) or 0
-        session_id = obj.get('session_id', '') or ''
-        result = obj.get('result', '')
-        usage = obj.get('usage', {{}}) or {{}}
-        model_usage = obj.get('modelUsage', {{}}) or {{}}
-        summary = result if isinstance(result, str) and result else last_result
-
-        emit('session_end',
-            session_id=session_id,
-            total_cost_usd=cost,
-            duration_ms=duration,
-            duration_api_ms=usage.get('duration_api_ms', 0) or 0,
-            num_turns=turns,
-            input_tokens=usage.get('input_tokens', 0) or 0,
-            output_tokens=usage.get('output_tokens', 0) or 0,
-            cache_read_input_tokens=usage.get('cache_read_input_tokens', 0) or 0,
-            cache_creation_input_tokens=usage.get('cache_creation_input_tokens', 0) or 0,
-            model_usage=model_usage,
-            summary=summary,
-        )
-
-        if summary:
-            terminal(summary)
-        parts = []
-        if duration:  parts.append(f'{{duration/60000:.1f}}min')
-        if cost:      parts.append(f'${{cost:.4f}}')
-        if usage.get('input_tokens') or usage.get('output_tokens'):
-            parts.append(f'in={{usage.get("input_tokens",0)}} out={{usage.get("output_tokens",0)}}')
-        if turns:     parts.append(f'turns={{turns}}')
-        if parts:
-            terminal(f'[COST] {{" | ".join(parts)}}')
-
-JSONL.close()
-if RAW: RAW.close()
-'''
-
-
-# ── run_claude ────────────────────────────────────────────────────────
+# ── run_claude (delegating shim) ──────────────────────────────────────
 
 
 def run_claude(
@@ -217,8 +213,15 @@ def run_claude(
     log_base: Path | None = None,
     verbose_logs: bool = False,
     extra_args: list[str] | None = None,
+    model: str = DEFAULT_MODEL,
+    role: str | None = None,
 ) -> bool:
     """Run `claude -p` with optional JSONL logging.
+
+    Thin delegating wrapper around :class:`archon.agent.ClaudeAgent` kept
+    for callers that don't yet construct an agent themselves. New code
+    should instantiate ``ClaudeAgent(model=..., role=...)`` directly so
+    role tagging is explicit at the construction site.
 
     Args:
         prompt: The prompt string to pass to Claude.
@@ -227,49 +230,17 @@ def run_claude(
                   (and optionally {log_base}.raw.jsonl).
         verbose_logs: If True, also write raw stream events.
         extra_args: Additional arguments to pass to claude.
+        model: Model alias (`opus`, `sonnet`) or full id forwarded to
+            ``claude --model``. Default ``opus``.
+        role: Phase tag (`plan` / `prover` / …) stamped into the JSONL.
 
     Returns:
         True if claude exited successfully, False otherwise.
     """
-    claude_cmd = [
-        "claude", "-p", prompt,
-        "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions",
-    ]
-    if extra_args:
-        claude_cmd.extend(extra_args)
-
-    if log_base is not None:
-        log_base.parent.mkdir(parents=True, exist_ok=True)
-        jsonl = f"{log_base}.jsonl"
-        raw_log = f"{log_base}.raw.jsonl"
-
-        claude_cmd.extend(["--verbose", "--output-format", "stream-json"])
-
-        stderr_dest = raw_log if verbose_logs else os.devnull
-
-        parser_script = _STREAM_PARSER.format(
-            verbose=str(verbose_logs),
-            raw_log=raw_log,
-            jsonl=jsonl,
-        )
-
-        with open(stderr_dest, "a") as stderr_file:
-            claude_proc = subprocess.Popen(
-                claude_cmd,
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-                cwd=cwd,
-            )
-            parser_proc = subprocess.Popen(
-                [sys.executable, "-u", "-c", parser_script],
-                stdin=claude_proc.stdout,
-                cwd=cwd,
-            )
-            claude_proc.stdout.close()  # allow SIGPIPE
-            parser_proc.wait()
-            claude_proc.wait()
-
-        return claude_proc.returncode == 0
-    else:
-        r = subprocess.run(claude_cmd, cwd=cwd)
-        return r.returncode == 0
+    return ClaudeAgent(model=model, role=role).run(
+        prompt,
+        cwd=cwd,
+        log_base=log_base,
+        verbose_logs=verbose_logs,
+        extra_args=extra_args,
+    )

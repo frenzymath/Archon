@@ -32,6 +32,28 @@
 
 .groupBody { padding-left: 8px; }
 
+/* Commit badges */
+.commitBadge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.commitRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 4px 22px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.commitSha { font-family: var(--font-mono); font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
+.commitSubject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Phase summary */
 .metaBar {
   display: flex; flex-wrap: wrap; gap: 6px;
@@ -62,6 +84,17 @@
 .fileStatus { font-size: 8px; flex-shrink: 0; }
 .fileRole { font-size: 10px; font-weight: 500; color: var(--text-muted); text-transform: capitalize; min-width: 40px; }
 .fileName { font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fileCommit {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
 
 .emptyHint { padding: 16px; color: var(--text-muted); font-size: 12px; text-align: center; }
 
@@ -82,6 +115,29 @@
 }
 .backBtn:hover { background: rgba(3,102,214,0.12); }
 .selectedLabel { font-weight: 500; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.selectedCommit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--blue);
+  padding: 2px 6px;
+  border-left: 2px solid var(--blue);
+  background: rgba(3, 102, 214, 0.06);
+  border-radius: 0 3px 3px 0;
+  max-width: 50%;
+  overflow: hidden;
+}
+.selectedCommitSubject {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .roleTag {
   font-size: 11px; font-weight: 600; text-transform: uppercase;
   padding: 1px 6px; border-radius: 3px;
@@ -174,6 +230,7 @@
 .summaryText h2 { font-size: 14px; color: var(--text-primary); margin: 8px 0 4px; }
 .summaryText h3 { font-size: 13px; color: var(--text-primary); margin: 6px 0 3px; }
 .summaryText h4 { font-size: 12px; color: var(--text-primary); margin: 4px 0 2px; }
+.summaryText p { margin: 4px 0; }
 .summaryText strong { color: var(--text-primary); }
 .summaryText code { background: var(--bg-tertiary); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .summaryText ul { padding-left: 18px; margin: 4px 0; }

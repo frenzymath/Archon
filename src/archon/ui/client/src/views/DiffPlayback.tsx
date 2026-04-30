@@ -13,6 +13,7 @@
 import { useEffect, useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSnapshotFiles, useFileTimeline, useSnapshotFileContent } from '../hooks/useSnapshots';
+import { useGitLog } from '../hooks/useGitLog';
 import { useDiffUrlState, type DiffCompareMode } from '../hooks/useDiffUrlState';
 import { useDiffStructureNavigation } from '../hooks/useDiffStructureNavigation';
 import DiffView from '../components/DiffView';
@@ -240,6 +241,7 @@ function FileSourceView({ content, fileName, activeId }: { content: string; file
 
 export default function DiffPlayback() {
   const { data: files } = useSnapshotFiles();
+  const { data: gitData } = useGitLog();
   const navigate = useNavigate();
   const fileTree = useMemo(() => buildFileTree(files ?? []), [files]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
@@ -449,6 +451,13 @@ export default function DiffPlayback() {
     });
   }, [currentEntry, selectedSlug, viewMode, navigate]);
 
+  // Latest commit for the iteration currently being diffed — hook must stay
+  // above the early return below to keep hook order stable across renders.
+  const iterCommit = useMemo(() => {
+    if (!currentEntry?.iteration || !gitData?.commits) return undefined;
+    return gitData.commits.find(c => c.iteration === currentEntry.iteration);
+  }, [currentEntry?.iteration, gitData]);
+
   if (!files || files.length === 0) {
     return (
       <div className={styles.page}>
@@ -485,7 +494,24 @@ export default function DiffPlayback() {
               <span className={styles.stepInfo}>{currentIdx + 1} / {totalEntries}</span>
               <button className={styles.btn} onClick={goNext} disabled={currentIdx >= totalEntries - 1}>▶</button>
             </div>
-            {currentEntry && <span className={styles.iterLabel}>{currentEntry.iteration} · {stepLabel}</span>}
+            {currentEntry && (
+              <span className={styles.iterLabel}>
+                {currentEntry.iteration} · {stepLabel}
+                {currentEntry.synthetic && (
+                  <span
+                    className={styles.iterSynthetic}
+                    title="No prover snapshot at this iteration — content reconstructed from the inner archon git (or empty if the file did not exist yet)."
+                  >
+                    synthetic
+                  </span>
+                )}
+                {iterCommit && (
+                  <span className={styles.iterCommit} title={iterCommit.subject}>
+                    {iterCommit.shortSha}
+                  </span>
+                )}
+              </span>
+            )}
             <div className={styles.compareControls}>
               <label className={styles.compareLabel}>
                 <span>Compare to</span>

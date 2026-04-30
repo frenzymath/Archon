@@ -68,6 +68,15 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     return parseProgressMarkdown(content);
   });
 
+  // The plan agent's long-arc strategy doc. Shape: just the raw markdown.
+  // The dashboard renders it as-is in the Overview pane so the user can
+  // see the planner's current sketch of how the whole project lands. We
+  // intentionally don't parse the file here — the schema is loose by
+  // design, and the planner may add or rename sections at any iteration.
+  fastify.get('/api/strategy', async () => {
+    return { content: readFileOr(path.join(archonPath, 'STRATEGY.md'), '') };
+  });
+
   fastify.get('/api/tasks', async () => {
     const pending = parseTasksMarkdown(readFileOr(path.join(archonPath, 'task_pending.md'), ''), 'pending');
     const done = parseTasksMarkdown(readFileOr(path.join(archonPath, 'task_done.md'), ''), 'done');

@@ -21,6 +21,14 @@ export function useProgress() {
   return useQuery<ProgressData>({ queryKey: ['progress'], queryFn: () => fetchJson('/api/progress'), refetchInterval: 10000 });
 }
 
+export function useStrategy() {
+  return useQuery<{ content: string }>({
+    queryKey: ['strategy'],
+    queryFn: () => fetchJson('/api/strategy'),
+    refetchInterval: 30000,
+  });
+}
+
 export function useTasks() {
   return useQuery<Task[]>({ queryKey: ['tasks'], queryFn: () => fetchJson('/api/tasks'), refetchInterval: 10000 });
 }

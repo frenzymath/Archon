@@ -1,4 +1,21 @@
 .root { max-width: 960px; display: flex; flex-direction: column; gap: 12px; }
+
+.commitBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.commitBanner .commitSha { font-weight: 700; color: var(--text-primary); }
+.commitBanner .commitBranch { color: var(--blue); font-weight: 600; }
+.commitBanner .commitSubject { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-family: var(--font-sans); }
+.commitBanner .commitSessionHint { color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); border-left: 1px solid var(--border); padding-left: 8px; }
 .empty { color: var(--text-muted); font-size: 13px; padding: 32px 0; }
 .empty code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; font-size: 12px; }
 
@@ -48,6 +65,7 @@
 .markdown h2 { font-size: 14px; color: var(--text-primary); margin: 8px 0 2px; }
 .markdown h3 { font-size: 13px; color: var(--text-primary); margin: 6px 0 2px; }
 .markdown h4 { font-size: 12px; color: var(--text-primary); margin: 4px 0 2px; }
+.markdown p { margin: 3px 0; }
 .markdown strong { color: var(--text-primary); }
 .markdown code { background: var(--bg-tertiary); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .markdown ul { padding-left: 18px; margin: 2px 0; }

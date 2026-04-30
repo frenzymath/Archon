@@ -23,7 +23,15 @@ export interface LogEntry {
   summary?: string;
 }
 
-export interface LogFile { name: string; path: string; size: number; modified: string; role?: string }
+export interface LogFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+  role?: string;
+  /** Commit associated with this specific file/phase. */
+  commit?: { sha: string; shortSha: string; subject: string; date: string };
+}
 
 export interface LogGroup {
   id: string;
@@ -36,9 +44,11 @@ export interface LogGroup {
     completedAt?: string;
     wallTimeSecs?: number;
     plan?: { status: string; durationSecs?: number };
+    refactor?: { status: string; durationSecs?: number };
     prover?: { status: string; durationSecs?: number };
     review?: { status: string; durationSecs?: number };
     provers?: Record<string, { file: string; status: string }>;
+    commit?: { sha: string; shortSha: string; subject: string; date: string };
   };
 }
 
@@ -128,6 +138,7 @@ export interface IterationMeta {
   completedAt?: string;
   wallTimeSecs?: number;
   plan?: { status: string; durationSecs?: number };
+  refactor?: { status: string; durationSecs?: number };
   prover?: { status: string; durationSecs?: number };
   review?: { status: string; durationSecs?: number };
   provers?: Record<string, ProverMeta>;
@@ -177,6 +188,7 @@ export interface TimelineEntry {
   ts?: string;            // timestamp from code_snapshot event
   proverLog?: string;     // slug for log cross-reference
   sourceFile?: string;    // actual edited file recorded by code_snapshot event
+  synthetic?: boolean;    // content came from git / empty placeholder, not a real prover snapshot
   diff?: string;
   addedLines?: number;
   removedLines?: number;

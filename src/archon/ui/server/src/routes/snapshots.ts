@@ -21,6 +21,15 @@ import fs from 'fs';
 import path from 'path';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectPaths } from './project.js';
+import { mapIterToCommit, lsLeanFilesAtCommit, showFileAtCommit, hasInnerGit } from '../utils/innerGit.js';
+
+/** Canonical slug → Lean file mapping: "Foo/Bar.lean" ↔ "Foo_Bar". */
+function slugToFile(slug: string): string {
+  return slug.replace(/_/g, '/') + '.lean';
+}
+function fileToSlug(file: string): string {
+  return file.replace(/\.lean$/, '').replace(/\//g, '_');
+}
 
 interface SnapshotProverSummary {
   slug: string;
@@ -163,14 +172,21 @@ interface FileSnapshotSummary {
 }
 
 export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath } = paths;
+  const { logsPath, archonPath, projectPath } = paths;
+  const gitDir = path.join(archonPath, 'git-dir');
 
   /** Sanitize URL params to prevent path traversal */
   const safe = (s: string) => path.basename(s);
 
   // --- Cross-iteration file-centric API ---
 
-  /** List all files that have snapshots, aggregated across iterations */
+  /**
+   * List every Lean file that has ever appeared in the project — either as a
+   * prover snapshot dir under any iter-NNN/snapshots/ or as a file in the git
+   * tree of any iter-NNN commit. For each file we list every iter-NNN group
+   * (even those without a snapshots/<slug> dir) so the timeline can later
+   * gap-fill from git or synthesise empty snapshots.
+   */
   fastify.get('/api/snapshot-files', async () => {
     if (!fs.existsSync(logsPath)) return [];
 
@@ -178,47 +194,96 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       .filter(d => d.startsWith('iter-') && fs.statSync(path.join(logsPath, d)).isDirectory())
       .sort();
 
-    // Aggregate by slug across iterations
+    const commitByIter = mapIterToCommit(gitDir, projectPath);
     const fileMap = new Map<string, FileSnapshotSummary>();
 
-    for (const iterDir of iterDirs) {
-      const snapshotsDir = path.join(logsPath, iterDir, 'snapshots');
-      if (!fs.existsSync(snapshotsDir)) continue;
+    // Record one entry per (slug, iter) across all iters.
+    const recordIter = (slug: string, file: string | undefined, iter: string, stepCount: number, hasBaseline: boolean) => {
+      let entry = fileMap.get(slug);
+      if (!entry) {
+        entry = { slug, file, iterations: [], totalSteps: 0 };
+        fileMap.set(slug, entry);
+      }
+      if (!entry.file && file) entry.file = file;
+      entry.iterations.push({ id: iter, stepCount, hasBaseline });
+      entry.totalSteps += stepCount;
+    };
 
-      // Read meta for file name mapping
-      let provers: Record<string, { file: string }> = {};
+    // Pass 1: collect the union of all slugs — from snapshot dirs AND from git
+    // trees at every iter commit. This is what makes a file visible across
+    // iterations where the prover never touched it.
+    const allSlugs = new Set<string>();
+    const slugToFileHint = new Map<string, string>();
+
+    for (const iterDir of iterDirs) {
+      // Slugs from snapshots/<slug>/
+      const snapshotsDir = path.join(logsPath, iterDir, 'snapshots');
+      if (fs.existsSync(snapshotsDir)) {
+        for (const slug of fs.readdirSync(snapshotsDir)) {
+          if (fs.statSync(path.join(snapshotsDir, slug)).isDirectory()) allSlugs.add(slug);
+        }
+      }
+
+      // meta.json "provers.<slug>.file" gives us the slug→real-path mapping.
       try {
         const meta = JSON.parse(fs.readFileSync(path.join(logsPath, iterDir, 'meta.json'), 'utf-8'));
-        provers = meta.provers || {};
+        const provers = (meta.provers || {}) as Record<string, { file?: string }>;
+        for (const [slug, p] of Object.entries(provers)) {
+          allSlugs.add(slug);
+          if (p?.file) slugToFileHint.set(slug, p.file);
+        }
       } catch { /* ignore */ }
 
-      for (const slug of fs.readdirSync(snapshotsDir)) {
-        const slugPath = path.join(snapshotsDir, slug);
-        if (!fs.statSync(slugPath).isDirectory()) continue;
-
-        const files = fs.readdirSync(slugPath);
-        const stepCount = files.filter(f => f.startsWith('step-') && f.endsWith('.lean')).length;
-        const hasBaseline = files.includes('baseline.lean');
-
-        if (!fileMap.has(slug)) {
-          fileMap.set(slug, {
-            slug,
-            file: provers[slug]?.file,
-            iterations: [],
-            totalSteps: 0,
-          });
+      // Slugs from .lean files in the git tree at this iter's commit.
+      const commit = commitByIter.get(iterDir);
+      if (commit) {
+        for (const file of lsLeanFilesAtCommit(gitDir, projectPath, commit.sha)) {
+          const slug = fileToSlug(file);
+          allSlugs.add(slug);
+          if (!slugToFileHint.has(slug)) slugToFileHint.set(slug, file);
         }
-        const entry = fileMap.get(slug)!;
-        if (!entry.file && provers[slug]?.file) entry.file = provers[slug].file;
-        entry.iterations.push({ id: iterDir, stepCount, hasBaseline });
-        entry.totalSteps += stepCount;
+      }
+    }
+
+    // Pass 2: for each (slug, iter), record either the real snapshot counts
+    // or a placeholder (stepCount=0, hasBaseline=false). The timeline handler
+    // is responsible for synthesising content from git or an empty string.
+    for (const iterDir of iterDirs) {
+      const snapshotsDir = path.join(logsPath, iterDir, 'snapshots');
+      let provers: Record<string, { file?: string }> = {};
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(logsPath, iterDir, 'meta.json'), 'utf-8'));
+        provers = (meta.provers || {}) as Record<string, { file?: string }>;
+      } catch { /* ignore */ }
+
+      for (const slug of allSlugs) {
+        const slugPath = path.join(snapshotsDir, slug);
+        let stepCount = 0;
+        let hasBaseline = false;
+        if (fs.existsSync(slugPath) && fs.statSync(slugPath).isDirectory()) {
+          const files = fs.readdirSync(slugPath);
+          stepCount = files.filter(f => f.startsWith('step-') && f.endsWith('.lean')).length;
+          hasBaseline = files.includes('baseline.lean');
+        }
+        recordIter(slug, provers[slug]?.file ?? slugToFileHint.get(slug), iterDir, stepCount, hasBaseline);
       }
     }
 
     return Array.from(fileMap.values()).sort((a, b) => a.slug.localeCompare(b.slug));
   });
 
-  /** Get full timeline for a file: all steps across all iterations */
+  /**
+   * Get the full timeline for a file across all iterations.
+   *
+   * For each iteration we emit one or more entries:
+   *   - If the iteration has `snapshots/<slug>/` (= the prover worked on this
+   *     file), emit every snapshot file it contains (baseline + each step).
+   *   - Else, try to read the file at the iteration's inner-git commit and
+   *     emit a single synthetic "baseline" entry carrying that content.
+   *   - Else (file didn't exist at that commit, or no inner git), emit a
+   *     single synthetic empty entry — so the diff view reads the iteration
+   *     as "file created" / "file deleted" instead of skipping it.
+   */
   fastify.get<{ Params: { slug: string } }>(
     '/api/snapshot-files/:slug/timeline',
     async (req, reply) => {
@@ -230,72 +295,104 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         .filter(d => d.startsWith('iter-') && fs.statSync(path.join(logsPath, d)).isDirectory())
         .sort();
 
-      const timeline: {
+      // Resolve slug → Lean file path. Prefer meta.json's provers.<slug>.file;
+      // fall back to the canonical slug→path transform.
+      let leanFile: string | undefined;
+      for (const iterDir of iterDirs) {
+        try {
+          const meta = JSON.parse(fs.readFileSync(path.join(logsPath, iterDir, 'meta.json'), 'utf-8'));
+          const f = (meta.provers || {})[safeSlug]?.file as string | undefined;
+          if (f) { leanFile = f; break; }
+        } catch { /* ignore */ }
+      }
+      if (!leanFile) leanFile = slugToFile(safeSlug);
+
+      const commitByIter = mapIterToCommit(gitDir, projectPath);
+      const gitAvailable = hasInnerGit(gitDir);
+
+      interface TLEntry {
         iteration: string;
-        step: number;        // 0 = baseline
-        file: string;        // filename: baseline.lean / step-001.lean
-        ts?: string;         // timestamp from code_snapshot event in jsonl
-        proverLog?: string;  // e.g. "SnapshotTest_Nat" for log cross-reference
-        sourceFile?: string; // actual edited file recorded by code_snapshot event
-        diff?: string;       // unified diff from previous step (or baseline)
+        step: number;
+        file: string;
+        ts?: string;
+        proverLog?: string;
+        sourceFile?: string;
+        synthetic?: boolean;  // true = content came from git or was an empty placeholder
+        diff?: string;
         addedLines?: number;
         removedLines?: number;
-      }[] = [];
+      }
 
-      let prevContent: string | null = null;
+      const timeline: TLEntry[] = [];
+      const contentByIndex: (string | null)[] = [];
 
       for (const iterDir of iterDirs) {
         const snapDir = path.join(logsPath, iterDir, 'snapshots', safeSlug);
-        if (!fs.existsSync(snapDir)) continue;
+        const hasRealSnapshots = fs.existsSync(snapDir) && fs.statSync(snapDir).isDirectory();
 
-        // Read code_snapshot provenance from prover jsonl
-        const tsMap = new Map<number, string>();  // step → ts
-        const sourceFileMap = new Map<number, string>(); // step → actual edited file
-        const proverJsonlPath = path.join(logsPath, iterDir, 'provers', `${safeSlug}.jsonl`);
-        if (fs.existsSync(proverJsonlPath)) {
-          try {
-            const lines = fs.readFileSync(proverJsonlPath, 'utf-8').split('\n').filter(Boolean);
-            for (const line of lines) {
-              const entry = JSON.parse(line);
-              if (entry.event === 'code_snapshot' && entry.step) {
-                if (entry.ts) tsMap.set(entry.step, entry.ts);
-                if (entry.file) sourceFileMap.set(entry.step, entry.file);
+        if (hasRealSnapshots) {
+          // Collect per-step ts/sourceFile provenance from the prover jsonl.
+          const tsMap = new Map<number, string>();
+          const sourceFileMap = new Map<number, string>();
+          const proverJsonlPath = path.join(logsPath, iterDir, 'provers', `${safeSlug}.jsonl`);
+          if (fs.existsSync(proverJsonlPath)) {
+            try {
+              for (const line of fs.readFileSync(proverJsonlPath, 'utf-8').split('\n').filter(Boolean)) {
+                const entry = JSON.parse(line);
+                if (entry.event === 'code_snapshot' && entry.step) {
+                  if (entry.ts) tsMap.set(entry.step, entry.ts);
+                  if (entry.file) sourceFileMap.set(entry.step, entry.file);
+                }
               }
-            }
-          } catch { /* ignore parse errors */ }
-        }
-
-        const allFiles = fs.readdirSync(snapDir)
-          .filter(f => f.endsWith('.lean'))
-          .sort();
-
-        for (const fname of allFiles) {
-          const content = fs.readFileSync(path.join(snapDir, fname), 'utf-8');
-          const step = fname === 'baseline.lean' ? 0 : parseInt(fname.replace('step-', '').replace('.lean', ''), 10);
-
-          let diff: string | undefined;
-          let addedLines: number | undefined;
-          let removedLines: number | undefined;
-
-          if (prevContent !== null && content !== prevContent) {
-            diff = computeUnifiedDiff(prevContent, content, 'previous', fname);
-            const counts = countDiffLines(diff);
-            addedLines = counts.added;
-            removedLines = counts.removed;
+            } catch { /* ignore */ }
           }
 
+          const allFiles = fs.readdirSync(snapDir)
+            .filter(f => f.endsWith('.lean'))
+            .sort();
+
+          for (const fname of allFiles) {
+            const content = fs.readFileSync(path.join(snapDir, fname), 'utf-8');
+            const step = fname === 'baseline.lean' ? 0 : parseInt(fname.replace('step-', '').replace('.lean', ''), 10);
+            timeline.push({
+              iteration: iterDir,
+              step,
+              file: fname,
+              ts: tsMap.get(step),
+              proverLog: safeSlug,
+              sourceFile: sourceFileMap.get(step),
+            });
+            contentByIndex.push(content);
+          }
+        } else {
+          // No snapshots for this iter. Try to pull content from the iter's git commit.
+          const commit = commitByIter.get(iterDir);
+          const gitContent = gitAvailable && commit
+            ? showFileAtCommit(gitDir, projectPath, commit.sha, leanFile)
+            : null;
+          const content = gitContent ?? '';  // null → file didn't exist, treat as empty
           timeline.push({
             iteration: iterDir,
-            step,
-            file: fname,
-            ts: tsMap.get(step),
+            step: 0,
+            file: 'baseline.lean',
             proverLog: safeSlug,
-            sourceFile: sourceFileMap.get(step),
-            diff,
-            addedLines,
-            removedLines,
+            sourceFile: leanFile,
+            synthetic: true,
           });
-          prevContent = content;
+          contentByIndex.push(content);
+        }
+      }
+
+      // Second pass: compute diffs against previous entry once all content is known.
+      for (let i = 0; i < timeline.length; i++) {
+        const cur = contentByIndex[i];
+        const prev = i > 0 ? contentByIndex[i - 1] : null;
+        if (prev !== null && cur !== null && cur !== prev) {
+          const diff = computeUnifiedDiff(prev, cur, 'previous', timeline[i].file);
+          const counts = countDiffLines(diff);
+          timeline[i].diff = diff;
+          timeline[i].addedLines = counts.added;
+          timeline[i].removedLines = counts.removed;
         }
       }
 
@@ -303,15 +400,41 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     },
   );
 
-  /** Read a snapshot file for a specific file+iteration */
+  /**
+   * Read a snapshot file for a specific file+iteration.
+   *
+   * When no real snapshot exists for `(slug, iteration)` we fall back to the
+   * git tree at the iteration's commit, and finally to empty content — this
+   * matches the synthetic entries produced by the /timeline endpoint so the
+   * diff view always has something to render.
+   */
   fastify.get<{ Params: { slug: string; iteration: string; file: string } }>(
     '/api/snapshot-files/:slug/:iteration/:file',
     async (req, reply) => {
       const { slug, iteration, file: fileName } = req.params;
+      const safeSlug = safe(slug);
+      const safeIter = safe(iteration);
       const safeFile = safe(fileName);
-      const filePath = path.join(logsPath, safe(iteration), 'snapshots', safe(slug), safeFile);
-      if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'File not found' });
-      return { name: safeFile, iteration: safe(iteration), content: fs.readFileSync(filePath, 'utf-8') };
+      const filePath = path.join(logsPath, safeIter, 'snapshots', safeSlug, safeFile);
+      if (fs.existsSync(filePath)) {
+        return { name: safeFile, iteration: safeIter, content: fs.readFileSync(filePath, 'utf-8') };
+      }
+
+      // Synthetic fallback: try the git tree at the iteration's commit.
+      let leanFile: string | undefined;
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(logsPath, safeIter, 'meta.json'), 'utf-8'));
+        leanFile = (meta.provers || {})[safeSlug]?.file;
+      } catch { /* ignore */ }
+      if (!leanFile) leanFile = slugToFile(safeSlug);
+
+      const commitByIter = mapIterToCommit(gitDir, projectPath);
+      const commit = commitByIter.get(safeIter);
+      const gitContent = commit && hasInnerGit(gitDir)
+        ? showFileAtCommit(gitDir, projectPath, commit.sha, leanFile)
+        : null;
+
+      return { name: safeFile, iteration: safeIter, content: gitContent ?? '' };
     },
   );
 

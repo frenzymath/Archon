@@ -176,6 +176,58 @@ def _install_with_pm(pkg: str, install_urls: dict[str, str] | None = None) -> bo
     return True
 
 
+def _install_bundle_with_pm(
+    label: str,
+    packages_by_pm: dict[str, list[str]],
+    install_urls: dict[str, str] | None = None,
+) -> bool:
+    """Install a bundle of packages whose names differ across package managers.
+
+    `packages_by_pm` maps PM name ("brew", "apt-get", "dnf", "pacman") to the
+    list of packages to install on that PM. Useful for TeX / graphviz where
+    Debian calls it `libgraphviz-dev` but Fedora calls it `graphviz-devel`.
+    """
+    pm = _detect_pm()
+    if pm is None:
+        log.warn(f"No supported package manager found for installing '{label}'.")
+        if install_urls:
+            for k, v in install_urls.items():
+                log.step(f"  {k}: {v}")
+        return False
+
+    name, base_cmd = pm
+    pkgs = packages_by_pm.get(name)
+    if not pkgs:
+        log.warn(f"No package list defined for {name} when installing '{label}'.")
+        if install_urls:
+            for k, v in install_urls.items():
+                log.step(f"  {k}: {v}")
+        return False
+
+    cmd = base_cmd + pkgs
+
+    if name == "apt-get":
+        if _ask_sudo(f"apt update (prerequisite for {label})", ["sudo", "apt-get", "update", "-qq"]):
+            _run(["sudo", "apt-get", "update", "-qq"])
+        else:
+            log.step("Skipping apt-get update — the install may fail on a stale index.")
+
+    if not _ask_sudo(label, cmd):
+        log.step(f"Skipping auto-install of '{label}'. To install manually on your system:")
+        log.step(f"  {' '.join(cmd)}")
+        if install_urls:
+            for k, v in install_urls.items():
+                log.step(f"  {k}: {v}")
+        return False
+
+    log.step(f"Running: {' '.join(cmd)}")
+    r = _run(cmd)
+    if r.returncode != 0:
+        log.warn(f"Install command failed: {(r.stderr or r.stdout).strip()}")
+        return False
+    return True
+
+
 # ── individual checks ─────────────────────────────────────────────────
 
 
@@ -291,6 +343,7 @@ def _check_uv() -> bool:
     log.step("Install manually: https://docs.astral.sh/uv/getting-started/installation/")
     return False
 
+
 def _check_ripgrep() -> bool:
     if _has("rg"):
         log.success(f"ripgrep: {_version(['rg', '--version'])}")
@@ -320,6 +373,171 @@ def _check_claude_code() -> bool:
         return True
     log.error("Claude Code installation failed")
     log.step("Install manually: https://code.claude.com/docs/en/overview")
+    return False
+
+
+# ── blueprint-specific checks ─────────────────────────────────────────
+#
+# leanblueprint (Patrick Massot's plasTeX-based blueprint tooling) needs:
+#   - graphviz + graphviz dev headers  (for pygraphviz → plastexdepgraph)
+#   - a LaTeX toolchain                (for the PDF blueprint)
+#   - ghostscript, dvisvgm, pdf2svg, pdfcrop  (for the web blueprint's
+#     embedded figures and plasTeX's TeX-to-SVG conversion)
+#   - the `leanblueprint` Python CLI
+#
+# Package names diverge across distros, so we list them per-PM.
+
+
+def _check_graphviz() -> bool:
+    """graphviz binary + headers needed to build pygraphviz, which plastexdepgraph uses."""
+    have_dot = _has("dot")
+    # The dev headers are harder to detect portably — we just check for
+    # a well-known header file on Linux, and trust brew on macOS.
+    dev_headers_present = (
+        Path("/usr/include/graphviz/cgraph.h").exists()
+        or Path("/usr/local/include/graphviz/cgraph.h").exists()
+        or Path("/opt/homebrew/include/graphviz/cgraph.h").exists()
+    )
+
+    if have_dot and dev_headers_present:
+        log.success(f"graphviz: {_version(['dot', '-V'])}")
+        return True
+
+    if have_dot and not dev_headers_present:
+        log.warn("graphviz is installed but development headers seem to be missing.")
+        log.step("These are required to build pygraphviz (used by leanblueprint's dep graph).")
+    else:
+        log.step("graphviz not found, attempting install...")
+
+    ok = _install_bundle_with_pm(
+        "graphviz (with dev headers)",
+        {
+            # brew's `graphviz` formula ships headers, no separate dev pkg.
+            "brew": ["graphviz"],
+            "apt-get": ["graphviz", "libgraphviz-dev"],
+            "dnf": ["graphviz", "graphviz-devel"],
+            "pacman": ["graphviz"],
+        },
+        install_urls={
+            "Manual": "https://pygraphviz.github.io/documentation/stable/install.html",
+        },
+    )
+
+    if _has("dot"):
+        log.success(f"graphviz installed: {_version(['dot', '-V'])}")
+        return ok
+    log.warn("graphviz not installed — the blueprint dependency graph will fail to build.")
+    return False
+
+
+def _check_tex_toolchain() -> bool:
+    """LaTeX + auxiliary tools needed by leanblueprint (pdf & web targets)."""
+    # Minimal probe: pdflatex/xelatex/lualatex are the common LaTeX engines.
+    # For the web target plasTeX itself invokes latex/dvisvgm.
+    have_latex = any(_has(b) for b in ("pdflatex", "xelatex", "lualatex", "latex"))
+    have_gs = _has("gs")
+    have_dvisvgm = _has("dvisvgm")
+    have_pdf2svg = _has("pdf2svg")
+    have_pdfcrop = _has("pdfcrop")
+
+    if have_latex and have_gs and have_dvisvgm and have_pdf2svg and have_pdfcrop:
+        log.success("TeX toolchain: latex, ghostscript, dvisvgm, pdf2svg, pdfcrop all present")
+        return True
+
+    missing = []
+    if not have_latex:
+        missing.append("latex")
+    if not have_gs:
+        missing.append("ghostscript")
+    if not have_dvisvgm:
+        missing.append("dvisvgm")
+    if not have_pdf2svg:
+        missing.append("pdf2svg")
+    if not have_pdfcrop:
+        missing.append("pdfcrop")
+
+    log.step(f"TeX toolchain incomplete (missing: {', '.join(missing)}), attempting install...")
+
+    ok = _install_bundle_with_pm(
+        "TeX toolchain for leanblueprint",
+        {
+            # Homebrew: the full texlive cask is enormous; we install the
+            # smaller pieces. Users who want a fuller TeX setup should
+            # install MacTeX themselves.
+            "brew": ["texlive", "ghostscript", "dvisvgm", "pdf2svg"],
+            "apt-get": [
+                "texlive-latex-base",
+                "texlive-latex-extra",
+                "texlive-extra-utils",  # provides pdfcrop
+                "ghostscript",
+                "dvisvgm",
+                "pdf2svg",
+            ],
+            "dnf": [
+                "texlive-scheme-basic",
+                "texlive-collection-latexextra",
+                "texlive-pdfcrop",
+                "ghostscript",
+                "dvisvgm",
+                "pdf2svg",
+            ],
+            "pacman": [
+                "texlive-basic",
+                "texlive-latexextra",
+                "ghostscript",
+                "dvisvgm",
+                "pdf2svg",
+            ],
+        },
+        install_urls={
+            "TeX Live": "https://www.tug.org/texlive/",
+            "MacTeX":   "https://www.tug.org/mactex/",
+        },
+    )
+
+    # Re-probe
+    have_latex = any(_has(b) for b in ("pdflatex", "xelatex", "lualatex", "latex"))
+    have_gs = _has("gs")
+    have_dvisvgm = _has("dvisvgm")
+    have_pdf2svg = _has("pdf2svg")
+    have_pdfcrop = _has("pdfcrop")
+
+    still_missing = []
+    if not have_latex: still_missing.append("latex")
+    if not have_gs: still_missing.append("ghostscript")
+    if not have_dvisvgm: still_missing.append("dvisvgm")
+    if not have_pdf2svg: still_missing.append("pdf2svg")
+    if not have_pdfcrop: still_missing.append("pdfcrop")
+
+    if not still_missing:
+        log.success("TeX toolchain installed")
+        return True
+
+    log.warn(f"TeX toolchain still incomplete: missing {', '.join(still_missing)}")
+    log.step("The blueprint PDF/web build may fail until these are installed.")
+    return False
+
+
+def _check_leanblueprint() -> bool:
+    """Install (or upgrade) the `leanblueprint` Python CLI.
+    """
+    already = _has("leanblueprint")
+
+
+    action = "Upgrading" if already else "Installing"
+    log.step(f"{action} leanblueprint via pip --user...")
+    r = _run([sys.executable, "-m", "pip", "install", "--user", "--upgrade", "leanblueprint"])
+    if r.returncode != 0:
+        log.warn(f"pip install failed: {(r.stderr or r.stdout).strip()}")
+
+    if _has("leanblueprint"):
+        log.success(f"leanblueprint: {_version(['leanblueprint', '--version'])}")
+        _ensure_path_in_rc()
+        return True
+
+    log.error("leanblueprint not found after install.")
+    log.step("Install manually: pip install -U leanblueprint")
+    log.step("See: https://github.com/PatrickMassot/leanblueprint")
     return False
 
 
@@ -560,12 +778,21 @@ def setup(
         help="Never run sudo. For any dependency that would require it, "
         "print manual install instructions and continue.",
     ),
+    skip_blueprint: bool = typer.Option(
+        False, "--skip-blueprint",
+        help="Skip installing blueprint-related dependencies (graphviz, TeX, leanblueprint). "
+        "Use this if you don't need the LaTeX blueprint feature.",
+    ),
 ) -> None:
     """Install system-level dependencies.
 
     Checks and installs (without silent sudo) git, Python 3.10+, curl,
     elan/lean/lake, uv, ripgrep, Claude Code, Node.js (via nvm), dashboard
     npm dependencies, and verifies external-model API keys.
+
+    Also installs leanblueprint and its system-level prerequisites
+    (graphviz + dev headers, TeX Live, ghostscript, dvisvgm, pdf2svg,
+    pdfcrop), unless --skip-blueprint is passed.
 
     By default, prompts before any sudo command. Use --yes to auto-accept
     (containers/CI) or --no-sudo to print manual instructions instead.
@@ -602,6 +829,17 @@ def setup(
 
     log.rule("Claude Code")
     _check_claude_code()
+
+    if not skip_blueprint:
+        log.rule("Blueprint system dependencies")
+        _check_graphviz()
+        _check_tex_toolchain()
+
+        log.rule("leanblueprint CLI")
+        _check_leanblueprint()
+    else:
+        log.rule("Blueprint (skipped)")
+        log.info("--skip-blueprint set — not installing graphviz, TeX, or leanblueprint.")
 
     log.rule("Dashboard dependencies")
     node_ok = _check_node()
