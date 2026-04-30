@@ -420,6 +420,23 @@ def _merge_and_promote_writeback(
             model=model,
             verbose_logs=verbose_logs,
         )
+        # Surface the merger's JSONL under iter_dir/provers/ so the
+        # dashboard's existing log enumeration shows it alongside the
+        # per-lane prover logs. Live tail still works because we
+        # symlink, not copy.
+        if outcome.log_path is not None:
+            iter_dir = state_dir / 'logs' / f'iter-{iteration:03d}'
+            (iter_dir / 'provers').mkdir(parents=True, exist_ok=True)
+            slug = rel.replace('/', '_').removesuffix('.lean')
+            for ext in ('jsonl', 'raw.jsonl'):
+                target = Path(str(outcome.log_path).removesuffix('.jsonl') + f'.{ext}')
+                link = iter_dir / 'provers' / f'{slug}__merge.{ext}'
+                try:
+                    if link.exists() or link.is_symlink():
+                        link.unlink()
+                    link.symlink_to(target)
+                except OSError:
+                    pass
         promoted_files.append(rel)
         for row in rows:
             row['promoted_to_main'] = True
@@ -1090,6 +1107,8 @@ def _run_multilane_assignment(
     assignment,
     verbose_logs: bool,
     model: str,
+    iter_dir: Path | None = None,
+    lane_provider: str | None = None,
 ) -> dict[str, object]:
     lane_path = Path(assignment.worktree_path)
     slug = _file_slug(assignment.assigned_file)
@@ -1099,6 +1118,26 @@ def _run_multilane_assignment(
     if target_file.exists():
         _snapshot_baseline(target_file, snap_dir)
 
+    # Surface the lane's log under iter_dir/provers/ so the dashboard's
+    # existing prover-log enumeration shows it. Symlink (not copy) so
+    # tail-based live UI still works during the run.
+    if iter_dir is not None:
+        provers_dir = iter_dir / "provers"
+        provers_dir.mkdir(parents=True, exist_ok=True)
+        for ext in ("jsonl", "raw.jsonl"):
+            target = Path(f"{assignment.log_path}.{ext}")
+            link = provers_dir / f"{slug}__{assignment.lane_id}.{ext}"
+            try:
+                if link.exists() or link.is_symlink():
+                    link.unlink()
+                link.symlink_to(target)
+            except OSError:
+                # Filesystem doesn't allow symlinks (rare on modern
+                # Linux/macOS, common on Windows without privileges) —
+                # the log will still exist under multilane/lanes/, just
+                # not under iter_dir/provers/.
+                pass
+
     prompt = build_assignment_prompt(
         project_name=project_name,
         lane_project_path=lane_path,
@@ -1106,8 +1145,17 @@ def _run_multilane_assignment(
         stage=stage,
         assignment=assignment,
     )
+    # Tag the announcement with lane + provider so the user can tell
+    # which session is actually hitting which API. The model alias is
+    # whatever the global --model picked (defaults to 'opus'); the
+    # lane's settings.local.json maps that alias to the provider's
+    # actual endpoint via ANTHROPIC_BASE_URL + ANTHROPIC_MODEL.
+    role_tag = f"prover[{assignment.lane_id}"
+    if lane_provider:
+        role_tag += f"/{lane_provider}"
+    role_tag += "]"
     before_files = set(_git_diff_files(lane_path))
-    ok = ClaudeAgent(model=model, role="prover").run(
+    ok = ClaudeAgent(model=model, role=role_tag).run(
         prompt,
         cwd=lane_path,
         log_base=Path(assignment.log_path),
@@ -1309,6 +1357,10 @@ def _run_multilane_execution(
             write_results_jsonl(results_path, results)
         else:
             log.info(f'Launching {assignment_count} multi-lane assignment(s) concurrently')
+            iter_dir = state_dir / 'logs' / f'iter-{iteration:03d}'
+            # Map lane_id -> provider so each assignment's log line tells
+            # the user whether it's hitting Anthropic, Moonshot, OpenAI, ...
+            lane_providers = {lane.lane_id: lane.provider for lane in config.lanes}
             with ThreadPoolExecutor(max_workers=assignment_count) as pool:
                 futures = {
                     pool.submit(
@@ -1320,6 +1372,8 @@ def _run_multilane_execution(
                         assignment=assignment,
                         verbose_logs=verbose_logs,
                         model=model,
+                        iter_dir=iter_dir,
+                        lane_provider=lane_providers.get(assignment.lane_id),
                     ): assignment
                     for assignment in assignments
                 }
@@ -1766,12 +1820,9 @@ def loop(
     if dry_run:
         config["Mode"] = "[yellow]DRY RUN[/yellow]"
 
-    if multilane_execute and not no_review:
-        log.warn(
-            "Multi-lane execution MVP currently works best with --no-review; "
-            "review will be skipped for this run."
-        )
-        no_review = True
+    # Multilane no longer forces --no-review — the lane outputs are
+    # merged into a single main-tree state before the review phase
+    # runs, so review sees the same shape it always does.
 
     log.header("Archon Loop")
     log.key_value(config)
