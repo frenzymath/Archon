@@ -326,6 +326,25 @@ def _step1_state_dir(
     log.success("State directory ready")
 
 
+def _step1b_inner_git(project_path: Path) -> None:
+    """Initialize the inner git repo at .archon/git-dir/ if missing.
+
+    Idempotent — does nothing if already initialized. Safe to call on
+    every init (fresh or re-init) since it only creates the bare repo
+    and default excludes; commits happen later, inside the loop.
+    """
+    from archon.commands.tooling.inner_git import InnerGit
+
+    log.phase(1, "Setting up inner git (.archon/git-dir/)")
+    inner = InnerGit(project_path)
+    if inner.init():
+        log.step("Initialized inner git repo")
+    else:
+        inner.ensure_excludes()
+        log.step("Inner git already initialized")
+    log.success("Inner git ready")
+
+
 def _step2_copy_prompts(state_dir: Path, fresh: bool) -> None:
     """Copy prompt files into .archon/prompts/.
 
@@ -668,6 +687,7 @@ def init(
         fresh=fresh,
         refresh_claude_md=not merged_claude_md,
     )
+    _step1b_inner_git(resolved)
     _step2_copy_prompts(state_dir, fresh=fresh)
     _step3_lean_lsp_mcp(resolved, fresh=fresh)
     _step4_skills(resolved, fresh=fresh)

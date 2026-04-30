@@ -20,6 +20,7 @@ import { register as registerJournal } from './routes/journal.js';
 import { register as registerSummary } from './routes/summary.js';
 import { register as registerSnapshots } from './routes/snapshots.js';
 import { register as registerProofGraph } from './routes/proofgraph.js';
+import { register as registerGit } from './routes/git.js';
 import type { ProjectPaths } from './routes/project.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,6 +68,7 @@ export async function createServer(options: { projectPath: string; port: number 
   registerSummary(fastify, paths);
   registerSnapshots(fastify, paths);
   registerProofGraph(fastify, paths);
+  registerGit(fastify, paths);
 
   await fastify.listen({ port, host: '0.0.0.0' });
   return fastify;

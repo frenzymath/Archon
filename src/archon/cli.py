@@ -87,6 +87,7 @@ from archon.commands.update import update  # noqa: E402
 from archon.commands.discuss import discuss  # noqa: E402
 from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.refactor import app as refactor_app  # noqa: E402
+from archon.commands.branch import branch, inner_log  # noqa: E402
 
 app.command()(init)
 app.command()(loop)
@@ -98,6 +99,8 @@ app.command()(update)
 app.command()(discuss)
 app.command("version")(version_cmd)
 app.add_typer(refactor_app, name="refactor")
+app.command("branch")(branch)
+app.command("log")(inner_log)
 
 if __name__ == "__main__":
     app()
