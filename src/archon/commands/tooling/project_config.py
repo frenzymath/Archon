@@ -42,18 +42,58 @@ def default_config() -> dict[str, Any]:
             'no_review': False,
         },
         'multilane': {
+            # JSON has no real comments; ``_help`` / ``_env`` /
+            # ``_examples`` keys with leading underscores are ignored by
+            # the multilane config builder but readable by humans.
+            # See .archon/MULTILANE.md for more.
+            '_help': (
+                "Set 'enabled' to true and add the lanes you want. "
+                "Each lane uses Claude Code as its driver but routes "
+                "requests to a different provider via ANTHROPIC_BASE_URL "
+                "(set in .archon/.env)."
+            ),
             'enabled': False,
             'base_ref': 'main',
             'lanes': [
                 # Default: a single Anthropic lane. Multilane stays
-                # disabled until the user flips ``enabled: true``, so
-                # this is purely an example shape.
+                # disabled until ``enabled`` is flipped to true.
                 {
                     'lane_id': 'anthropic',
                     'provider': 'anthropic',
                     'model': 'opus',
+                    '_env': "Anthropic auth is handled by Claude Code itself (interactive login during `archon init`). No env vars needed.",
                 },
             ],
+            '_examples': {
+                "_help": (
+                    "Copy any of these into the 'lanes' list above to enable. "
+                    "Set the keys named in '_env' inside .archon/.env first."
+                ),
+                "kimi": {
+                    'lane_id': 'kimi',
+                    'provider': 'moonshot',
+                    '_env': "Set MOONSHOT_API_KEY in .archon/.env (optional: MOONSHOT_BASE_URL, MOONSHOT_MODEL).",
+                    '_extras': "No extras package needed — Moonshot speaks the Anthropic API natively.",
+                },
+                "deepseek": {
+                    'lane_id': 'deepseek',
+                    'provider': 'deepseek',
+                    '_env': "Set DEEPSEEK_API_KEY in .archon/.env (optional: DEEPSEEK_BASE_URL, DEEPSEEK_MODEL).",
+                    '_extras': "No extras package needed — DeepSeek speaks the Anthropic API natively.",
+                },
+                "openai": {
+                    'lane_id': 'gpt',
+                    'provider': 'openai',
+                    '_env': "Set OPENAI_API_KEY in .archon/.env (optional: OPENAI_BIG_MODEL, OPENAI_SMALL_MODEL, OPENAI_BASE_URL).",
+                    '_extras': "Needs the bundled proxy: install with `pip install archon[proxy]`.",
+                },
+                "gemini": {
+                    'lane_id': 'gemini',
+                    'provider': 'gemini',
+                    '_env': "Set GEMINI_API_KEY in .archon/.env (optional: GEMINI_BIG_MODEL, GEMINI_SMALL_MODEL).",
+                    '_extras': "Needs the bundled proxy: install with `pip install archon[proxy]`. No Vertex AI — uses the regular Gemini API.",
+                },
+            },
         },
     }
 

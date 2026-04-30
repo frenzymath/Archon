@@ -147,6 +147,8 @@ def render_env_template(*, shell_env: dict[str, str] | None = None) -> str:
         '#',
         '# Existing shell variables always win on conflict, so this file',
         '# is purely a fallback / per-project default.',
+        '#',
+        '# For full setup details, see .archon/MULTILANE.md.',
         '',
         '# ── Informal agent (one key is enough; pick whichever you have) ──',
         '# Used by the archon informal agent for blueprint sketches, etc.',

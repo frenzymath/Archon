@@ -321,6 +321,13 @@ def _step_state_dir(project_path: Path, state_dir: Path, fresh: bool) -> None:
     else:
         log.warn("Template not found: CLAUDE.md")
 
+    # MULTILANE.md — reference doc for setting up additional providers.
+    # Always overwrite with the bundled version: it's a reference, not a
+    # user-edited file.
+    multilane_doc_src = template_dir / "MULTILANE.md"
+    if multilane_doc_src.exists():
+        _copy_file(multilane_doc_src, state_dir / "MULTILANE.md", overwrite=True)
+
     log.step(f"Copied {copied} new template file(s)" +
              (f", preserved {preserved} existing" if not fresh else ""))
     log.success("State directory ready")
