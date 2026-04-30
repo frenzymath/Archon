@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -1109,6 +1110,7 @@ def _run_multilane_assignment(
     model: str,
     iter_dir: Path | None = None,
     lane_provider: str | None = None,
+    cancel_event: 'threading.Event | None' = None,
 ) -> dict[str, object]:
     lane_path = Path(assignment.worktree_path)
     slug = _file_slug(assignment.assigned_file)
@@ -1165,6 +1167,7 @@ def _run_multilane_assignment(
             prover_jsonl=Path(raw_log_path),
             project_path=lane_path,
         ),
+        cancel_event=cancel_event,
     )
     after_files = set(_git_diff_files(lane_path))
     lane_dirty_files = sorted(after_files - before_files)
@@ -1361,6 +1364,48 @@ def _run_multilane_execution(
             # Map lane_id -> provider so each assignment's log line tells
             # the user whether it's hitting Anthropic, Moonshot, OpenAI, ...
             lane_providers = {lane.lane_id: lane.provider for lane in config.lanes}
+            # Per-(lane, file) cancel event. When one lane finishes a
+            # file cleanly, we set the cancel events of all OTHER lanes
+            # working on that same file after a grace period — that's
+            # the "first clean lane wins, rest get N minutes to wrap"
+            # semantics. The actual termination happens inside
+            # ClaudeAgent.run, which polls these events.
+            cancel_events: dict[str, threading.Event] = {
+                a.assignment_id: threading.Event() for a in assignments
+            }
+            grace_seconds = 600.0  # 10 minutes — fixed for now; could go on config.json later
+            grace_timers: list[threading.Timer] = []
+
+            def _schedule_kill_on_file(winning_assignment) -> None:
+                """Set cancel events for OTHER assignments on the same file
+                after grace_seconds. Idempotent — multiple winners on the
+                same file just refresh / extend nothing (we only set the
+                first timer)."""
+                file_key = winning_assignment.assigned_file
+                if any(getattr(t, 'file_key', None) == file_key for t in grace_timers):
+                    return  # already scheduled
+                victims = [
+                    a for a in assignments
+                    if a.assigned_file == file_key and a.assignment_id != winning_assignment.assignment_id
+                ]
+                if not victims:
+                    return
+                log.info(
+                    f"  lane '{winning_assignment.lane_id}' won {file_key} cleanly — "
+                    f"giving other lane(s) {int(grace_seconds/60)} min to wrap up"
+                )
+                def _kill():
+                    for v in victims:
+                        ev = cancel_events.get(v.assignment_id)
+                        if ev is not None and not ev.is_set():
+                            log.info(f"  grace expired — cancelling lane '{v.lane_id}' on {file_key}")
+                            ev.set()
+                t = threading.Timer(grace_seconds, _kill)
+                t.file_key = file_key  # type: ignore[attr-defined]
+                t.daemon = True
+                t.start()
+                grace_timers.append(t)
+
             with ThreadPoolExecutor(max_workers=assignment_count) as pool:
                 futures = {
                     pool.submit(
@@ -1374,6 +1419,7 @@ def _run_multilane_execution(
                         model=model,
                         iter_dir=iter_dir,
                         lane_provider=lane_providers.get(assignment.lane_id),
+                        cancel_event=cancel_events[assignment.assignment_id],
                     ): assignment
                     for assignment in assignments
                 }
@@ -1413,9 +1459,27 @@ def _run_multilane_execution(
                         log.info(
                             f"  Lane {assignment.lane_id} :: {assignment.assigned_file} -> {status}"
                         )
+                        # Early-stop trigger: a clean win on this file
+                        # starts a grace timer for any other lane still
+                        # running on the same file. "Clean" = the same
+                        # criteria the merge-agent uses (sorry-free,
+                        # axiom-free, builds, only the assigned file
+                        # changed).
+                        if (row.get('success')
+                                and row.get('assigned_file_only')
+                                and row.get('verification_passed')):
+                            _schedule_kill_on_file(assignment)
                     results.append(row)
                     write_results_jsonl(results_path, results)
     finally:
+        # Cancel any timers that haven't fired yet — once we leave the
+        # executor, the cancel_events would be setting nothing useful
+        # (assignments have all completed or been killed).
+        for t in grace_timers:
+            try:
+                t.cancel()
+            except Exception:
+                pass
         _release_multilane_lock(lock_path)
         for cleanup in proxy_cleanups:
             try:

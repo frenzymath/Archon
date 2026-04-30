@@ -20,6 +20,8 @@ import os
 import signal
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,6 +219,7 @@ class ClaudeAgent:
         verbose_logs: bool = False,
         extra_args: list[str] | None = None,
         env_overrides: dict[str, str] | None = None,
+        cancel_event: 'threading.Event | None' = None,
     ) -> bool:
         """Headless ``claude -p`` run.
 
@@ -227,6 +230,12 @@ class ClaudeAgent:
         ``env_overrides`` is forwarded to the spawned subprocess so lane
         runs can set provider-specific variables (e.g. an alternate
         ``ANTHROPIC_BASE_URL``) without leaking them into the parent.
+
+        ``cancel_event`` is checked while waiting for claude to finish.
+        Setting it from another thread sends SIGTERM to the spawned
+        process, lets it tear down for up to 5 seconds, then SIGKILLs.
+        Used by multilane to stop slow lanes once another lane has won
+        the same file. Returns False on cancellation.
         """
         cmd = ["claude", "-p", prompt, *self._common_flags()]
         if extra_args:
@@ -238,7 +247,10 @@ class ClaudeAgent:
 
         if log_base is None:
             return subprocess.run(cmd, cwd=cwd, env=env).returncode == 0
-        return self._run_with_logging(cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs, env=env)
+        return self._run_with_logging(
+            cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
+            env=env, cancel_event=cancel_event,
+        )
 
     def run_interactive(
         self,
@@ -288,6 +300,7 @@ class ClaudeAgent:
         log_base: Path,
         verbose_logs: bool,
         env: dict[str, str] | None = None,
+        cancel_event: 'threading.Event | None' = None,
     ) -> bool:
         log_base.parent.mkdir(parents=True, exist_ok=True)
         jsonl = f"{log_base}.jsonl"
@@ -305,6 +318,7 @@ class ClaudeAgent:
             jsonl=jsonl,
         )
 
+        cancelled = False
         stderr_dest = raw_log if verbose_logs else os.devnull
         with open(stderr_dest, "a") as stderr_file:
             claude_proc = subprocess.Popen(
@@ -321,19 +335,49 @@ class ClaudeAgent:
             )
             assert claude_proc.stdout is not None
             claude_proc.stdout.close()
-            parser_proc.wait()
-            # The parser exits as soon as it sees session_end; if
-            # claude is still running (e.g. a slow MCP teardown),
-            # signal it to wind down and SIGKILL after a short grace.
-            try:
-                claude_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _terminate_process(claude_proc, sig=signal.SIGTERM)
+
+            # Poll the parser instead of blocking on .wait() so we can
+            # honour cancel_event from another thread (multilane uses
+            # this to kill slow lanes after another lane wins). Tick
+            # every 200 ms — fine-grained enough to feel responsive,
+            # coarse enough to be cheap.
+            while parser_proc.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    _terminate_process(claude_proc, sig=signal.SIGTERM)
+                    break
+                time.sleep(0.2)
+
+            if cancelled:
+                # Give claude a moment to tear down on its own, then
+                # escalate to SIGKILL. The parser will exit on its own
+                # once claude's stdout closes.
                 try:
                     claude_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     _terminate_process(claude_proc, sig=signal.SIGKILL)
                     claude_proc.wait()
+                try:
+                    parser_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(parser_proc, sig=signal.SIGKILL)
+                    parser_proc.wait()
+            else:
+                # Normal teardown: parser already exited (saw
+                # session_end). If claude lingers (slow MCP teardown,
+                # for example), signal it.
+                try:
+                    claude_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(claude_proc, sig=signal.SIGTERM)
+                    try:
+                        claude_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        _terminate_process(claude_proc, sig=signal.SIGKILL)
+                        claude_proc.wait()
+
+        if cancelled:
+            return False
 
         # Some lanes legitimately end with a non-zero return even though
         # the assistant produced a valid session_end — check the JSONL
