@@ -128,7 +128,17 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
 
             let displayName: string;
             if (isProver) {
-              displayName = f.name.replace('.jsonl', '').replace(/_/g, '/');
+              const base = f.name.replace('.jsonl', '');
+              // Multilane log convention: "<file_slug>__<lane>" (or
+              // "<file_slug>__merge"). Use the last "__" as the
+              // separator and show just the lane / "merge" tag — the
+              // long file slug is preserved in the title tooltip.
+              const splitIdx = base.lastIndexOf('__');
+              if (splitIdx >= 0) {
+                displayName = base.slice(splitIdx + 2);
+              } else {
+                displayName = base.replace(/_/g, '/');
+              }
             } else if (isArtifact) {
               // For .md artifacts we already show the role prefix — no extra name needed
               displayName = '';
