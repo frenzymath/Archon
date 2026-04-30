@@ -19,6 +19,8 @@ from pathlib import Path
 
 # Provider → list of env var names recognized for that provider. Used
 # both by the .env template generator and by the lane settings writer.
+# These are MULTILANE providers — non-Anthropic Claude-compatible APIs
+# you can run a prover lane through.
 PROVIDERS: dict[str, list[str]] = {
     'moonshot': [
         'MOONSHOT_API_KEY',
@@ -31,6 +33,16 @@ PROVIDERS: dict[str, list[str]] = {
         'DEEPSEEK_MODEL',
     ],
 }
+
+# Single-key credentials used by the *informal* agent (the tool that
+# generates blueprint sketches / drafts informal proofs / etc.). These
+# are NOT lane providers — the informal agent isn't a Claude wrapper,
+# it just needs an API key for one of these services.
+INFORMAL_AGENT_KEYS: list[str] = [
+    'OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+    'OPENROUTER_API_KEY',
+]
 
 # Default values written into the template when a variable isn't yet
 # in the shell. Empty string means "leave the user to fill it in".
@@ -78,34 +90,42 @@ def load_env_file(project_path: Path) -> dict[str, str]:
 def render_env_template(*, shell_env: dict[str, str] | None = None) -> str:
     """Build the initial .archon/.env content.
 
-    For each known provider variable: if the shell already has it, write
-    it uncommented (so the user inherits whatever they had configured).
+    For each known variable: if the shell already has it, write it
+    uncommented (so the user inherits whatever they had configured).
     Otherwise write a commented placeholder using ``TEMPLATE_DEFAULTS``
     for things like base URLs that have a sensible default.
     """
     src = shell_env if shell_env is not None else os.environ
+
+    def _line(key: str) -> str:
+        shell_value = src.get(key, '')
+        default_value = TEMPLATE_DEFAULTS.get(key, '')
+        if shell_value:
+            return f'{key}={shell_value}'
+        if default_value:
+            return f'# {key}={default_value}'
+        return f'# {key}='
+
     lines: list[str] = [
-        '# Archon environment for alternative-provider lanes.',
+        '# Archon environment.',
         '#',
         '# Anthropic auth is handled by Claude Code itself (interactive',
         '# login during `archon init`), so do NOT add ANTHROPIC_* here.',
         '#',
-        '# Add API keys for any non-Anthropic provider you want to use',
-        '# in multilane runs. Existing shell variables always win, so',
-        '# this file is purely a fallback / per-project default.',
+        '# Existing shell variables always win on conflict, so this file',
+        '# is purely a fallback / per-project default.',
         '',
+        '# ── Informal agent (one key is enough; pick whichever you have) ──',
+        '# Used by the archon informal agent for blueprint sketches, etc.',
     ]
+    for key in INFORMAL_AGENT_KEYS:
+        lines.append(_line(key))
+    lines.append('')
+    lines.append('# ── Multi-lane providers (non-Anthropic prover lanes) ──')
     for provider, keys in PROVIDERS.items():
         lines.append(f'# {provider.title()}')
         for key in keys:
-            shell_value = src.get(key, '')
-            default_value = TEMPLATE_DEFAULTS.get(key, '')
-            if shell_value:
-                lines.append(f'{key}={shell_value}')
-            elif default_value:
-                lines.append(f'# {key}={default_value}')
-            else:
-                lines.append(f'# {key}=')
+            lines.append(_line(key))
         lines.append('')
     return '\n'.join(lines).rstrip() + '\n'
 

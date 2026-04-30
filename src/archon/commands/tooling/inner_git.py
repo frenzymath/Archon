@@ -225,6 +225,11 @@ class InnerGit:
         "# API keys. Outer git already ignores .archon/, but the inner repo\n"
         "# DOES track .archon/, so we have to exclude .env here explicitly.\n"
         ".archon/.env\n"
+        "# Auto-generated lane provider settings ({\"env\": {ANTHROPIC_AUTH_TOKEN, …}})\n"
+        "# materialize per-iteration in this directory. They embed API keys —\n"
+        "# never commit them. The lane runtime regenerates them at the start\n"
+        "# of each multilane round, so dropping them on disk is fine.\n"
+        ".archon/multilane/lanes/\n"
     )
 
     def _write_default_excludes(self) -> None:
