@@ -34,9 +34,11 @@ from archon.commands.tooling.iteration import (
 from archon.commands.tooling.version import warn_if_mismatch
 from archon.multilane.collect import write_preview_report, write_results_jsonl
 from archon.multilane.config import (
+    MultiLaneConfig,
     find_multilane_config,
     find_multilane_local_config,
     load_multilane_config,
+    multilane_config_from_simple,
 )
 from archon.multilane.dispatch import (
     build_assignment_prompt,
@@ -1122,6 +1124,44 @@ def _run_multilane_assignment(
     }
 
 
+def _autogen_lane_settings(state_dir: Path, config: MultiLaneConfig) -> MultiLaneConfig:
+    """Materialize per-lane Claude settings files for non-Anthropic providers.
+
+    For each lane whose provider needs an external API key (kimi,
+    deepseek, …), look up the credentials in ``os.environ`` (already
+    populated from .archon/.env at startup) and write the
+    ``{"env": {ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …}}`` file
+    that ``ensure_lane_settings`` will copy into the lane's worktree.
+
+    Lanes whose API key is missing are disabled in-place with a warning
+    so the rest of the run still proceeds — single-key outage shouldn't
+    take down the whole multi-lane round.
+    """
+    from archon.commands.tooling.env_loader import provider_env
+
+    lanes_dir = state_dir / 'multilane' / 'lanes'
+    lanes_dir.mkdir(parents=True, exist_ok=True)
+
+    for lane in config.lanes:
+        if lane.provider == 'anthropic':
+            continue
+        if lane.claude_settings_path:
+            # Respect a lane that brought its own pre-baked settings file.
+            continue
+        env = provider_env(lane.provider)
+        if env is None:
+            log.warn(
+                f"Lane '{lane.lane_id}': no credentials found for provider "
+                f"'{lane.provider}' in environment / .archon/.env — disabling this lane."
+            )
+            lane.enabled = False
+            continue
+        settings_file = lanes_dir / f'{lane.lane_id}-settings.json'
+        settings_file.write_text(json.dumps({'env': env}, indent=2) + '\n', encoding='utf-8')
+        lane.claude_settings_path = str(settings_file)
+    return config
+
+
 def _run_multilane_execution(
     project_name: str,
     project_path: Path,
@@ -1131,18 +1171,30 @@ def _run_multilane_execution(
     iteration: int,
     verbose_logs: bool,
     model: str,
+    config: 'MultiLaneConfig | None' = None,
 ) -> dict[str, object] | None:
-    config_path = find_multilane_config(state_dir)
-    if config_path is None:
-        log.warn('Multi-lane execution requested but no .archon/multilane/config.* was found')
-        return None
+    # If the caller passed a pre-built config (the new path: typed off
+    # .archon/config.json's ``multilane`` section) use it. Otherwise
+    # fall back to colleague's file-based discovery
+    # (.archon/multilane/config.{json,yaml,toml}) for backwards compat.
+    if config is None:
+        config_path = find_multilane_config(state_dir)
+        if config_path is None:
+            log.warn('Multi-lane execution requested but no config provided and no .archon/multilane/config.* found')
+            return None
+        local_path = find_multilane_local_config(state_dir)
+        config = load_multilane_config(config_path, local_path)
 
     _assert_multilane_clean_baseline(project_path)
-    local_path = find_multilane_local_config(state_dir)
-    config = load_multilane_config(config_path, local_path)
     if not config.enabled:
         log.warn('Multi-lane config exists but is disabled')
         return None
+
+    # For lanes whose provider needs external API credentials (kimi,
+    # deepseek, …), auto-generate the {ANTHROPIC_BASE_URL, …}-shaped
+    # settings file from the project .env. Anthropic lanes don't need
+    # this because Claude Code handles its own auth.
+    config = _autogen_lane_settings(state_dir, config)
 
     summary, assignments = preview_round(
         config=config,
@@ -1468,27 +1520,29 @@ def _run_finalize_phase(
 
 def loop(
     project_path: str = typer.Argument(".", help="Path to Lean project"),
-    max_iterations: int = typer.Option(
-        10, "--max-iterations", "-m", help="Max plan→prover→review cycles.",
+    max_iterations: Optional[int] = typer.Option(
+        None, "--max-iterations", "-m",
+        help="Max plan→prover→review cycles. (default from .archon/config.json or 10)",
     ),
-    max_parallel: int = typer.Option(
-        8, "--max-parallel", help="Max concurrent provers in parallel mode.",
+    max_parallel: Optional[int] = typer.Option(
+        None, "--max-parallel",
+        help="Max concurrent provers in parallel mode. (default from config or 4)",
     ),
     stage: Optional[Stage] = typer.Option(
         None, "--stage", "-s",
         help="Force a stage instead of reading from PROGRESS.md.",
     ),
-    parallel: bool = typer.Option(
-        True, "--parallel/--serial",
-        help="Run provers in parallel (one per file) or serially.",
+    parallel: Optional[bool] = typer.Option(
+        None, "--parallel/--serial",
+        help="Run provers in parallel (one per file) or serially. (default from config or parallel)",
     ),
-    verbose_logs: bool = typer.Option(
-        False, "--verbose-logs",
-        help="Save raw Claude stream events to .raw.jsonl.",
+    verbose_logs: Optional[bool] = typer.Option(
+        None, "--verbose-logs/--no-verbose-logs",
+        help="Save raw Claude stream events to .raw.jsonl. (default from config or off)",
     ),
-    no_review: bool = typer.Option(
-        False, "--no-review",
-        help="Skip review phase after each iteration.",
+    no_review: Optional[bool] = typer.Option(
+        None, "--no-review/--review",
+        help="Skip review phase after each iteration. (default from config or off)",
     ),
     no_refactor: bool = typer.Option(
         False, "--no-refactor",
@@ -1526,20 +1580,11 @@ def loop(
         False, "--open",
         help="Open the dashboard in a browser as soon as it starts.",
     ),
-    multilane_preview: bool = typer.Option(
-        False, "--multilane-preview",
-        help="Preview multi-lane prover assignments and prepare lane worktrees "
-             "instead of launching provers.",
-    ),
-    multilane_execute: bool = typer.Option(
-        False, "--multilane-execute",
-        help="Execute prover assignments across prepared multi-lane worktrees "
-             "(first-clean-wins promotion; recommend --no-review).",
-    ),
-    model: str = typer.Option(
-        DEFAULT_MODEL, "--model", "-M",
+    model: Optional[str] = typer.Option(
+        None, "--model", "-M",
         help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
-             "every plan / refactor / prover / review phase in the loop.",
+             "every plan / refactor / prover / review phase in the loop. "
+             "(default from .archon/config.json or 'opus')",
     ),
 ) -> None:
     """Start the automated plan → prove → review loop.
@@ -1560,6 +1605,35 @@ def loop(
     progress_file = state_dir / "PROGRESS.md"
     log_dir = state_dir / "logs"
     force_stage = stage.value if stage else None
+
+    # ── resolve CLI options against .archon/config.json ──────────────
+    # Precedence: CLI > config.json > built-in defaults. CLI options
+    # default to None as a sentinel for "user didn't set this", so we
+    # can distinguish an explicit --no-review from an unset --no-review.
+    from archon.commands.tooling.project_config import load_project_config, resolve as _resolve
+    from archon.commands.tooling.env_loader import load_env_file as _load_env
+
+    project_config = load_project_config(resolved)
+    loop_cfg = project_config.loop_section()
+    multilane_cfg = project_config.multilane_section()
+
+    # Project-local .env wins over global cwd .env (which cli.py loaded).
+    _load_env(resolved)
+
+    max_iterations = _resolve(max_iterations, section=loop_cfg, key='max_iterations', default=10)
+    max_parallel   = _resolve(max_parallel,   section=loop_cfg, key='max_parallel',   default=4)
+    parallel       = _resolve(parallel,       section=loop_cfg, key='parallel',       default=True)
+    verbose_logs   = _resolve(verbose_logs,   section=loop_cfg, key='verbose_logs',   default=False)
+    no_review      = _resolve(no_review,      section=loop_cfg, key='no_review',      default=False)
+    model          = _resolve(model,          section=loop_cfg, key='model',          default=DEFAULT_MODEL)
+
+    # Multi-lane execution fires automatically when config.json has it
+    # enabled with at least one lane defined. The old --multilane-execute
+    # / --multilane-preview flags are gone — the user controls this
+    # purely through .archon/config.json.
+    multilane_lanes = multilane_cfg.get('lanes') or []
+    multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
+    multilane_preview = False  # legacy variable; kept False so existing dispatch falls through
 
     _preflight(resolved, state_dir, dry_run)
 
@@ -1592,8 +1666,11 @@ def loop(
         "Blueprint server": "enabled" if blueprint_server_flag else "disabled",
         "Logs": str(log_dir),
         "User hints": str(state_dir / "USER_HINTS.md"),
-        "Multi-lane preview": "enabled" if multilane_preview else "disabled",
-        "Multi-lane execute": "enabled" if multilane_execute else "disabled",
+        "Multi-lane": (
+            f"enabled ({len(multilane_lanes)} lane{'s' if len(multilane_lanes) != 1 else ''}: "
+            f"{', '.join(str(l.get('lane_id', l.get('provider', '?'))) for l in multilane_lanes)})"
+            if multilane_execute else "disabled"
+        ),
     }
     if dry_run:
         config["Mode"] = "[yellow]DRY RUN[/yellow]"
@@ -1788,6 +1865,10 @@ def loop(
                     },
                 )
         elif multilane_execute:
+            # Build the lane config from the project-level config.json
+            # multilane section. This is the new path; the older
+            # .archon/multilane/config.* file is no longer required.
+            lane_config = multilane_config_from_simple(multilane_cfg)
             execution_info = _run_multilane_execution(
                 project_name=project_name,
                 project_path=resolved,
@@ -1797,6 +1878,7 @@ def loop(
                 iteration=iter_num_local,
                 verbose_logs=verbose_logs,
                 model=model,
+                config=lane_config,
             )
             if not dry_run and execution_info is not None:
                 write_meta(

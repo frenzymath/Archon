@@ -702,6 +702,32 @@ def _step_inner_git(project_path: Path) -> None:
         log.info(f"Inner git HEAD: {inner.head_sha() or '?'}")
 
 
+def _step_env_and_config(project_path: Path) -> None:
+    """Create .archon/.env and .archon/config.json with sensible defaults.
+
+    Both files are idempotent: existing user content is left alone. The
+    .env is gitignored by both outer (.archon/ rule) and inner git
+    (default-excludes rule, see InnerGit). config.json is tracked by
+    inner git so it's versioned with the project.
+    """
+    from archon.commands.tooling import env_loader, project_config
+
+    log.phase(9, "Project config (.archon/config.json) and .env")
+
+    env_written = env_loader.write_env_template(project_path)
+    if env_written:
+        log.step("Wrote .archon/.env (alternative-provider keys, gitignored)")
+    else:
+        log.step(".archon/.env already exists — preserved")
+
+    cfg_written = project_config.write_default_config(project_path)
+    if cfg_written:
+        log.step("Wrote .archon/config.json with default loop + multilane settings")
+    else:
+        log.step(".archon/config.json already exists — preserved")
+    log.success("Project config ready")
+
+
 def _step_version_stamp(project_path: Path) -> None:
     """Stamp the current CLI version into .archon/VERSION."""
     log.phase(9, "Version stamp")
@@ -808,6 +834,7 @@ def init(
             _step_skills(resolved)
             _step_disable_conflicting_plugins(resolved)
             _step_report_protected(resolved)
+            _step_env_and_config(resolved)
             _step_inner_git(resolved)
             _step_version_stamp(resolved)
             log.success("Verification complete.")
@@ -837,8 +864,8 @@ def init(
     # Always show the protected-declarations summary.
     _step_report_protected(resolved)
 
-    # Inner-git setup + version stamp are last so the initial inner-git
-    # commit captures the full post-init state (including whatever Claude
-    # wrote during the semantic pass).
+    # Project config + .env first (so the inner-git commit below
+    # captures them too), then inner-git setup, then version stamp.
+    _step_env_and_config(resolved)
     _step_inner_git(resolved)
     _step_version_stamp(resolved)

@@ -72,6 +72,12 @@ def main(
 ) -> None:
     """Autonomous Lean 4 Formalization."""
     log.banner(__version__)
+    # Load .archon/.env from the current working directory if it exists.
+    # Cheap (idempotent, no-op when file missing) so doing it on every
+    # command keeps "I just edited .env" working without an extra step.
+    from pathlib import Path as _Path
+    from archon.commands.tooling.env_loader import load_env_file as _load_env
+    _load_env(_Path.cwd())
 
 
 # ── register commands ─────────────────────────────────────────────────

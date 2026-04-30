@@ -221,6 +221,10 @@ class InnerGit:
         "# own checkout sharing this same git-dir; the parent worktree must\n"
         "# not stage them or 'git add' would recurse into nested checkouts.\n"
         ".archon/lanes/\n"
+        "# Per-project secrets — .archon/.env contains alternative-provider\n"
+        "# API keys. Outer git already ignores .archon/, but the inner repo\n"
+        "# DOES track .archon/, so we have to exclude .env here explicitly.\n"
+        ".archon/.env\n"
     )
 
     def _write_default_excludes(self) -> None:

@@ -129,6 +129,37 @@ def load_multilane_config(path: Path, local_path: Path | None = None) -> MultiLa
     )
 
 
+def multilane_config_from_simple(simple: dict) -> MultiLaneConfig:
+    """Build a MultiLaneConfig from .archon/config.json's ``multilane`` section.
+
+    The top-level project config uses a deliberately minimal lane
+    shape — just ``{lane_id, provider, model?}`` — because users only
+    edit it to switch on which providers run in parallel. We fill in
+    the ``worktree`` defaults here so the rest of the multilane runtime
+    keeps using the same ``LaneConfig`` shape it already understands:
+
+    - worktree.path  → ``.archon/lanes/<lane_id>/``  (inner-git worktree)
+    - worktree.branch → ``lane/<lane_id>``
+    - worktree.sync_mode → ``hard-reset``
+    """
+    lanes_out: list[LaneConfig] = []
+    for raw in simple.get('lanes', []) or []:
+        normalized = dict(raw)
+        normalized.setdefault('worktree', {})
+        wt = normalized['worktree']
+        lane_id = str(normalized.get('lane_id') or normalized.get('provider') or 'lane')
+        wt.setdefault('path', f'.archon/lanes/{lane_id}')
+        wt.setdefault('branch', f'lane/{lane_id}')
+        wt.setdefault('sync_mode', 'hard-reset')
+        lanes_out.append(_lane_from_raw(normalized))
+    return MultiLaneConfig(
+        enabled=bool(simple.get('enabled', False)),
+        version=int(simple.get('version', 1)),
+        base_ref=str(simple.get('base_ref') or 'main'),
+        lanes=lanes_out,
+    )
+
+
 def resolve_runtime_paths(state_dir: Path) -> RuntimePaths:
     root = state_dir / 'multilane'
     runtime_dir = root / 'runtime'
