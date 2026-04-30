@@ -38,13 +38,32 @@ function commitForFile(
   return phaseCommits.latest;
 }
 
-function resolveLogPath(logsPath: string, logPath: string): string | null {
+function resolveLogPath(logsPath: string, logPath: string, archonPath?: string): string | null {
   const normalized = path.normalize(logPath).replace(/^(\.\.[/\\])+/, '');
   const full = path.join(logsPath, normalized);
   if (!full.startsWith(logsPath)) return null;
   // For .md files, pass through as-is; for others, default to .jsonl
-  if (full.endsWith('.md') || full.endsWith('.jsonl')) return full;
-  return full + '.jsonl';
+  const candidate = (full.endsWith('.md') || full.endsWith('.jsonl')) ? full : full + '.jsonl';
+  if (fs.existsSync(candidate)) return candidate;
+  // Fallback: multilane lane logs and merge logs aren't always
+  // symlinked into iter_dir/provers/. If the requested path looks like
+  // ``iter-NNN/provers/<slug>__<lane>.jsonl`` (or ``__merge``), peel
+  // the suffix off and try the canonical multilane location:
+  //   <archonPath>/multilane/lanes/<lane>/iter-NNN/provers/<slug>.jsonl
+  //   <archonPath>/multilane/runtime/iter-NNN/merges/<slug>.jsonl
+  if (!archonPath) return candidate;
+  const m = candidate.match(/iter-(\d+)\/provers\/(.+?)__([^/]+)\.jsonl$/);
+  if (!m) return candidate;
+  const [, iterNum, slug, tail] = m;
+  const iterId = `iter-${iterNum}`;
+  if (tail === 'merge') {
+    const mergeFile = path.join(archonPath, 'multilane', 'runtime', iterId, 'merges', `${slug}.jsonl`);
+    if (fs.existsSync(mergeFile)) return mergeFile;
+  } else {
+    const laneFile = path.join(archonPath, 'multilane', 'lanes', tail, iterId, 'provers', `${slug}.jsonl`);
+    if (fs.existsSync(laneFile)) return laneFile;
+  }
+  return candidate;  // missing — let the caller's existsSync return the 404
 }
 
 export function register(fastify: FastifyInstance, paths: ProjectPaths) {
@@ -107,6 +126,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
       // Parallel prover JSONL logs — each gets the commit for its specific file slug.
       const proversDir = path.join(dirPath, 'provers');
+      const seenProverNames = new Set<string>();
       if (fs.existsSync(proversDir) && fs.statSync(proversDir).isDirectory()) {
         for (const f of fs.readdirSync(proversDir).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl')).sort()) {
           const full = path.join(proversDir, f);
@@ -115,6 +135,55 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
             name: f, path: `${dir}/provers/${f}`, size: stat.size, modified: stat.mtime.toISOString(), role: 'prover',
             commit: commitForFile(phaseCommits, 'prover', f),
           });
+          seenProverNames.add(f);
+        }
+      }
+
+      // Multilane fallback: when symlinks weren't created (older
+      // archon, or the symlink call failed silently), the lane JSONLs
+      // live only under .archon/multilane/lanes/<lane>/<iter>/provers/.
+      // Walk that tree and surface them under the SAME logical path
+      // (<iter>/provers/<slug>__<lane>.jsonl) — resolveLogPath knows
+      // how to map the suffix back to the actual file.
+      const lanesRoot = path.join(archonPath, 'multilane', 'lanes');
+      if (fs.existsSync(lanesRoot)) {
+        for (const lane of fs.readdirSync(lanesRoot)) {
+          const laneProversDir = path.join(lanesRoot, lane, dir, 'provers');
+          if (!fs.existsSync(laneProversDir)) continue;
+          for (const f of fs.readdirSync(laneProversDir).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl')).sort()) {
+            const fakeName = `${f.replace('.jsonl', '')}__${lane}.jsonl`;
+            if (seenProverNames.has(fakeName)) continue;  // symlink already covered it
+            try {
+              const stat = fs.statSync(path.join(laneProversDir, f));
+              files.push({
+                name: fakeName,
+                path: `${dir}/provers/${fakeName}`,
+                size: stat.size,
+                modified: stat.mtime.toISOString(),
+                role: 'prover',
+                commit: commitForFile(phaseCommits, 'prover', fakeName),
+              });
+            } catch { /* ignore unreadable entries */ }
+          }
+        }
+      }
+      // Same fallback for merge-agent logs.
+      const mergesDir = path.join(archonPath, 'multilane', 'runtime', dir, 'merges');
+      if (fs.existsSync(mergesDir)) {
+        for (const f of fs.readdirSync(mergesDir).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl')).sort()) {
+          const fakeName = `${f.replace('.jsonl', '')}__merge.jsonl`;
+          if (seenProverNames.has(fakeName)) continue;
+          try {
+            const stat = fs.statSync(path.join(mergesDir, f));
+            files.push({
+              name: fakeName,
+              path: `${dir}/provers/${fakeName}`,
+              size: stat.size,
+              modified: stat.mtime.toISOString(),
+              role: 'prover',
+              commit: commitForFile(phaseCommits, 'prover', fakeName),
+            });
+          } catch { /* ignore */ }
         }
       }
 
@@ -224,7 +293,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get('/api/logs/*', async (req, reply) => {
     const subpath = (req.params as Record<string, string>)['*'];
     if (!subpath) return reply.status(400).send({ error: 'Missing path' });
-    const filePath = resolveLogPath(logsPath, subpath);
+    const filePath = resolveLogPath(logsPath, subpath, archonPath);
     if (!filePath || !fs.existsSync(filePath)) return reply.status(404).send({ error: 'Not found' });
 
     if (filePath.endsWith('.md')) {
@@ -245,7 +314,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   // WebSocket streaming (JSONL only; .md files are static artifacts).
   fastify.get('/api/log-stream/*', { websocket: true }, (socket, req) => {
     const subpath = (req.params as Record<string, string>)['*'] || '';
-    const filePath = resolveLogPath(logsPath, subpath);
+    const filePath = resolveLogPath(logsPath, subpath, archonPath);
     if (!filePath || !fs.existsSync(filePath) || !filePath.endsWith('.jsonl')) {
       socket.send(JSON.stringify({ type: 'error', message: 'Not found or not streamable' }));
       socket.close();
