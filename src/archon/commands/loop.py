@@ -1120,6 +1120,41 @@ def _run_multilane_assignment(
     if target_file.exists():
         _snapshot_baseline(target_file, snap_dir)
 
+    # Always write a status row to the lane's JSONL BEFORE the agent
+    # is invoked. Two reasons:
+    #   1. If Claude itself crashes at startup (bad endpoint, missing
+    #      auth, segfault, ...), the JSONL would otherwise stay empty
+    #      and the dashboard / user has no idea what went wrong.
+    #   2. Live tools that tail the JSONL get an immediate "the lane
+    #      started, here are its assignment params" entry instead of
+    #      a several-second silence.
+    log_jsonl = Path(f"{assignment.log_path}.jsonl")
+
+    def _status(event: str, **fields: object) -> None:
+        try:
+            log_jsonl.parent.mkdir(parents=True, exist_ok=True)
+            row = {'ts': utcnow_iso(), 'event': event, **fields}
+            with open(log_jsonl, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(row) + '\n')
+        except OSError:
+            # If we can't write here we're in deep trouble anyway, but
+            # don't take down the run — log to stderr and continue.
+            log.warn(f"could not append to {log_jsonl}")
+
+    _status(
+        'lane_assignment_started',
+        lane_id=assignment.lane_id,
+        provider=lane_provider,
+        assignment_id=assignment.assignment_id,
+        assigned_file=assignment.assigned_file,
+        worktree_path=str(lane_path),
+        model=model,
+    )
+    log.step(
+        f"  lane '{assignment.lane_id}': starting on {assignment.assigned_file} "
+        f"(log: {log_jsonl})"
+    )
+
     # Surface the lane's log under iter_dir/provers/ so the dashboard's
     # existing prover-log enumeration shows it. Symlink (not copy) so
     # tail-based live UI still works during the run.
@@ -1157,17 +1192,35 @@ def _run_multilane_assignment(
         role_tag += f"/{lane_provider}"
     role_tag += "]"
     before_files = set(_git_diff_files(lane_path))
-    ok = ClaudeAgent(model=model, role=role_tag).run(
-        prompt,
-        cwd=lane_path,
-        log_base=Path(assignment.log_path),
-        verbose_logs=verbose_logs,
-        env_overrides=_prover_env(
-            snap_dir=snap_dir,
-            prover_jsonl=Path(raw_log_path),
-            project_path=lane_path,
-        ),
-        cancel_event=cancel_event,
+    try:
+        ok = ClaudeAgent(model=model, role=role_tag).run(
+            prompt,
+            cwd=lane_path,
+            log_base=Path(assignment.log_path),
+            verbose_logs=verbose_logs,
+            env_overrides=_prover_env(
+                snap_dir=snap_dir,
+                prover_jsonl=Path(raw_log_path),
+                project_path=lane_path,
+            ),
+            cancel_event=cancel_event,
+        )
+    except Exception as e:  # noqa: BLE001 — we record + re-raise
+        # Capture the exception in the JSONL so it's visible from the
+        # dashboard, then propagate so the executor's outer except sees
+        # it and records the assignment as 'exception' in results.
+        import traceback
+        _status(
+            'lane_assignment_exception',
+            lane_id=assignment.lane_id,
+            error=str(e),
+            traceback=traceback.format_exc(),
+        )
+        raise
+    _status(
+        'lane_assignment_finished',
+        lane_id=assignment.lane_id,
+        ok=bool(ok),
     )
     after_files = set(_git_diff_files(lane_path))
     lane_dirty_files = sorted(after_files - before_files)
