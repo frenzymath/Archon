@@ -263,17 +263,86 @@ const TEXT_BLEED = 26;        // how far a centred SHA label can stick past its 
 
 interface CommitPos { commit: GitCommit; x: number; y: number; lane: number; }
 
+// Order branches so a branch is placed adjacent to (and below) the branch
+// it forked from. With first-appearance order, fork edges between far-apart
+// lanes had to bezier across every lane in between — and those beziers
+// crossed each other when several branches forked off the same parent.
+//
+// Algorithm:
+//   1. For each branch, find its fork parent: the branch of the parent of
+//      this branch's earliest commit, when that parent lives on a different
+//      branch. Branches without such a parent (e.g. main) are "roots".
+//   2. DFS the fork tree, visiting children in fork-time order. The result
+//      is a flat lane ordering where related branches are clustered.
+//
+// Edge crossings can still occur for merge commits whose other parents
+// land on a non-adjacent lane, but the common fork-from-main pattern
+// renders cleanly.
+function computeBranchOrder(ordered: GitCommit[]): string[] {
+  const shaToCommit = new Map(ordered.map(c => [c.sha, c] as const));
+  const allBranches = new Set<string>();
+  for (const c of ordered) allBranches.add(c.branch ?? 'main');
+
+  type ForkInfo = { parentBranch: string | null; forkOrder: number };
+  const forkInfo = new Map<string, ForkInfo>();
+  for (const b of allBranches) {
+    const earliestIdx = ordered.findIndex(c => (c.branch ?? 'main') === b);
+    if (earliestIdx < 0) continue;
+    const earliest = ordered[earliestIdx];
+    const parentOnOther = earliest.parents
+      .map(p => shaToCommit.get(p))
+      .find(p => p && (p.branch ?? 'main') !== b) ?? null;
+    forkInfo.set(b, {
+      parentBranch: parentOnOther ? (parentOnOther.branch ?? 'main') : null,
+      forkOrder: earliestIdx,
+    });
+  }
+
+  // parentBranch -> sorted list of child branches (by fork timestamp).
+  const children = new Map<string, string[]>();
+  for (const [b, info] of forkInfo) {
+    if (!info.parentBranch) continue;
+    const arr = children.get(info.parentBranch) ?? [];
+    arr.push(b);
+    children.set(info.parentBranch, arr);
+  }
+  for (const arr of children.values()) {
+    arr.sort((a, b) => (forkInfo.get(a)?.forkOrder ?? 0) - (forkInfo.get(b)?.forkOrder ?? 0));
+  }
+
+  // Roots: branches with no fork parent. Sort with 'main' first (so it's
+  // always lane 0), then by fork-time of the earliest commit, then alpha.
+  const roots = Array.from(allBranches)
+    .filter(b => !forkInfo.get(b)?.parentBranch)
+    .sort((a, b) => {
+      if (a === 'main') return -1;
+      if (b === 'main') return 1;
+      const fa = forkInfo.get(a)?.forkOrder ?? 0;
+      const fb = forkInfo.get(b)?.forkOrder ?? 0;
+      if (fa !== fb) return fa - fb;
+      return a.localeCompare(b);
+    });
+
+  const result: string[] = [];
+  const visited = new Set<string>();
+  function dfs(b: string) {
+    if (visited.has(b)) return;
+    visited.add(b);
+    result.push(b);
+    for (const k of children.get(b) ?? []) dfs(k);
+  }
+  for (const r of roots) dfs(r);
+  // Defensive: pick up any orphan branches (parent branch not in commit list)
+  // so they still render.
+  for (const b of allBranches) if (!visited.has(b)) dfs(b);
+  return result;
+}
+
 function computeGitLayout(commits: GitCommit[], containerW: number) {
   // Display left=oldest, right=newest: reverse the newest-first topo-order array
   const ordered = [...commits].reverse();
 
-  // Collect branches in order of first appearance (oldest-first)
-  const branchOrder: string[] = [];
-  const seen = new Set<string>();
-  for (const c of ordered) {
-    const b = c.branch ?? 'main';
-    if (!seen.has(b)) { seen.add(b); branchOrder.push(b); }
-  }
+  const branchOrder = computeBranchOrder(ordered);
 
   const N = ordered.length;
   // Reserve room for branch labels on the left (PAD_X), the "+" button on the

@@ -132,7 +132,9 @@
 .gitScroll {
   flex: 1;
   overflow-x: auto;
-  overflow-y: hidden;
+  /* Vertical scrollbar when many branches stack the SVG taller than the
+     panel — without auto here the lower lanes get clipped. */
+  overflow-y: auto;
   position: relative;
 }
 
