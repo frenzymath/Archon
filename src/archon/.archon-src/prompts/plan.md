@@ -217,6 +217,23 @@ After a prover reports completion, always verify independently:
 
 Never advance to the next stage based solely on the prover's word.
 
+## Dependency graph
+
+Before scoping objectives, run the bundled dependency-graph script
+instead of reconstructing the dependency map by hand. It parses every
+`.lean` file's imports plus every `blueprint/src/chapters/*.tex` for
+`\lean{…}` / `\uses{…}` / `\proves{…}` / `\leanok` / `\notready`, and
+emits a JSON view of the whole project in well under a second:
+
+```
+${LEAN4_PYTHON_BIN:-python3} "$LEAN4_SCRIPTS/dependency_graph.py" . --format=json
+```
+
+Use `--format=summary` for a one-screen overview, `--format=dot` if
+you need to share the graph elsewhere. Read this once per iteration to
+decide objective ordering — files with no upstream sorries should be
+formalised first, downstream files later.
+
 ## Decomposition Strategy
 
 When a prover is stuck on a large theorem:
