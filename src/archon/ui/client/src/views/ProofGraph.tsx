@@ -263,63 +263,108 @@ const TEXT_BLEED = 26;        // how far a centred SHA label can stick past its 
 
 interface CommitPos { commit: GitCommit; x: number; y: number; lane: number; }
 
-// Order branches so a branch is placed adjacent to (and below) the branch
-// it forked from. With first-appearance order, fork edges between far-apart
-// lanes had to bezier across every lane in between — and those beziers
-// crossed each other when several branches forked off the same parent.
+// Order branches so a branch sits adjacent to (and below) the branch it
+// forked from, with active branches closer to their parent than dead ones.
 //
-// Algorithm:
-//   1. For each branch, find its fork parent: the branch of the parent of
-//      this branch's earliest commit, when that parent lives on a different
-//      branch. Branches without such a parent (e.g. main) are "roots".
-//   2. DFS the fork tree, visiting children in fork-time order. The result
-//      is a flat lane ordering where related branches are clustered.
+// One-lane-per-branch layouts can never eliminate every crossing — a
+// merge edge from a deeply-nested branch back to main always sweeps
+// across whatever sits between them — so this is a heuristic, not a
+// solver. The goal is to make the common cases clean:
 //
-// Edge crossings can still occur for merge commits whose other parents
-// land on a non-adjacent lane, but the common fork-from-main pattern
-// renders cleanly.
+//   1. For each branch, find its fork parent: the parent (on a
+//      different branch) of this branch's earliest commit. Branches
+//      with no such parent are "roots".
+//   2. For each (parent, child) pair, count how many merge edges
+//      cross between them. Pairs with merge edges get treated as a
+//      stronger family bond.
+//   3. DFS the fork tree. When ordering siblings under a parent,
+//      sort by:
+//         - has merge edges back to parent (yes first → adjacent),
+//         - last-activity time (newest first → live branches before
+//           dead ones),
+//         - fork time (earliest first → stable tiebreaker),
+//         - name.
 function computeBranchOrder(ordered: GitCommit[]): string[] {
   const shaToCommit = new Map(ordered.map(c => [c.sha, c] as const));
   const allBranches = new Set<string>();
   for (const c of ordered) allBranches.add(c.branch ?? 'main');
 
-  type ForkInfo = { parentBranch: string | null; forkOrder: number };
-  const forkInfo = new Map<string, ForkInfo>();
+  type Stats = {
+    parentBranch: string | null;
+    forkOrder: number;
+    lastIdx: number;
+    mergeBackToParent: boolean;
+  };
+  const stats = new Map<string, Stats>();
+
   for (const b of allBranches) {
     const earliestIdx = ordered.findIndex(c => (c.branch ?? 'main') === b);
     if (earliestIdx < 0) continue;
+    let lastIdx = earliestIdx;
+    for (let i = ordered.length - 1; i >= earliestIdx; i--) {
+      if ((ordered[i].branch ?? 'main') === b) { lastIdx = i; break; }
+    }
     const earliest = ordered[earliestIdx];
     const parentOnOther = earliest.parents
       .map(p => shaToCommit.get(p))
       .find(p => p && (p.branch ?? 'main') !== b) ?? null;
-    forkInfo.set(b, {
+    stats.set(b, {
       parentBranch: parentOnOther ? (parentOnOther.branch ?? 'main') : null,
       forkOrder: earliestIdx,
+      lastIdx,
+      mergeBackToParent: false,  // populated in next pass
     });
   }
 
-  // parentBranch -> sorted list of child branches (by fork timestamp).
+  // A merge "back to parent" is any commit on the parent branch with
+  // a parent SHA that lives on the child branch. Also true symmetrically
+  // for cross-merges between siblings — we only flag the parent direction
+  // here because it's the ordering signal we need.
+  for (const c of ordered) {
+    const cBranch = c.branch ?? 'main';
+    for (const pSha of c.parents) {
+      const p = shaToCommit.get(pSha);
+      if (!p) continue;
+      const pBranch = p.branch ?? 'main';
+      if (pBranch === cBranch) continue;
+      // c is on the parent branch and merges in something from pBranch
+      // (the would-be child). Mark the child as merging back.
+      const childInfo = stats.get(pBranch);
+      if (childInfo && childInfo.parentBranch === cBranch) {
+        childInfo.mergeBackToParent = true;
+      }
+    }
+  }
+
+  // parentBranch -> ordered list of child branches.
   const children = new Map<string, string[]>();
-  for (const [b, info] of forkInfo) {
+  for (const [b, info] of stats) {
     if (!info.parentBranch) continue;
     const arr = children.get(info.parentBranch) ?? [];
     arr.push(b);
     children.set(info.parentBranch, arr);
   }
-  for (const arr of children.values()) {
-    arr.sort((a, b) => (forkInfo.get(a)?.forkOrder ?? 0) - (forkInfo.get(b)?.forkOrder ?? 0));
+  function childCmp(a: string, b: string): number {
+    const sa = stats.get(a)!, sb = stats.get(b)!;
+    if (sa.mergeBackToParent !== sb.mergeBackToParent) {
+      return sa.mergeBackToParent ? -1 : 1;
+    }
+    if (sa.lastIdx !== sb.lastIdx) return sb.lastIdx - sa.lastIdx;  // newest first
+    if (sa.forkOrder !== sb.forkOrder) return sa.forkOrder - sb.forkOrder;
+    return a.localeCompare(b);
   }
+  for (const arr of children.values()) arr.sort(childCmp);
 
-  // Roots: branches with no fork parent. Sort with 'main' first (so it's
-  // always lane 0), then by fork-time of the earliest commit, then alpha.
+  // Roots: branches with no fork parent. main is pinned to lane 0;
+  // other roots fall in by recency.
   const roots = Array.from(allBranches)
-    .filter(b => !forkInfo.get(b)?.parentBranch)
+    .filter(b => !stats.get(b)?.parentBranch)
     .sort((a, b) => {
       if (a === 'main') return -1;
       if (b === 'main') return 1;
-      const fa = forkInfo.get(a)?.forkOrder ?? 0;
-      const fb = forkInfo.get(b)?.forkOrder ?? 0;
-      if (fa !== fb) return fa - fb;
+      const sa = stats.get(a)!, sb = stats.get(b)!;
+      if (sa.lastIdx !== sb.lastIdx) return sb.lastIdx - sa.lastIdx;
+      if (sa.forkOrder !== sb.forkOrder) return sa.forkOrder - sb.forkOrder;
       return a.localeCompare(b);
     });
 
@@ -332,8 +377,6 @@ function computeBranchOrder(ordered: GitCommit[]): string[] {
     for (const k of children.get(b) ?? []) dfs(k);
   }
   for (const r of roots) dfs(r);
-  // Defensive: pick up any orphan branches (parent branch not in commit list)
-  // so they still render.
   for (const b of allBranches) if (!visited.has(b)) dfs(b);
   return result;
 }

@@ -11,7 +11,9 @@ a hash-check hook for callers that want a finer-grained comparison.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from archon import __version__ as _cli_version
@@ -129,3 +131,67 @@ def warn_if_mismatch(project_path: str | Path) -> VersionStatus:
     if status.should_warn():
         log.warn(status.message())
     return status
+
+
+# ── prompt drift detection ──────────────────────────────────────────────
+
+
+def _hash(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def prompts_drifted(project_path: str | Path) -> list[str]:
+    """Return prompt filenames whose project copy differs from the bundled one.
+
+    Same-version projects can still drift when prompt files in the
+    bundled .archon-src/prompts/ get updated between two CLI runs (e.g.
+    after a git pull). Comparing hashes catches that case independently
+    of the VERSION stamp — we want to surface it because the planner
+    reads the project's copy, not the bundled one.
+
+    User-edited prompt files will also show up here. That's intentional:
+    the user can choose 'keep' on re-init to keep their edits.
+    """
+    project = Path(project_path).resolve()
+    project_prompts = project / ".archon" / "prompts"
+    if not project_prompts.is_dir():
+        return []
+    try:
+        bundled_root = resources.files("archon").joinpath(".archon-src", "prompts")
+    except (ModuleNotFoundError, FileNotFoundError):
+        return []
+
+    drifted: list[str] = []
+    for entry in bundled_root.iterdir():
+        name = entry.name
+        if not name.endswith(".md"):
+            continue
+        bundled_text = entry.read_bytes()
+        project_file = project_prompts / name
+        if not project_file.exists():
+            drifted.append(name)
+            continue
+        if hashlib.sha256(bundled_text).hexdigest() != _hash(project_file):
+            drifted.append(name)
+    return sorted(drifted)
+
+
+def warn_if_prompts_drifted(project_path: str | Path) -> list[str]:
+    """Log a warning when bundled prompts differ from the project's copies.
+
+    Returns the list of drifted prompt names so callers can surface
+    them in their own report. Never blocks — only warns.
+    """
+    drifted = prompts_drifted(project_path)
+    if drifted:
+        log.warn(
+            "Some bundled prompts differ from the project's copies "
+            f"({', '.join(drifted)}). The planner reads the project's "
+            "copies, so it won't see the new content until you re-init:\n"
+            f"    archon init {project_path}   (then pick 'merge' to "
+            "preserve user edits, or 'overwrite' to take the bundled version)"
+        )
+    return drifted

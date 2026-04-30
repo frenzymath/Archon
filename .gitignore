@@ -7,4 +7,6 @@ build
 src/archon/ui/client/node_modules/
 src/archon/ui/client/dist/
 src/archon/ui/server/node_modules/
+# Dashboard runtime PID files — written by the dashboard subprocess.
+src/archon/ui/.archon-ui/
 *.venv

@@ -31,7 +31,7 @@ from archon.commands.tooling.iteration import (
     IterationFinalizationReport,
     commit_phase,
 )
-from archon.commands.tooling.version import warn_if_mismatch
+from archon.commands.tooling.version import warn_if_mismatch, warn_if_prompts_drifted
 from archon.multilane.collect import write_preview_report, write_results_jsonl
 from archon.multilane.config import (
     MultiLaneConfig,
@@ -1765,6 +1765,7 @@ def loop(
     log.header("Archon Loop")
     log.key_value(config)
     warn_if_mismatch(resolved)
+    warn_if_prompts_drifted(resolved)
 
     # Warn (but do not block) if the inner git has leftover agent work.
     # The user may have Ctrl-C'd a previous loop mid-phase, or manually
