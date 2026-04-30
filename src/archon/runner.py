@@ -10,11 +10,54 @@ to take advantage of role tagging and explicit model selection.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from textwrap import dedent
 
 from archon.agent import ClaudeAgent, DEFAULT_MODEL
 from archon.commands.tooling.blueprint import lean_file_to_chapter_slug
+
+
+# ── session-end inspection (multilane) ────────────────────────────────
+#
+# Lane runs sometimes produce a clean ``session_end`` event but exit
+# non-zero (claude propagating a tool failure, for example). The lane
+# collector treats those as success when the session_end summary
+# doesn't contain known failure markers — that judgment lives here so
+# both the lane runtime and the test suite can reuse it.
+
+
+def _read_last_session_end(jsonl_path: str | Path) -> dict | None:
+    path = Path(jsonl_path)
+    if not path.exists():
+        return None
+    last = None
+    for raw_line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if row.get('event') == 'session_end':
+            last = row
+    return last
+
+
+def _session_end_indicates_success(session_end: dict | None) -> bool:
+    if not session_end:
+        return False
+    summary = str(session_end.get('summary') or '').strip().lower()
+    failure_markers = (
+        'api error',
+        'tool_use_error',
+        'error while processing your request',
+        'build failed',
+        'exited with code',
+        'runner_failed',
+    )
+    return not any(marker in summary for marker in failure_markers)
 
 
 # ── context injection helpers ─────────────────────────────────────────
@@ -78,6 +121,7 @@ def _blueprint_chapter_hint(
 
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
+    *, ignore_multilane: bool = False,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
     refs_block = ""
@@ -112,13 +156,23 @@ def build_plan_prompt(
             This REPLACES the older informal/*.md convention. Do not write new informal/*.md
             files — write to chapters/*.tex instead.""")
 
+    multilane_block = ""
+    if ignore_multilane:
+        multilane_block = dedent(f"""
+
+            IMPORTANT EXPERIMENTAL MULTI-LANE RULES:
+            - Treat multi-lane execution as an external runtime detail, not as part of the planning problem.
+            - Do NOT inspect or mention {state_dir}/multilane/, lane worktrees, provider/model names, or lane-specific outcomes in PROGRESS.md, task_pending.md, or task_done.md.
+            - Plan only from the main project state, the current .lean files, and the standard Archon state files.
+            - Keep the plan lane-agnostic unless the user explicitly asks otherwise.""")
+
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block
 
 
 def build_prover_prompt(
@@ -215,6 +269,7 @@ def run_claude(
     extra_args: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     role: str | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> bool:
     """Run `claude -p` with optional JSONL logging.
 
@@ -243,4 +298,5 @@ def run_claude(
         log_base=log_base,
         verbose_logs=verbose_logs,
         extra_args=extra_args,
+        env_overrides=env_overrides,
     )

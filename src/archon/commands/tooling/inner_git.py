@@ -217,6 +217,10 @@ class InnerGit:
         "*.pyc\n"
         "__pycache__/\n"
         ".git/\n"
+        "# Multi-lane worktrees live under .archon/lanes/<id>/ — each is its\n"
+        "# own checkout sharing this same git-dir; the parent worktree must\n"
+        "# not stage them or 'git add' would recurse into nested checkouts.\n"
+        ".archon/lanes/\n"
     )
 
     def _write_default_excludes(self) -> None:
@@ -369,6 +373,55 @@ class InnerGit:
 
     def has_branch(self, name: str) -> bool:
         return _safe_branch_name(name) in self.list_branches()
+
+    # ── worktrees (multilane) ─────────────────────────────────────────
+
+    def worktree_add(
+        self, path: str | Path, branch: str, *, base_ref: str = "HEAD",
+    ) -> None:
+        """Create a linked worktree at ``path`` checked out on ``branch``.
+
+        If the branch already exists, it's checked out as-is. Otherwise a
+        new branch is forked at ``base_ref``. The lane modules call this
+        when preparing concurrent prover lanes — each lane gets its own
+        worktree under .archon/lanes/<lane-id>/ sharing the inner git dir.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        safe = _safe_branch_name(branch)
+        if self.has_branch(safe):
+            self._run(["worktree", "add", str(path), safe])
+        else:
+            self._run(["worktree", "add", str(path), "-b", safe, base_ref])
+
+    def worktree_remove(self, path: str | Path, *, force: bool = False) -> None:
+        """Remove a previously-added linked worktree."""
+        args = ["worktree", "remove"]
+        if force:
+            args.append("--force")
+        args.append(str(path))
+        self._run(args, check=False)
+
+    def worktree_list(self) -> list[dict[str, str]]:
+        """Return ``git worktree list --porcelain`` parsed into entries."""
+        if not self.is_initialized():
+            return []
+        r = self._run(["worktree", "list", "--porcelain"], check=False)
+        if r.returncode != 0:
+            return []
+        entries: list[dict[str, str]] = []
+        cur: dict[str, str] = {}
+        for line in r.stdout.splitlines():
+            if not line.strip():
+                if cur:
+                    entries.append(cur)
+                    cur = {}
+                continue
+            key, _, val = line.partition(" ")
+            cur[key] = val
+        if cur:
+            entries.append(cur)
+        return entries
 
 
 # ── helpers ───────────────────────────────────────────────────────────

@@ -40,13 +40,21 @@ def is_complete(progress_file: Path, force_stage: str | None = None) -> bool:
 
 
 def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]:
-    """Extract .lean file paths from ## Current Objectives in PROGRESS.md."""
+    """Extract assigned .lean objective files from ## Current Objectives.
+
+    The plan agent writes objectives in two shapes — a per-objective
+    ``###`` heading whose title contains the file, or a flat bullet list.
+    We prefer headings (one objective per file is the new convention)
+    and fall back to bullets only when no heading matches. Bullets that
+    contain a ``:`` before the file token are skipped because those tend
+    to describe sub-tasks (``- depends on: Foo.lean``) rather than
+    assignments.
+    """
     if not progress_file.exists():
         return []
 
     text = progress_file.read_text()
 
-    # Extract the Current Objectives section
     in_section = False
     section_lines: list[str] = []
     for line in text.splitlines():
@@ -58,17 +66,28 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
         if in_section:
             section_lines.append(line)
 
-    section_text = "\n".join(section_lines)
+    heading_pattern = re.compile(r'^\s*###\s+.*?(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)')
+    bullet_pattern = re.compile(r'^\s*[-*]\s+.*?(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)')
 
-    # Find .lean filenames in **bold** or `backticks`
-    pattern = re.compile(r'(?:\*\*|`)([^*`]+\.lean)(?:\*\*|`)')
-    candidates = pattern.findall(section_text)
+    candidates: list[str] = []
+    for line in section_lines:
+        match = heading_pattern.search(line)
+        if match:
+            candidates.append(match.group(1).strip())
 
-    # Resolve to actual paths
+    if not candidates:
+        for line in section_lines:
+            match = bullet_pattern.search(line)
+            if not match:
+                continue
+            prefix = line[:match.start(1)]
+            if ':' in prefix:
+                continue
+            candidates.append(match.group(1).strip())
+
     results: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
-        # Search for the file in the project, excluding .lake/lake-packages
         for match in project_path.rglob(f"*{candidate}"):
             if ".lake" in match.parts or "lake-packages" in match.parts:
                 continue

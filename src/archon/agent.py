@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -215,22 +216,29 @@ class ClaudeAgent:
         log_base: Path | None = None,
         verbose_logs: bool = False,
         extra_args: list[str] | None = None,
+        env_overrides: dict[str, str] | None = None,
     ) -> bool:
         """Headless ``claude -p`` run.
 
         Returns True iff claude exited zero. When ``log_base`` is given,
         writes ``{log_base}.jsonl`` (parsed events) and optionally
         ``{log_base}.raw.jsonl`` (verbose stream).
+
+        ``env_overrides`` is forwarded to the spawned subprocess so lane
+        runs can set provider-specific variables (e.g. an alternate
+        ``ANTHROPIC_BASE_URL``) without leaking them into the parent.
         """
         cmd = ["claude", "-p", prompt, *self._common_flags()]
         if extra_args:
             cmd.extend(extra_args)
 
+        env = self._build_env(env_overrides)
+
         self._announce_model()
 
         if log_base is None:
-            return subprocess.run(cmd, cwd=cwd).returncode == 0
-        return self._run_with_logging(cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs)
+            return subprocess.run(cmd, cwd=cwd, env=env).returncode == 0
+        return self._run_with_logging(cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs, env=env)
 
     def run_interactive(
         self,
@@ -260,6 +268,18 @@ class ClaudeAgent:
         suffix = f" ({self.role})" if self.role else ""
         log.info(f"Agent model: {self.model}{suffix}")
 
+    def _build_env(self, overrides: dict[str, str] | None) -> dict[str, str]:
+        env = os.environ.copy()
+        if overrides:
+            env.update(overrides)
+        # Running as root in CI / containers needs IS_SANDBOX=1 so the
+        # claude CLI doesn't refuse to start. Lanes set this from the
+        # outside too (per-provider settings), which always takes
+        # priority over the default below.
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            env.setdefault("IS_SANDBOX", "1")
+        return env
+
     def _run_with_logging(
         self,
         cmd: list[str],
@@ -267,6 +287,7 @@ class ClaudeAgent:
         cwd: Path,
         log_base: Path,
         verbose_logs: bool,
+        env: dict[str, str] | None = None,
     ) -> bool:
         log_base.parent.mkdir(parents=True, exist_ok=True)
         jsonl = f"{log_base}.jsonl"
@@ -291,6 +312,7 @@ class ClaudeAgent:
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 cwd=cwd,
+                env=env,
             )
             parser_proc = subprocess.Popen(
                 [sys.executable, "-u", "-c", parser_script],
@@ -300,8 +322,40 @@ class ClaudeAgent:
             assert claude_proc.stdout is not None
             claude_proc.stdout.close()
             parser_proc.wait()
-            claude_proc.wait()
-        return claude_proc.returncode == 0
+            # The parser exits as soon as it sees session_end; if
+            # claude is still running (e.g. a slow MCP teardown),
+            # signal it to wind down and SIGKILL after a short grace.
+            try:
+                claude_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _terminate_process(claude_proc, sig=signal.SIGTERM)
+                try:
+                    claude_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(claude_proc, sig=signal.SIGKILL)
+                    claude_proc.wait()
+
+        # Some lanes legitimately end with a non-zero return even though
+        # the assistant produced a valid session_end — check the JSONL
+        # before flagging the run as failed.
+        from archon.runner import _read_last_session_end, _session_end_indicates_success
+
+        if claude_proc.returncode == 0:
+            return True
+        session_end = _read_last_session_end(jsonl)
+        return _session_end_indicates_success(session_end)
+
+
+def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.send_signal(sig)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
 
 
 __all__ = ["ClaudeAgent", "DEFAULT_MODEL"]

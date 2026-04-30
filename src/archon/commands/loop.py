@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 import webbrowser
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -32,6 +32,19 @@ from archon.commands.tooling.iteration import (
     commit_phase,
 )
 from archon.commands.tooling.version import warn_if_mismatch
+from archon.multilane.collect import write_preview_report, write_results_jsonl
+from archon.multilane.config import (
+    find_multilane_config,
+    find_multilane_local_config,
+    load_multilane_config,
+)
+from archon.multilane.dispatch import (
+    build_assignment_prompt,
+    execute_assignments_preview_only,
+    prepare_lanes_for_preview,
+    preview_round,
+    write_preview_runtime_artifacts,
+)
 from archon.runner import (
     build_parallel_prover_prompt,
     build_plan_prompt,
@@ -86,6 +99,303 @@ def _warn_if_inner_dirty(project_path: Path) -> None:
         "run or manual edits. This is fine: the loop will pick up whatever "
         "is on disk, and the next phase commit will capture it."
     )
+
+
+# ── multilane local guards ───────────────────────────────────────────
+
+
+def _git_diff_files(repo_path: Path) -> list[str]:
+    """Return outer-git modified files (best-effort; empty if outer git is absent)."""
+    result = subprocess.run(
+        ['git', '-C', str(repo_path), 'diff', '--name-only', 'HEAD'],
+        capture_output=True,
+        text=True,
+    )
+    return sorted({line.strip() for line in (result.stdout or '').splitlines() if line.strip()})
+
+
+def _non_archon_dirty_files(repo_path: Path) -> list[str]:
+    return [path for path in _git_diff_files(repo_path) if not path.startswith('.archon/')]
+
+
+def _restore_repo_paths(repo_path: Path, paths: list[str]) -> None:
+    if not paths:
+        return
+    subprocess.run(
+        ['git', '-C', str(repo_path), 'checkout', '--', *sorted(set(paths))],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _record_assignment_file(
+    *,
+    raw_path: str,
+    lane_root: Path,
+    project_root: Path,
+    changed_files: set[str],
+    escaped_files: set[str],
+) -> None:
+    rel = str(raw_path or '').strip()
+    if not rel.endswith('.lean'):
+        return
+    resolved = (lane_root / rel).resolve() if not os.path.isabs(rel) else Path(rel).resolve()
+    try:
+        changed_files.add(str(resolved.relative_to(lane_root)))
+        return
+    except ValueError:
+        pass
+    try:
+        escaped_files.add(str(resolved.relative_to(project_root)))
+    except ValueError:
+        escaped_files.add(str(resolved))
+
+
+def _assignment_code_snapshot_files(
+    log_path: Path, lane_path: Path, project_path: Path,
+) -> tuple[list[str], list[str], str]:
+    lane_root = lane_path.resolve()
+    project_root = project_path.resolve()
+    changed_files: set[str] = set()
+    escaped_files: set[str] = set()
+    source = 'none'
+    if not log_path.exists():
+        return [], [], source
+
+    fallback_tool_paths: list[str] = []
+    for raw_line in log_path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        event = row.get('event')
+        if event == 'code_snapshot':
+            _record_assignment_file(
+                raw_path=str(row.get('file') or ''),
+                lane_root=lane_root,
+                project_root=project_root,
+                changed_files=changed_files,
+                escaped_files=escaped_files,
+            )
+            if changed_files or escaped_files:
+                source = 'code_snapshot'
+        elif event == 'tool_call' and row.get('tool') in {'Edit', 'Write'}:
+            file_path = str((row.get('input') or {}).get('file_path') or '').strip()
+            if file_path.endswith('.lean'):
+                fallback_tool_paths.append(file_path)
+
+    if not changed_files and not escaped_files and fallback_tool_paths:
+        for file_path in fallback_tool_paths:
+            _record_assignment_file(
+                raw_path=file_path,
+                lane_root=lane_root,
+                project_root=project_root,
+                changed_files=changed_files,
+                escaped_files=escaped_files,
+            )
+        if changed_files or escaped_files:
+            source = 'tool_call'
+
+    return sorted(changed_files), sorted(escaped_files), source
+
+
+def _assert_multilane_clean_baseline(project_path: Path) -> None:
+    dirty = _non_archon_dirty_files(project_path)
+    if dirty:
+        log.error('Multi-lane execute requires a clean main project tree (outside .archon).')
+        for path in dirty:
+            log.error(f'  dirty: {path}')
+        raise typer.Exit(1)
+
+
+def _multilane_lock_path(state_dir: Path) -> Path:
+    return state_dir / 'multilane' / 'execute.lock.json'
+
+
+def _acquire_multilane_lock(state_dir: Path) -> Path:
+    lock_path = _multilane_lock_path(state_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        try:
+            payload = json.loads(lock_path.read_text(encoding='utf-8'))
+        except Exception:
+            payload = {}
+        pid = payload.get('pid')
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                pass
+            else:
+                log.error(f'Multi-lane execute already running for this project (pid {pid}).')
+                raise typer.Exit(1)
+        lock_path.unlink(missing_ok=True)
+    lock_path.write_text(
+        json.dumps({'pid': os.getpid(), 'startedAt': utcnow_iso()}) + '\n',
+        encoding='utf-8',
+    )
+    return lock_path
+
+
+def _release_multilane_lock(lock_path: Path | None) -> None:
+    if lock_path is None:
+        return
+    try:
+        if lock_path.exists():
+            lock_path.unlink()
+    except OSError:
+        pass
+
+
+def _preferred_writeback_lane(config) -> str | None:
+    for lane in config.enabled_lanes():
+        if lane.provider == 'anthropic':
+            return lane.lane_id
+    enabled = config.enabled_lanes()
+    return enabled[0].lane_id if enabled else None
+
+
+def _select_writeback_rows(
+    results: list[dict[str, object]],
+    *,
+    preferred_lane_id: str | None,
+    limit: int = 1,
+) -> list[dict[str, object]]:
+    if not preferred_lane_id or limit <= 0:
+        return []
+    candidates: list[dict[str, object]] = []
+    for row in sorted(results, key=lambda r: str(r.get('assignment_id', ''))):
+        if row.get('lane_id') != preferred_lane_id:
+            continue
+        if not row.get('success'):
+            continue
+        if not row.get('assigned_file_only') or not row.get('verification_passed'):
+            continue
+        if not row.get('assigned_file') or not row.get('worktree_path'):
+            continue
+        candidates.append(row)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _git_commit_paths(repo_path: Path, paths: list[str], message: str) -> str | None:
+    """Commit specific paths in the outer git repo. Returns the commit SHA, or
+    None if there was nothing to commit OR the outer git is unavailable. Any
+    git failure (e.g. not initialized) is swallowed — first-clean-wins
+    semantics work whether or not an outer git is present.
+    """
+    unique_paths = sorted({path for path in paths if path})
+    if not unique_paths:
+        return None
+    try:
+        subprocess.run(
+            ['git', '-C', str(repo_path), 'add', '--', *unique_paths],
+            check=True, capture_output=True, text=True,
+        )
+        diff = subprocess.run(
+            ['git', '-C', str(repo_path), 'diff', '--cached', '--quiet', '--', *unique_paths],
+            capture_output=True,
+            text=True,
+        )
+        if diff.returncode == 0:
+            return None
+        subprocess.run(
+            ['git', '-C', str(repo_path), 'commit', '-m', message],
+            check=True, capture_output=True, text=True,
+        )
+        head = subprocess.run(
+            ['git', '-C', str(repo_path), 'rev-parse', 'HEAD'],
+            check=True, capture_output=True, text=True,
+        )
+        return (head.stdout or '').strip() or None
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _promote_writeback_rows(
+    *,
+    project_path: Path,
+    rows: list[dict[str, object]],
+    iteration: int,
+) -> dict[str, object]:
+    promoted_files: list[str] = []
+    for row in rows:
+        rel = str(row.get('assigned_file') or '')
+        worktree_path = str(row.get('worktree_path') or '')
+        if not rel or not worktree_path:
+            row['promoted_to_main'] = False
+            continue
+        src = Path(worktree_path) / rel
+        dst = project_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        promoted_files.append(rel)
+        row['promoted_to_main'] = True
+
+    commit_sha = None
+    if promoted_files:
+        lane = rows[0].get('lane_id', 'lane') if rows else 'lane'
+        message = f"multilane promote({lane}): iter-{iteration:03d} " + ', '.join(promoted_files)
+        commit_sha = _git_commit_paths(project_path, promoted_files, message)
+    for row in rows:
+        row['promotion_commit'] = commit_sha
+    return {'promoted_files': promoted_files, 'promotion_commit': commit_sha}
+
+
+def _assignment_success(
+    *,
+    ok: bool,
+    assigned_file: str,
+    changed_files: list[str],
+    escaped_files: list[str],
+    summary_path: str | None,
+    assigned_file_path: str | None = None,
+) -> tuple[bool, str | None]:
+    if not ok:
+        return False, 'runner_failed'
+    if escaped_files:
+        return False, 'escaped_worktree'
+    if summary_path is None:
+        return False, 'missing_summary'
+    if not changed_files:
+        return False, 'no_file_change'
+    changed = set(changed_files)
+    if changed != {assigned_file}:
+        return False, 'cross_file_change'
+    if assigned_file_path is not None:
+        try:
+            text = Path(assigned_file_path).read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            return False, 'missing_assigned_file'
+        if 'sorry' in text:
+            return False, 'placeholder_remaining'
+    return True, None
+
+
+def _prover_env(
+    snap_dir: Path | str,
+    prover_jsonl: Path | str,
+    project_path: Path | str,
+    serial_mode: bool = False,
+) -> dict[str, str]:
+    """Return the env-var dict for prover runs without mutating os.environ.
+
+    Used by the multi-lane runner, which feeds env overrides directly to
+    the Claude agent rather than mutating the global environment (since
+    multiple lanes run concurrently in threads).
+    """
+    env_vars = {
+        "ARCHON_SNAPSHOT_DIR": str(snap_dir),
+        "ARCHON_PROVER_JSONL": str(prover_jsonl),
+        "ARCHON_PROJECT_PATH": str(project_path),
+    }
+    if serial_mode:
+        env_vars["ARCHON_SERIAL_MODE"] = "true"
+    return env_vars
 
 
 # ── dashboard auto-launch ─────────────────────────────────────────────
@@ -631,6 +941,319 @@ def _run_parallel_provers(
     _emit_parallel_round_end(iter_dir, file_count, failed)
 
 
+# ── multilane runners ─────────────────────────────────────────────────
+
+
+def _run_multilane_assignment(
+    *,
+    project_name: str,
+    project_path: Path,
+    state_dir: Path,
+    stage: str,
+    assignment,
+    verbose_logs: bool,
+    model: str,
+) -> dict[str, object]:
+    lane_path = Path(assignment.worktree_path)
+    slug = _file_slug(assignment.assigned_file)
+    snap_dir = Path(assignment.log_path).parent.parent / 'snapshots' / slug
+    raw_log_path = str(Path(str(assignment.log_path) + '.jsonl'))
+    target_file = lane_path / assignment.assigned_file
+    if target_file.exists():
+        _snapshot_baseline(target_file, snap_dir)
+
+    prompt = build_assignment_prompt(
+        project_name=project_name,
+        lane_project_path=lane_path,
+        state_dir=state_dir,
+        stage=stage,
+        assignment=assignment,
+    )
+    before_files = set(_git_diff_files(lane_path))
+    ok = ClaudeAgent(model=model, role="prover").run(
+        prompt,
+        cwd=lane_path,
+        log_base=Path(assignment.log_path),
+        verbose_logs=verbose_logs,
+        env_overrides=_prover_env(
+            snap_dir=snap_dir,
+            prover_jsonl=Path(raw_log_path),
+            project_path=lane_path,
+        ),
+    )
+    after_files = set(_git_diff_files(lane_path))
+    lane_dirty_files = sorted(after_files - before_files)
+    changed_files, escaped_files, attribution_source = _assignment_code_snapshot_files(
+        Path(raw_log_path), lane_path, project_path,
+    )
+
+    summary_path = assignment.result_path if Path(assignment.result_path).exists() else None
+    assigned_file_only = bool(changed_files) and set(changed_files) == {assignment.assigned_file}
+    strict_success, failure_reason = _assignment_success(
+        ok=ok,
+        assigned_file=assignment.assigned_file,
+        changed_files=changed_files,
+        escaped_files=escaped_files,
+        summary_path=summary_path,
+        assigned_file_path=str(target_file),
+    )
+    return {
+        'assignment_id': assignment.assignment_id,
+        'lane_id': assignment.lane_id,
+        'job_id': assignment.job_id,
+        'assigned_file': assignment.assigned_file,
+        'worktree_path': assignment.worktree_path,
+        'success': strict_success,
+        'failure_reason': failure_reason,
+        'changed_files': changed_files,
+        'escaped_files': escaped_files,
+        'attribution_source': attribution_source,
+        'lane_dirty_files': lane_dirty_files,
+        'assigned_file_only': assigned_file_only,
+        'verification_passed': ok,
+        'summary_path': summary_path,
+        'raw_log_path': raw_log_path,
+        'promote_readiness': 'manual-only',
+    }
+
+
+def _run_multilane_execution(
+    project_name: str,
+    project_path: Path,
+    state_dir: Path,
+    progress_file: Path,
+    stage: str,
+    iteration: int,
+    verbose_logs: bool,
+    model: str,
+) -> dict[str, object] | None:
+    config_path = find_multilane_config(state_dir)
+    if config_path is None:
+        log.warn('Multi-lane execution requested but no .archon/multilane/config.* was found')
+        return None
+
+    _assert_multilane_clean_baseline(project_path)
+    local_path = find_multilane_local_config(state_dir)
+    config = load_multilane_config(config_path, local_path)
+    if not config.enabled:
+        log.warn('Multi-lane config exists but is disabled')
+        return None
+
+    summary, assignments = preview_round(
+        config=config,
+        progress_file=progress_file,
+        project_path=project_path,
+        state_dir=state_dir,
+        iteration=iteration,
+        stage=stage,
+    )
+    prepared = prepare_lanes_for_preview(config=config, project_path=project_path)
+    runtime_info = write_preview_runtime_artifacts(
+        state_dir=state_dir,
+        iteration=iteration,
+        assignments=assignments,
+        prepared=prepared,
+    )
+
+    results: list[dict[str, object]] = []
+    failures = 0
+    restored_main_paths: set[str] = set()
+    results_path = state_dir / 'multilane' / 'runtime' / f'iter-{iteration:03d}-results.jsonl'
+    lock_path = _acquire_multilane_lock(state_dir)
+    try:
+        assignment_count = len(assignments)
+        if assignment_count == 0:
+            write_results_jsonl(results_path, results)
+        else:
+            log.info(f'Launching {assignment_count} multi-lane assignment(s) concurrently')
+            with ThreadPoolExecutor(max_workers=assignment_count) as pool:
+                futures = {
+                    pool.submit(
+                        _run_multilane_assignment,
+                        project_name=project_name,
+                        project_path=project_path,
+                        state_dir=state_dir,
+                        stage=stage,
+                        assignment=assignment,
+                        verbose_logs=verbose_logs,
+                        model=model,
+                    ): assignment
+                    for assignment in assignments
+                }
+                for future in as_completed(futures):
+                    assignment = futures[future]
+                    try:
+                        row = future.result()
+                    except Exception as exc:
+                        failures += 1
+                        row = {
+                            'assignment_id': assignment.assignment_id,
+                            'lane_id': assignment.lane_id,
+                            'job_id': assignment.job_id,
+                            'assigned_file': assignment.assigned_file,
+                            'worktree_path': assignment.worktree_path,
+                            'success': False,
+                            'failure_reason': 'exception',
+                            'changed_files': [],
+                            'assigned_file_only': False,
+                            'verification_passed': False,
+                            'summary_path': None,
+                            'raw_log_path': str(Path(str(assignment.log_path) + '.jsonl')),
+                            'promote_readiness': 'manual-only',
+                            'error': str(exc),
+                        }
+                        log.warn(
+                            f"  Lane {assignment.lane_id} :: {assignment.assigned_file} -> exception: {exc}"
+                        )
+                    else:
+                        escaped_files = [str(path) for path in row.get('escaped_files', [])]
+                        if escaped_files:
+                            _restore_repo_paths(project_path, escaped_files)
+                            restored_main_paths.update(escaped_files)
+                        if not row['success']:
+                            failures += 1
+                        status = 'ok' if row['success'] else f"error ({row.get('failure_reason')})"
+                        log.info(
+                            f"  Lane {assignment.lane_id} :: {assignment.assigned_file} -> {status}"
+                        )
+                    results.append(row)
+                    write_results_jsonl(results_path, results)
+    finally:
+        _release_multilane_lock(lock_path)
+
+    contamination = _non_archon_dirty_files(project_path)
+    if contamination:
+        failures += 1
+        log.warn('Main project tree was modified during multi-lane execution; marking run contaminated.')
+        for path in contamination:
+            log.warn(f'  contaminated: {path}')
+
+    promotion_info = {'promoted_files': [], 'promotion_commit': None, 'preferred_lane_id': None}
+    if not contamination:
+        preferred_lane_id = _preferred_writeback_lane(config)
+        promotion_info['preferred_lane_id'] = preferred_lane_id
+        promote_rows = _select_writeback_rows(results, preferred_lane_id=preferred_lane_id, limit=1)
+        if promote_rows:
+            promotion_info.update(
+                _promote_writeback_rows(
+                    project_path=project_path, rows=promote_rows, iteration=iteration,
+                )
+            )
+
+    results.sort(key=lambda row: str(row.get('assignment_id', '')))
+    write_results_jsonl(results_path, results)
+
+    report_path = state_dir / 'multilane' / 'reports' / f'iter-{iteration:03d}-execution.md'
+    lines = [
+        '# Multi-lane execution summary',
+        '',
+        f"- lanes: {summary.get('lane_count', 0)}",
+        f"- jobs: {summary.get('job_count', 0)}",
+        f"- assignments: {summary.get('assignment_count', 0)}",
+        f"- failures: {failures}",
+    ]
+    if promotion_info.get('promoted_files'):
+        lines.extend(['', '## Promoted to main', *[f'- {path}' for path in promotion_info['promoted_files']]])
+        if promotion_info.get('promotion_commit'):
+            lines.append(f"- commit: {promotion_info['promotion_commit']}")
+    if restored_main_paths:
+        lines.extend([
+            '', '## Escaped main-checkout edits reverted to HEAD',
+            *[f'- {path}' for path in sorted(restored_main_paths)],
+        ])
+    if contamination:
+        lines.extend(['', '## Main-tree contamination', *[f'- {path}' for path in contamination]])
+    lines.extend(['', '## Results'])
+    for row in results:
+        lines.append(
+            f"- {row['lane_id']} :: {row['job_id']} :: success={row['success']} "
+            f"reason={row.get('failure_reason')} changed={row['changed_files']}"
+        )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    log.panel(
+        f"Executed multi-lane prover round.\n"
+        f"Lanes: {summary.get('lane_count', 0)}\n"
+        f"Jobs: {summary.get('job_count', 0)}\n"
+        f"Assignments: {summary.get('assignment_count', 0)}\n"
+        f"Failures: {failures}\n"
+        f"Report: {report_path}",
+        title='Multi-lane execution',
+        style='green' if failures == 0 else 'yellow',
+    )
+    return {
+        'summary': summary,
+        'prepared': prepared,
+        'assignments': assignments,
+        'results': results,
+        'results_path': str(results_path),
+        'report_path': str(report_path),
+        'promoted_files': promotion_info.get('promoted_files', []),
+        'promotion_commit': promotion_info.get('promotion_commit'),
+        **runtime_info,
+    }
+
+
+def _run_multilane_preview(
+    project_path: Path,
+    state_dir: Path,
+    progress_file: Path,
+    stage: str,
+    iteration: int,
+) -> dict[str, object] | None:
+    config_path = find_multilane_config(state_dir)
+    if config_path is None:
+        log.warn('Multi-lane preview requested but no .archon/multilane/config.* was found')
+        return None
+
+    local_path = find_multilane_local_config(state_dir)
+    config = load_multilane_config(config_path, local_path)
+    if not config.enabled:
+        log.warn('Multi-lane config exists but is disabled')
+        return None
+
+    summary, assignments = preview_round(
+        config=config,
+        progress_file=progress_file,
+        project_path=project_path,
+        state_dir=state_dir,
+        iteration=iteration,
+        stage=stage,
+    )
+    prepared = prepare_lanes_for_preview(config=config, project_path=project_path)
+    runtime_info = write_preview_runtime_artifacts(
+        state_dir=state_dir,
+        iteration=iteration,
+        assignments=assignments,
+        prepared=prepared,
+    )
+
+    report_path = state_dir / 'multilane' / 'reports' / f'iter-{iteration:03d}-preview.md'
+    write_preview_report(report_path=report_path, summary=summary, prepared=prepared)
+    results = execute_assignments_preview_only(assignments)
+    results_path = state_dir / 'multilane' / 'runtime' / f'iter-{iteration:03d}-results.jsonl'
+    write_results_jsonl(results_path, results)
+
+    log.panel(
+        f"Preview only — no prover launched.\n"
+        f"Lanes: {summary.get('lane_count', 0)}\n"
+        f"Jobs: {summary.get('job_count', 0)}\n"
+        f"Assignments: {summary.get('assignment_count', 0)}\n"
+        f"Report: {report_path}",
+        title='Multi-lane preview',
+        style='cyan',
+    )
+    return {
+        'summary': summary,
+        'prepared': prepared,
+        'assignments': assignments,
+        'results_path': str(results_path),
+        'report_path': str(report_path),
+        **runtime_info,
+    }
+
+
 # ── review phase ──────────────────────────────────────────────────────
 
 
@@ -780,6 +1403,16 @@ def loop(
         False, "--open",
         help="Open the dashboard in a browser as soon as it starts.",
     ),
+    multilane_preview: bool = typer.Option(
+        False, "--multilane-preview",
+        help="Preview multi-lane prover assignments and prepare lane worktrees "
+             "instead of launching provers.",
+    ),
+    multilane_execute: bool = typer.Option(
+        False, "--multilane-execute",
+        help="Execute prover assignments across prepared multi-lane worktrees "
+             "(first-clean-wins promotion; recommend --no-review).",
+    ),
     model: str = typer.Option(
         DEFAULT_MODEL, "--model", "-M",
         help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
@@ -836,9 +1469,18 @@ def loop(
         "Blueprint server": "enabled" if blueprint_server_flag else "disabled",
         "Logs": str(log_dir),
         "User hints": str(state_dir / "USER_HINTS.md"),
+        "Multi-lane preview": "enabled" if multilane_preview else "disabled",
+        "Multi-lane execute": "enabled" if multilane_execute else "disabled",
     }
     if dry_run:
         config["Mode"] = "[yellow]DRY RUN[/yellow]"
+
+    if multilane_execute and not no_review:
+        log.warn(
+            "Multi-lane execution MVP currently works best with --no-review; "
+            "review will be skipped for this run."
+        )
+        no_review = True
 
     log.header("Archon Loop")
     log.key_value(config)
@@ -921,7 +1563,10 @@ def loop(
         # ── Phase 1: Plan ──
         log.phase(1, "Plan agent")
         plan_start = time.monotonic()
-        plan_prompt = build_plan_prompt(project_name, resolved, state_dir, current_stage)
+        plan_prompt = build_plan_prompt(
+            project_name, resolved, state_dir, current_stage,
+            ignore_multilane=multilane_preview or multilane_execute,
+        )
 
         if dry_run:
             log.step("[dry-run] Plan prompt:")
@@ -998,7 +1643,54 @@ def loop(
         if not dry_run:
             write_meta(iter_meta, **{"prover.status": "running"})
 
-        if parallel:
+        if multilane_preview:
+            preview_info = _run_multilane_preview(
+                project_path=resolved,
+                state_dir=state_dir,
+                progress_file=progress_file,
+                stage=current_stage,
+                iteration=iter_num_local,
+            )
+            if not dry_run and preview_info is not None:
+                write_meta(
+                    iter_meta,
+                    **{
+                        "prover.mode": "multilane-preview",
+                        "prover.multilanePreview": True,
+                        "prover.multilaneReport": preview_info["report_path"],
+                        "prover.multilaneAssignments": preview_info["summary"].get("assignment_count", 0),
+                        "prover.multilaneAssignmentsJsonl": preview_info["assignments_path"],
+                        "prover.multilanePreparedJsonl": preview_info["prepared_path"],
+                        "prover.multilaneResultsJsonl": preview_info["results_path"],
+                    },
+                )
+        elif multilane_execute:
+            execution_info = _run_multilane_execution(
+                project_name=project_name,
+                project_path=resolved,
+                state_dir=state_dir,
+                progress_file=progress_file,
+                stage=current_stage,
+                iteration=iter_num_local,
+                verbose_logs=verbose_logs,
+                model=model,
+            )
+            if not dry_run and execution_info is not None:
+                write_meta(
+                    iter_meta,
+                    **{
+                        "prover.mode": "multilane-execute",
+                        "prover.multilaneExecute": True,
+                        "prover.multilaneReport": execution_info["report_path"],
+                        "prover.multilaneAssignments": execution_info["summary"].get("assignment_count", 0),
+                        "prover.multilaneAssignmentsJsonl": execution_info["assignments_path"],
+                        "prover.multilanePreparedJsonl": execution_info["prepared_path"],
+                        "prover.multilaneResultsJsonl": execution_info["results_path"],
+                        "prover.promotedFiles": execution_info.get("promoted_files", []),
+                        "prover.promotionCommit": execution_info.get("promotion_commit"),
+                    },
+                )
+        elif parallel:
             _run_parallel_provers(
                 project_name, resolved, state_dir, current_stage,
                 iter_dir, iter_meta, max_parallel, verbose_logs, dry_run, model,
