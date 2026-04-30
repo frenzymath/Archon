@@ -1306,6 +1306,7 @@ def _run_multilane_execution(
     iteration: int,
     verbose_logs: bool,
     model: str,
+    max_parallel: int = 4,
     config: 'MultiLaneConfig | None' = None,
 ) -> dict[str, object] | None:
     # If the caller passed a pre-built config (the new path: typed off
@@ -1359,7 +1360,19 @@ def _run_multilane_execution(
         if assignment_count == 0:
             write_results_jsonl(results_path, results)
         else:
-            log.info(f'Launching {assignment_count} multi-lane assignment(s) concurrently')
+            # Each lane gets up to ``max_parallel`` concurrent files —
+            # mirrors non-multilane parallel-prover semantics. The
+            # remaining (lane, file) jobs queue inside the executor and
+            # start as workers free up. This is what makes early-stop
+            # useful with many files: when a slow lane is cancelled on
+            # file F, its worker frees up and pulls the next file off
+            # the queue automatically.
+            num_lanes = max(1, len(config.enabled_lanes()))
+            workers = max(1, min(assignment_count, max_parallel * num_lanes))
+            log.info(
+                f'Launching {assignment_count} multi-lane assignment(s) '
+                f'({workers} concurrent slots = {max_parallel} per lane × {num_lanes} lanes)'
+            )
             iter_dir = state_dir / 'logs' / f'iter-{iteration:03d}'
             # Map lane_id -> provider so each assignment's log line tells
             # the user whether it's hitting Anthropic, Moonshot, OpenAI, ...
@@ -1406,7 +1419,7 @@ def _run_multilane_execution(
                 t.start()
                 grace_timers.append(t)
 
-            with ThreadPoolExecutor(max_workers=assignment_count) as pool:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = {
                     pool.submit(
                         _run_multilane_assignment,
@@ -1795,6 +1808,15 @@ def loop(
              "every plan / refactor / prover / review phase in the loop. "
              "(default from .archon/config.json or 'opus')",
     ),
+    from_phase: Optional[str] = typer.Option(
+        None, "--from",
+        help="Skip earlier phases on the FIRST iteration so you can resume "
+             "after stopping mid-iteration. Choices: plan, refactor, prover, "
+             "review. E.g. '--from prover' keeps the existing PROGRESS.md and "
+             "REFACTOR_DIRECTIVE.md, skips plan + refactor, and starts the "
+             "first iteration at the prover phase. Subsequent iterations run "
+             "the full sequence as usual.",
+    ),
 ) -> None:
     """Start the automated plan → prove → review loop.
 
@@ -1843,6 +1865,24 @@ def loop(
     multilane_lanes = multilane_cfg.get('lanes') or []
     multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
     multilane_preview = False  # legacy variable; kept False so existing dispatch falls through
+
+    # Resolve --from <phase> into the set of phases to skip on the
+    # FIRST iteration only. Chosen phase + everything after it runs;
+    # earlier phases get skipped. After iter 1 the loop runs normally.
+    _PHASES = ("plan", "refactor", "prover", "review")
+    skip_first_iter: set[str] = set()
+    if from_phase:
+        from_norm = from_phase.strip().lower()
+        if from_norm not in _PHASES:
+            log.error(
+                f"--from must be one of {', '.join(_PHASES)} "
+                f"(got '{from_phase}')"
+            )
+            raise typer.Exit(2)
+        for ph in _PHASES:
+            if ph == from_norm:
+                break
+            skip_first_iter.add(ph)
 
     _preflight(resolved, state_dir, dry_run)
 
@@ -1938,6 +1978,14 @@ def loop(
             log.success("PROGRESS.md says COMPLETE. Exiting loop.")
             break
 
+        # ``--from <phase>`` only affects the first iteration; subsequent
+        # iterations always run the full plan→refactor→prover→review.
+        skip_now = skip_first_iter if i == 0 else set()
+        if skip_now:
+            log.info(
+                f"--from set: skipping {', '.join(sorted(skip_now))} on this iteration."
+            )
+
         log.iteration(i + 1, max_iterations, current_stage, project_name)
         if dashboard_url:
             log.step(f"Live view: {dashboard_url}")
@@ -1968,39 +2016,45 @@ def loop(
             log.step(f"Log dir: {iter_dir}")
 
         # ── Phase 1: Plan ──
-        log.phase(1, "Plan agent")
-        plan_start = time.monotonic()
-        plan_prompt = build_plan_prompt(
-            project_name, resolved, state_dir, current_stage,
-            ignore_multilane=multilane_preview or multilane_execute,
-        )
-
-        if dry_run:
-            log.step("[dry-run] Plan prompt:")
-            print(plan_prompt)
+        if "plan" in skip_now:
+            log.phase(1, "Plan agent — skipped (--from)")
+            current_stage = read_stage(progress_file, force_stage)
         else:
-            plan_log = iter_dir / "plan"
-            ClaudeAgent(model=model, role="plan").run(
-                plan_prompt, cwd=resolved, log_base=plan_log, verbose_logs=verbose_logs,
+            log.phase(1, "Plan agent")
+            plan_start = time.monotonic()
+            plan_prompt = build_plan_prompt(
+                project_name, resolved, state_dir, current_stage,
+                ignore_multilane=multilane_preview or multilane_execute,
             )
 
-        plan_secs = int(time.monotonic() - plan_start)
-        log.info(f"Plan phase finished ({plan_secs}s)")
-        if not dry_run:
-            write_meta(iter_meta, **{"plan.status": "done", "plan.durationSecs": plan_secs})
-            commit_phase(
-                resolved, iter_num=iter_num_local, phase="plan",
-                summary=f"stage={current_stage} ({plan_secs}s)",
-            )
+            if dry_run:
+                log.step("[dry-run] Plan prompt:")
+                print(plan_prompt)
+            else:
+                plan_log = iter_dir / "plan"
+                ClaudeAgent(model=model, role="plan").run(
+                    plan_prompt, cwd=resolved, log_base=plan_log, verbose_logs=verbose_logs,
+                )
 
-        if is_complete(progress_file, force_stage):
-            log.success("PROGRESS.md says COMPLETE. Exiting loop.")
-            break
+            plan_secs = int(time.monotonic() - plan_start)
+            log.info(f"Plan phase finished ({plan_secs}s)")
+            if not dry_run:
+                write_meta(iter_meta, **{"plan.status": "done", "plan.durationSecs": plan_secs})
+                commit_phase(
+                    resolved, iter_num=iter_num_local, phase="plan",
+                    summary=f"stage={current_stage} ({plan_secs}s)",
+                )
 
-        current_stage = read_stage(progress_file, force_stage)
+            if is_complete(progress_file, force_stage):
+                log.success("PROGRESS.md says COMPLETE. Exiting loop.")
+                break
+
+            current_stage = read_stage(progress_file, force_stage)
 
         # ── Phase 2: Refactor (conditional) ──
-        if not no_refactor and not dry_run:
+        if "refactor" in skip_now:
+            log.phase(2, "Refactor agent — skipped (--from)")
+        elif not no_refactor and not dry_run:
             directive = _read_refactor_directive(state_dir)
             if directive:
                 _run_refactor_phase(
@@ -2044,121 +2098,128 @@ def loop(
                 current_stage = read_stage(progress_file, force_stage)
 
         # ── Phase 3: Prover ──
-        log.phase(3, f"Prover agent(s) — {'parallel' if parallel else 'serial'}")
-
-        prover_start = time.monotonic()
-        if not dry_run:
-            write_meta(iter_meta, **{"prover.status": "running"})
-
-        if multilane_preview:
-            preview_info = _run_multilane_preview(
-                project_path=resolved,
-                state_dir=state_dir,
-                progress_file=progress_file,
-                stage=current_stage,
-                iteration=iter_num_local,
-            )
-            if not dry_run and preview_info is not None:
-                write_meta(
-                    iter_meta,
-                    **{
-                        "prover.mode": "multilane-preview",
-                        "prover.multilanePreview": True,
-                        "prover.multilaneReport": preview_info["report_path"],
-                        "prover.multilaneAssignments": preview_info["summary"].get("assignment_count", 0),
-                        "prover.multilaneAssignmentsJsonl": preview_info["assignments_path"],
-                        "prover.multilanePreparedJsonl": preview_info["prepared_path"],
-                        "prover.multilaneResultsJsonl": preview_info["results_path"],
-                    },
-                )
-        elif multilane_execute:
-            # Build the lane config from the project-level config.json
-            # multilane section. This is the new path; the older
-            # .archon/multilane/config.* file is no longer required.
-            lane_config = multilane_config_from_simple(multilane_cfg)
-            execution_info = _run_multilane_execution(
-                project_name=project_name,
-                project_path=resolved,
-                state_dir=state_dir,
-                progress_file=progress_file,
-                stage=current_stage,
-                iteration=iter_num_local,
-                verbose_logs=verbose_logs,
-                model=model,
-                config=lane_config,
-            )
-            if not dry_run and execution_info is not None:
-                write_meta(
-                    iter_meta,
-                    **{
-                        "prover.mode": "multilane-execute",
-                        "prover.multilaneExecute": True,
-                        "prover.multilaneReport": execution_info["report_path"],
-                        "prover.multilaneAssignments": execution_info["summary"].get("assignment_count", 0),
-                        "prover.multilaneAssignmentsJsonl": execution_info["assignments_path"],
-                        "prover.multilanePreparedJsonl": execution_info["prepared_path"],
-                        "prover.multilaneResultsJsonl": execution_info["results_path"],
-                        "prover.promotedFiles": execution_info.get("promoted_files", []),
-                        "prover.promotionCommit": execution_info.get("promotion_commit"),
-                    },
-                )
-        elif parallel:
-            _run_parallel_provers(
-                project_name, resolved, state_dir, current_stage,
-                iter_dir, iter_meta, max_parallel, verbose_logs, dry_run, model,
-                dashboard_url=dashboard_url,
-                blueprint_url=blueprint_url,
-            )
+        if "prover" in skip_now:
+            log.phase(3, "Prover agent(s) — skipped (--from)")
+            current_stage = read_stage(progress_file, force_stage)
         else:
-            # Serial mode — no per-file blueprint pointer since we don't know
-            # which file gets touched in which order. Plan agent's objectives
-            # mention the chapters.
-            prover_prompt = build_prover_prompt(project_name, resolved, state_dir, current_stage)
-            if dry_run:
-                log.step("[dry-run] Prover prompt:")
-                print(prover_prompt)
-            else:
-                archive_task_results(state_dir, iter_dir)
+            log.phase(3, f"Prover agent(s) — {'parallel' if parallel else 'serial'}")
 
-                prover_log = iter_dir / "prover"
-                sorry_files = parse_objective_files(progress_file, resolved)
-                if sorry_files:
-                    for sf in sorry_files:
-                        srel = _relpath(sf, resolved)
-                        sslug = _file_slug(srel)
-                        ssnap = iter_dir / "snapshots" / sslug
-                        _snapshot_baseline(sf, ssnap)
+            prover_start = time.monotonic()
+            if not dry_run:
+                write_meta(iter_meta, **{"prover.status": "running"})
 
-                old_env = _set_prover_env(
-                    snap_dir=iter_dir / "snapshots",
-                    prover_jsonl=Path(str(prover_log) + ".jsonl"),
+            if multilane_preview:
+                preview_info = _run_multilane_preview(
                     project_path=resolved,
-                    serial_mode=True,
+                    state_dir=state_dir,
+                    progress_file=progress_file,
+                    stage=current_stage,
+                    iteration=iter_num_local,
                 )
-                try:
-                    ClaudeAgent(model=model, role="prover").run(
-                        prover_prompt, cwd=resolved,
-                        log_base=prover_log, verbose_logs=verbose_logs,
+                if not dry_run and preview_info is not None:
+                    write_meta(
+                        iter_meta,
+                        **{
+                            "prover.mode": "multilane-preview",
+                            "prover.multilanePreview": True,
+                            "prover.multilaneReport": preview_info["report_path"],
+                            "prover.multilaneAssignments": preview_info["summary"].get("assignment_count", 0),
+                            "prover.multilaneAssignmentsJsonl": preview_info["assignments_path"],
+                            "prover.multilanePreparedJsonl": preview_info["prepared_path"],
+                            "prover.multilaneResultsJsonl": preview_info["results_path"],
+                        },
                     )
-                finally:
-                    _unset_prover_env(old_env)
+            elif multilane_execute:
+                # Build the lane config from the project-level config.json
+                # multilane section. This is the new path; the older
+                # .archon/multilane/config.* file is no longer required.
+                lane_config = multilane_config_from_simple(multilane_cfg)
+                execution_info = _run_multilane_execution(
+                    project_name=project_name,
+                    project_path=resolved,
+                    state_dir=state_dir,
+                    progress_file=progress_file,
+                    stage=current_stage,
+                    iteration=iter_num_local,
+                    verbose_logs=verbose_logs,
+                    model=model,
+                    max_parallel=max_parallel,
+                    config=lane_config,
+                )
+                if not dry_run and execution_info is not None:
+                    write_meta(
+                        iter_meta,
+                        **{
+                            "prover.mode": "multilane-execute",
+                            "prover.multilaneExecute": True,
+                            "prover.multilaneReport": execution_info["report_path"],
+                            "prover.multilaneAssignments": execution_info["summary"].get("assignment_count", 0),
+                            "prover.multilaneAssignmentsJsonl": execution_info["assignments_path"],
+                            "prover.multilanePreparedJsonl": execution_info["prepared_path"],
+                            "prover.multilaneResultsJsonl": execution_info["results_path"],
+                            "prover.promotedFiles": execution_info.get("promoted_files", []),
+                            "prover.promotionCommit": execution_info.get("promotion_commit"),
+                        },
+                    )
+            elif parallel:
+                _run_parallel_provers(
+                    project_name, resolved, state_dir, current_stage,
+                    iter_dir, iter_meta, max_parallel, verbose_logs, dry_run, model,
+                    dashboard_url=dashboard_url,
+                    blueprint_url=blueprint_url,
+                )
+            else:
+                # Serial mode — no per-file blueprint pointer since we don't know
+                # which file gets touched in which order. Plan agent's objectives
+                # mention the chapters.
+                prover_prompt = build_prover_prompt(project_name, resolved, state_dir, current_stage)
+                if dry_run:
+                    log.step("[dry-run] Prover prompt:")
+                    print(prover_prompt)
+                else:
+                    archive_task_results(state_dir, iter_dir)
 
-        prover_secs = int(time.monotonic() - prover_start)
-        log.info(f"Prover phase finished ({prover_secs}s)")
-        if dashboard_url:
-            log.step(f"Inspect diffs: {dashboard_url}/diffs")
-        if not dry_run:
-            write_meta(iter_meta, **{"prover.status": "done", "prover.durationSecs": prover_secs})
-            mid_sorry = _count_sorries(resolved)
-            commit_phase(
-                resolved, iter_num=iter_num_local, phase="prover",
-                summary=(f"all-provers sorry={mid_sorry} ({prover_secs}s)"
-                         if mid_sorry is not None
-                         else f"all-provers ({prover_secs}s)"),
-            )
+                    prover_log = iter_dir / "prover"
+                    sorry_files = parse_objective_files(progress_file, resolved)
+                    if sorry_files:
+                        for sf in sorry_files:
+                            srel = _relpath(sf, resolved)
+                            sslug = _file_slug(srel)
+                            ssnap = iter_dir / "snapshots" / sslug
+                            _snapshot_baseline(sf, ssnap)
+
+                    old_env = _set_prover_env(
+                        snap_dir=iter_dir / "snapshots",
+                        prover_jsonl=Path(str(prover_log) + ".jsonl"),
+                        project_path=resolved,
+                        serial_mode=True,
+                    )
+                    try:
+                        ClaudeAgent(model=model, role="prover").run(
+                            prover_prompt, cwd=resolved,
+                            log_base=prover_log, verbose_logs=verbose_logs,
+                        )
+                    finally:
+                        _unset_prover_env(old_env)
+
+            prover_secs = int(time.monotonic() - prover_start)
+            log.info(f"Prover phase finished ({prover_secs}s)")
+            if dashboard_url:
+                log.step(f"Inspect diffs: {dashboard_url}/diffs")
+            if not dry_run:
+                write_meta(iter_meta, **{"prover.status": "done", "prover.durationSecs": prover_secs})
+                mid_sorry = _count_sorries(resolved)
+                commit_phase(
+                    resolved, iter_num=iter_num_local, phase="prover",
+                    summary=(f"all-provers sorry={mid_sorry} ({prover_secs}s)"
+                             if mid_sorry is not None
+                             else f"all-provers ({prover_secs}s)"),
+                )
 
         # ── Phase 4: Review ──
-        if not no_review and not dry_run:
+        if "review" in skip_now:
+            log.phase(4, "Review agent — skipped (--from)")
+        elif not no_review and not dry_run:
             log.phase(4, "Review agent")
             review_start = time.monotonic()
             write_meta(iter_meta, **{"review.status": "running"})
