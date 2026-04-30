@@ -98,11 +98,18 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
                 continue
             candidates.append(match.group(1).strip())
 
+    # Multilane copies the project tree into .archon/lanes/<lane>/ for
+    # each lane's worktree. Without excluding .archon, rglob finds the
+    # lane's copy *first* and the planner ends up assigning every prover
+    # to e.g. ".archon/lanes/anthropic/Foo.lean" — which then resolves
+    # to nonsense relative paths inside other lanes' worktrees.
+    SKIP_PARTS = {".lake", "lake-packages", ".archon"}
+
     results: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
         for match in project_path.rglob(f"*{candidate}"):
-            if ".lake" in match.parts or "lake-packages" in match.parts:
+            if any(part in SKIP_PARTS for part in match.parts):
                 continue
             resolved = str(match.resolve())
             if resolved not in seen:

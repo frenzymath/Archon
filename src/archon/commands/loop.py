@@ -1238,6 +1238,16 @@ def _run_multilane_assignment(
         summary_path=summary_path,
         assigned_file_path=str(target_file),
     )
+    # When the run failed for the catch-all "runner_failed" reason,
+    # peek at the lane's session_end summary to refine the diagnosis —
+    # rate limits, auth failures, context overflows, network blips all
+    # deserve their own label so the user can act on them. The plain
+    # "runner_failed" stays as the fallback when nothing matches.
+    if not strict_success and failure_reason == 'runner_failed':
+        from archon.runner import _read_last_session_end, _session_end_failure_kind
+        kind = _session_end_failure_kind(_read_last_session_end(raw_log_path))
+        if kind is not None:
+            failure_reason = kind
     return {
         'assignment_id': assignment.assignment_id,
         'lane_id': assignment.lane_id,
@@ -2052,20 +2062,46 @@ def loop(
         iter_meta: Path | None = None
         iter_num_local: int = 0
         if not dry_run:
-            iter_num_local = next_iter_num(log_dir)
-            iter_dir = log_dir / f"iter-{iter_num_local:03d}"
+            # When --from <phase> is used on the FIRST iteration, the
+            # user wants to RESUME the previous run, not start fresh.
+            # Reuse the most recent iter-NNN dir so logs / snapshots /
+            # phase-stamped meta entries land alongside whatever the
+            # earlier run produced. Subsequent iterations always create
+            # new dirs as usual.
+            reuse_last = i == 0 and bool(skip_now) and log_dir.exists()
+            last_iter = None
+            if reuse_last:
+                existing = sorted(
+                    int(d.name[5:]) for d in log_dir.iterdir()
+                    if d.is_dir() and d.name.startswith('iter-')
+                    and d.name[5:].isdigit()
+                )
+                if existing:
+                    last_iter = existing[-1]
+            if last_iter is not None:
+                iter_num_local = last_iter
+                iter_dir = log_dir / f"iter-{iter_num_local:03d}"
+                log.info(f"--from: resuming iter-{iter_num_local:03d} "
+                         f"(use existing log dir, no new iteration created)")
+            else:
+                iter_num_local = next_iter_num(log_dir)
+                iter_dir = log_dir / f"iter-{iter_num_local:03d}"
             iter_meta = iter_dir / "meta.json"
             iter_dir.mkdir(parents=True, exist_ok=True)
             if parallel:
                 (iter_dir / "provers").mkdir(exist_ok=True)
-            write_meta(
-                iter_meta,
-                iteration=iter_num_local,
-                stage=current_stage,
-                mode="parallel" if parallel else "serial",
-                startedAt=utcnow_iso(),
-            )
-            write_meta(iter_meta, **{"plan.status": "running"})
+            # Don't clobber the existing meta.json on a resume — only
+            # write the bootstrap fields if the file didn't already
+            # exist (or is empty).
+            if not iter_meta.exists() or iter_meta.stat().st_size == 0:
+                write_meta(
+                    iter_meta,
+                    iteration=iter_num_local,
+                    stage=current_stage,
+                    mode="parallel" if parallel else "serial",
+                    startedAt=utcnow_iso(),
+                )
+            write_meta(iter_meta, **{"plan.status": "running" if "plan" not in skip_now else "skipped"})
             log.step(f"Log dir: {iter_dir}")
 
         # ── Phase 1: Plan ──

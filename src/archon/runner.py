@@ -60,6 +60,39 @@ def _session_end_indicates_success(session_end: dict | None) -> bool:
     return not any(marker in summary for marker in failure_markers)
 
 
+def _session_end_failure_kind(session_end: dict | None) -> str | None:
+    """Classify a non-success session_end so the caller can report the
+    real cause rather than a generic ``runner_failed``.
+
+    Returns ``None`` when the summary doesn't match any known pattern —
+    callers should fall back to ``runner_failed`` in that case.
+    """
+    if not session_end:
+        return None
+    summary = str(session_end.get('summary') or '').strip().lower()
+    # Rate / quota signals from Anthropic, Moonshot, OpenAI, and the
+    # bundled LiteLLM proxy all mention 429 or "rate limit" or TPD/RPM.
+    if (
+        '429' in summary
+        or 'rate limit' in summary
+        or 'rate_limit' in summary
+        or 'rate-limit' in summary
+        or 'tpd' in summary
+        or 'rpm' in summary
+        or 'tokens per day' in summary
+        or 'tokens per minute' in summary
+        or 'organization' in summary and 'limit' in summary
+    ):
+        return 'rate_limited'
+    if 'context length' in summary or 'context_length_exceeded' in summary or 'too many tokens' in summary:
+        return 'context_overflow'
+    if 'auth' in summary and ('failed' in summary or 'invalid' in summary or '401' in summary or '403' in summary):
+        return 'auth_failed'
+    if 'connection' in summary and ('refused' in summary or 'reset' in summary):
+        return 'network_error'
+    return None
+
+
 # ── context injection helpers ─────────────────────────────────────────
 
 
