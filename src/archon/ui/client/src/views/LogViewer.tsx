@@ -128,17 +128,29 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
 
             let displayName: string;
             if (isProver) {
+              // Slug shape:
+              //   non-multilane:   "<dir>_<dir>_<filename>"
+              //   multilane lane:  "<file_slug>__<lane>"
+              //   multilane merge: "<file_slug>__merge"
+              // Display: "<lane>//<filename>.lean" for multilane,
+              // "<filename>.lean" otherwise. Full slug stays in the
+              // tooltip via the existing `title` attribute.
               const base = f.name.replace('.jsonl', '');
-              // Multilane log convention: "<file_slug>__<lane>" (or
-              // "<file_slug>__merge"). Use the last "__" as the
-              // separator and show just the lane / "merge" tag — the
-              // long file slug is preserved in the title tooltip.
               const splitIdx = base.lastIndexOf('__');
+              let lane: string | null = null;
+              let fileSlug: string;
               if (splitIdx >= 0) {
-                displayName = base.slice(splitIdx + 2);
+                lane = base.slice(splitIdx + 2);
+                fileSlug = base.slice(0, splitIdx);
               } else {
-                displayName = base.replace(/_/g, '/');
+                fileSlug = base;
               }
+              const lastUnderscore = fileSlug.lastIndexOf('_');
+              const fileBase = lastUnderscore >= 0
+                ? fileSlug.slice(lastUnderscore + 1)
+                : fileSlug;
+              const fileName = fileBase ? `${fileBase}.lean` : '';
+              displayName = lane ? `${lane}//${fileName}` : fileName;
             } else if (isArtifact) {
               // For .md artifacts we already show the role prefix — no extra name needed
               displayName = '';
