@@ -201,52 +201,96 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     }
 
     // Assign a primary branch to each commit from its ref decorations.
-    // HEAD-decorated refs claim first so the current branch becomes the
-    // trunk in the UI (ancestors render on HEAD's lane rather than on a
-    // sibling branch's lane).
+    //
+    // The naive approach — claim by any ref the commit carries — gets
+    // wrong answers when a `lane/*` branch tip happens to sit on a
+    // commit that is also reachable from main. Concretely:
+    //
+    //   main:     A — B — C — D — E (HEAD)
+    //                   ↑
+    //                   lane/anthropic, lane/kimi (both stuck here
+    //                   from a prior multilane round; never advanced)
+    //
+    // C carries only `lane/*` refs (it has no main ref because main's
+    // tip is E). The naive ref-claim loop labels C as `lane/anthropic`,
+    // and propagation then carries that lane label backward to A and
+    // B too. The visibility filter drops everything → user sees only
+    // D and E.
+    //
+    // The fix is to give branch labels in *priority order*: HEAD's
+    // branch first (walks the entire main ancestry along first
+    // parents, claiming every commit as `main`), then non-lane branch
+    // tips, then lane branch tips last. By the time lane refs are
+    // considered, every commit reachable from main is already claimed,
+    // so lane refs only stick to commits that are genuinely lane-only
+    // work (forward of main).
     const branchAt = new Map<string, string>();
+    const bySha = new Map<string, GitCommit>();
+    for (const c of commits) bySha.set(c.sha, c);
+
     const cleanRef = (ref: string) => ref.replace(/^HEAD -> /, '').trim();
     const isUsableRef = (clean: string) =>
       !!clean && !clean.startsWith('tag:') && !clean.startsWith('origin/') && clean !== 'HEAD';
+    const isLane = (b: string | undefined) => !!b && b.startsWith('lane/');
+
+    // Walk first-parent ancestry from `tip`, claiming each unclaimed
+    // commit for `branch`.
+    function claimFirstParentChain(tip: string, branch: string) {
+      let cur: string | undefined = tip;
+      const seen = new Set<string>();
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        if (!branchAt.has(cur)) branchAt.set(cur, branch);
+        const next = bySha.get(cur);
+        cur = next?.parents[0];
+      }
+    }
+
+    // Pass 1: HEAD's branch first. This is `main` in the inner-archon
+    // git repo by default but the user can branch off via `archon
+    // branch …`, in which case HEAD points at that user branch.
     for (const c of commits) {
       for (const ref of c.refs) {
         if (!ref.startsWith('HEAD -> ')) continue;
         const clean = cleanRef(ref);
-        if (isUsableRef(clean) && !branchAt.has(c.sha)) branchAt.set(c.sha, clean);
-      }
-    }
-    for (const c of commits) {
-      for (const ref of c.refs) {
-        const clean = cleanRef(ref);
-        if (isUsableRef(clean) && !branchAt.has(c.sha)) branchAt.set(c.sha, clean);
+        if (isUsableRef(clean)) claimFirstParentChain(c.sha, clean);
       }
     }
 
-    // Propagate branch from CHILD to parent — an ancestor sits on the
-    // lane of the descendant that actually reaches it. Without this, a
-    // fork-point commit that happens to be another branch's tip would
-    // incorrectly stamp its label onto the sibling branch's commits.
-    // --topo-order (newest first): children are at lower indices than
-    // their parents, so walking 0..n-1 visits children before parents.
-    const childrenOf = new Map<string, string[]>();
-    const bySha = new Map<string, GitCommit>();
+    // Pass 2: every other non-lane branch tip claims its first-parent
+    // ancestry too. User-created branches from `archon branch` land
+    // here.
     for (const c of commits) {
-      bySha.set(c.sha, c);
+      for (const ref of c.refs) {
+        const clean = cleanRef(ref);
+        if (!isUsableRef(clean) || isLane(clean)) continue;
+        claimFirstParentChain(c.sha, clean);
+      }
+    }
+
+    // Pass 3: lane tips claim their *new* (unclaimed) work. Anything
+    // already claimed by main / a user branch stays where it was.
+    for (const c of commits) {
+      for (const ref of c.refs) {
+        const clean = cleanRef(ref);
+        if (!isUsableRef(clean) || !isLane(clean)) continue;
+        claimFirstParentChain(c.sha, clean);
+      }
+    }
+
+    // Build the children index for the propagation fallback below.
+    const childrenOf = new Map<string, string[]>();
+    for (const c of commits) {
       for (const p of c.parents) {
         const arr = childrenOf.get(p);
         if (arr) arr.push(c.sha);
         else childrenOf.set(p, [c.sha]);
       }
     }
-    // When a commit is the fork point for both `main` and one or more
-    // `lane/*` branches, all of those tips list this commit as their
-    // first parent. The propagation must NOT pick a lane child over a
-    // main child — otherwise historical main commits inherit `lane/…`
-    // and get filtered out of the visible graph. So we sweep first-
-    // parent children twice: pass 1 only accepts non-lane branches;
-    // pass 2 accepts anything as a last resort (the commit only has
-    // lane descendants and was never reachable from main anyway).
-    const isLane = (b: string | undefined) => !!b && b.startsWith('lane/');
+    // The first-parent ancestry walks above already cover everything
+    // that's reachable from a tip. The fallback below catches commits
+    // that are only reachable via SECOND-parent edges (e.g. merge
+    // commits) — rare in Archon's history but worth handling.
     for (let i = 0; i < commits.length; i++) {
       const c = commits[i];
       if (branchAt.has(c.sha)) continue;
