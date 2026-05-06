@@ -64,11 +64,22 @@ class ReviewPhase(Phase):
 
         log.step("Extracting attempt data from prover logs...")
         provers_dir = ctx.iter_dir / "provers"
-        if provers_dir.exists() and list(provers_dir.glob("*.jsonl")):
+        # Take only the parsed `.jsonl` files (skip `.raw.jsonl`). Cancelled
+        # lanes can leave dangling symlinks if the parser was killed before
+        # writing — `Path.exists()` returns False for those, so we skip
+        # them rather than crash the whole loop on read_text().
+        parsed_logs = [
+            p for p in sorted(provers_dir.glob("*.jsonl"))
+            if not p.name.endswith(".raw.jsonl") and p.exists()
+        ] if provers_dir.exists() else []
+        if parsed_logs:
             combined = ctx.iter_dir / "provers-combined.jsonl"
             with combined.open("w") as out:
-                for jf in sorted(provers_dir.glob("*.jsonl")):
-                    out.write(jf.read_text())
+                for jf in parsed_logs:
+                    try:
+                        out.write(jf.read_text())
+                    except OSError as e:
+                        log.warn(f"skipping unreadable prover log {jf.name}: {e}")
         else:
             combined = ctx.iter_dir / "prover.jsonl"
 

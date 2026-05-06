@@ -54,6 +54,11 @@ class MultiLaneConfig:
     enabled: bool = False
     version: int = 1
     base_ref: str = 'main'
+    # Minutes to keep slow lanes running on a file after another lane
+    # has finished it cleanly. Float so users can fine-tune; clamped to
+    # a non-negative number at the read site. Set 0 to cancel
+    # immediately on first clean win.
+    grace_minutes: float = 10.0
     lanes: list[LaneConfig] = field(default_factory=list)
 
     def enabled_lanes(self) -> list[LaneConfig]:

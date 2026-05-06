@@ -125,6 +125,7 @@ def load_multilane_config(path: Path, local_path: Path | None = None) -> MultiLa
         enabled=bool(raw.get('enabled', False)),
         version=int(raw.get('version', 1)),
         base_ref=raw.get('base_ref', 'main'),
+        grace_minutes=max(0.0, float(raw.get('grace_minutes', 10.0))),
         lanes=[_lane_from_raw(lane_raw) for lane_raw in raw.get('lanes', [])],
     )
 
@@ -156,6 +157,7 @@ def multilane_config_from_simple(simple: dict) -> MultiLaneConfig:
         enabled=bool(simple.get('enabled', False)),
         version=int(simple.get('version', 1)),
         base_ref=str(simple.get('base_ref') or 'main'),
+        grace_minutes=max(0.0, float(simple.get('grace_minutes', 10.0))),
         lanes=lanes_out,
     )
 

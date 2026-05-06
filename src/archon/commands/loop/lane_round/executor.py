@@ -40,7 +40,7 @@ from .writeback import (
 )
 
 
-_GRACE_SECONDS = 600.0  # 10 min — fixed for now; could go on config.json later
+_DEFAULT_GRACE_SECONDS = 600.0  # 10 min — overridden by `multilane.grace_minutes` in config.json
 
 
 class LaneRoundExecutor:
@@ -309,23 +309,31 @@ class LaneRoundExecutor:
             log.info(
                 f"  Lane {assignment.lane_id} :: {assignment.assigned_file} -> {status}"
             )
-            # Early-stop trigger: a clean win on this file starts a
-            # grace timer for any other lane still running on the same
-            # file. "Clean" = the same criteria the merge-agent uses
-            # (sorry-free, axiom-free, builds, only the assigned file
-            # changed).
-            if (row.get('success')
+            # Early-stop trigger: only a *fully-clearing* win starts the
+            # grace timer for other lanes on the same file. A merge-
+            # worthy partial win (sorry count decreased but not zero)
+            # still goes to the merger but does NOT preempt slower lanes
+            # — they might land their own version that fills different
+            # sorries the partial win didn't touch.
+            if (row.get('early_stop_worthy')
                     and row.get('assigned_file_only')
                     and row.get('verification_passed')):
                 self._schedule_kill_on_file(assignment)
         self._results.append(row)
         write_results_jsonl(self._results_path, self._results)
 
+    def _grace_seconds(self) -> float:
+        """Resolve the grace period (s) from the multilane config, with
+        a sane default if config is missing or malformed."""
+        if self.config is not None and self.config.grace_minutes >= 0:
+            return float(self.config.grace_minutes) * 60.0
+        return _DEFAULT_GRACE_SECONDS
+
     def _schedule_kill_on_file(self, winning_assignment) -> None:
         """Set cancel events for OTHER assignments on the same file
-        after `_GRACE_SECONDS`. Idempotent — multiple winners on the
-        same file just refresh / extend nothing (we only set the first
-        timer).
+        after the configured grace period. Idempotent — multiple
+        winners on the same file just refresh / extend nothing (we only
+        set the first timer).
         """
         file_key = winning_assignment.assigned_file
         if any(getattr(t, 'file_key', None) == file_key for t in self._grace_timers):
@@ -337,9 +345,20 @@ class LaneRoundExecutor:
         ]
         if not victims:
             return
+        grace = self._grace_seconds()
+        if grace <= 0:
+            log.info(
+                f"  lane '{winning_assignment.lane_id}' won {file_key} cleanly — "
+                f"cancelling other lane(s) immediately (grace=0)"
+            )
+            for v in victims:
+                ev = self._cancel_events.get(v.assignment_id)
+                if ev is not None and not ev.is_set():
+                    ev.set()
+            return
         log.info(
             f"  lane '{winning_assignment.lane_id}' won {file_key} cleanly — "
-            f"giving other lane(s) {int(_GRACE_SECONDS/60)} min to wrap up"
+            f"giving other lane(s) {grace/60:.1f} min to wrap up"
         )
 
         def _kill():
@@ -351,7 +370,7 @@ class LaneRoundExecutor:
                     )
                     ev.set()
 
-        t = threading.Timer(_GRACE_SECONDS, _kill)
+        t = threading.Timer(grace, _kill)
         t.file_key = file_key  # type: ignore[attr-defined]
         t.daemon = True
         t.start()

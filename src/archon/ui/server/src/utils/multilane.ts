@@ -4,6 +4,55 @@ import path from 'path';
 interface MultiLaneRow extends Record<string, unknown> {
   lane_id?: string;
   success?: boolean;
+  early_stop_worthy?: boolean;
+  cancelled?: boolean;
+  assigned_file?: string;
+  failure_reason?: string;
+}
+
+/** Per-file status for the proof graph's file-group indicator.
+ *
+ *   cleared    — at least one lane is `early_stop_worthy` (file is sorry-free)
+ *   progressed — at least one lane is merge-worthy `success` (sorry count strictly decreased)
+ *   attempted  — lanes ran but none was merge-worthy
+ *   undefined  — file was not in this iteration's objectives
+ */
+export type FileLaneStatus = 'cleared' | 'progressed' | 'attempted';
+
+/** Read the latest iter-NNN-results.jsonl and bucket per-file outcome.
+ *
+ * Multiple lanes per file: take the *best* outcome
+ * (cleared > progressed > attempted). Returns an empty map when no
+ * multilane runtime exists.
+ */
+export function latestFileLaneStatus(archonPath: string): Record<string, FileLaneStatus> {
+  const out: Record<string, FileLaneStatus> = {};
+  const runtimeDir = path.join(archonPath, 'multilane', 'runtime');
+  if (!fs.existsSync(runtimeDir)) return out;
+
+  let latestPath: string | undefined;
+  let latestIter = -1;
+  for (const entry of fs.readdirSync(runtimeDir)) {
+    if (!entry.endsWith('-results.jsonl')) continue;
+    const iter = extractIteration(entry);
+    if (iter !== null && iter > latestIter) {
+      latestIter = iter;
+      latestPath = path.join(runtimeDir, entry);
+    }
+  }
+  if (!latestPath) return out;
+
+  const rank: Record<FileLaneStatus, number> = { attempted: 1, progressed: 2, cleared: 3 };
+  for (const row of readJsonlRows(latestPath)) {
+    const file = String(row.assigned_file || '');
+    if (!file) continue;
+    let status: FileLaneStatus = 'attempted';
+    if (row.early_stop_worthy) status = 'cleared';
+    else if (row.success) status = 'progressed';
+    const prev = out[file];
+    if (!prev || rank[status] > rank[prev]) out[file] = status;
+  }
+  return out;
 }
 
 export interface MultiLaneIterationLaneSummary {

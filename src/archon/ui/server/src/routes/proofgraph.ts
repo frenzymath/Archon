@@ -11,6 +11,7 @@ import path from 'path';
 import type { FastifyInstance } from 'fastify';
 import { countSorryInLean } from '../utils/sorryCount.js';
 import { mapIterToCommit, lsLeanFilesAtCommit, showFileAtCommit, hasInnerGit } from '../utils/innerGit.js';
+import { latestFileLaneStatus } from '../utils/multilane.js';
 import type { ProjectPaths } from './project.js';
 
 const DECL_RE = /^(noncomputable\s+)?(private\s+)?(protected\s+)?(theorem|lemma|def|instance|class|structure|inductive|abbrev|example)\s+([^\s:(\[{]+)/;
@@ -267,8 +268,15 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     const allD: LD[] = [];
     (function walk(dir: string) { try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) { if (!['_lake','.lake','.archon','node_modules','.git'].includes(e.name)) walk(f); } else if (e.isFile() && e.name.endsWith('.lean')) allD.push(...parseFile(f, path.relative(pp, f))); } } catch { /* */ } })(pp);
     const ed = edges(allD); const ms = getAllMilestones(ap);
-    const fg: Record<string, { file: string; declarations: string[] }> = {};
-    for (const d of allD) { if (!fg[d.file]) fg[d.file] = { file: d.file, declarations: [] }; fg[d.file].declarations.push(d.name); }
+    const laneStatus = latestFileLaneStatus(ap);
+    const fg: Record<string, { file: string; declarations: string[]; laneStatus?: string }> = {};
+    for (const d of allD) {
+      if (!fg[d.file]) {
+        fg[d.file] = { file: d.file, declarations: [] };
+        if (laneStatus[d.file]) fg[d.file].laneStatus = laneStatus[d.file];
+      }
+      fg[d.file].declarations.push(d.name);
+    }
     return {
       declarations: allD.map(d => {
         const id = `${d.file}::${d.name}`; let mi = ms.get(id); if (!mi) { for (const [k, v] of ms) { if (k.split('::')[1] === d.name) { mi = v; break; } } }

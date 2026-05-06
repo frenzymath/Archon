@@ -22,6 +22,7 @@ from ..prover.environment import prover_env_dict, snapshot_baseline
 from ..utils import file_slug
 from .helpers import (
     assignment_code_snapshot_files,
+    assignment_early_stop_worthy,
     assignment_success,
     git_diff_files,
 )
@@ -78,7 +79,11 @@ class LaneAssignmentRunner:
         ok = self._invoke_claude()
         self._status('lane_assignment_finished', lane_id=self.assignment.lane_id, ok=bool(ok))
 
-        return self._build_result(ok, before_files)
+        cancelled = bool(self.cancel_event is not None and self.cancel_event.is_set())
+        if cancelled:
+            self._write_cancelled_summary()
+
+        return self._build_result(ok, before_files, cancelled=cancelled)
 
     # ── private ─────────────────────────────────────────────────────────
 
@@ -189,7 +194,7 @@ class LaneAssignmentRunner:
             raise
 
     def _build_result(
-        self, ok: bool, before_files: set[str],
+        self, ok: bool, before_files: set[str], *, cancelled: bool = False,
     ) -> dict[str, object]:
         after_files = set(git_diff_files(self.lane_path))
         lane_dirty_files = sorted(after_files - before_files)
@@ -205,6 +210,13 @@ class LaneAssignmentRunner:
             bool(changed_files)
             and set(changed_files) == {self.assignment.assigned_file}
         )
+        # The baseline snapshot was written by run() before the prover
+        # started; passing it lets `assignment_success` measure progress
+        # by comparing sorry counts before vs after rather than insisting
+        # on a sorry-free file. The early-stop trigger (below) keeps the
+        # strict 'sorry-free' check separately so partial wins merge but
+        # don't kill slower lanes.
+        baseline_path = self.snap_dir / "baseline.lean"
         strict_success, failure_reason = assignment_success(
             ok=ok,
             assigned_file=self.assignment.assigned_file,
@@ -212,6 +224,7 @@ class LaneAssignmentRunner:
             escaped_files=escaped_files,
             summary_path=summary_path,
             assigned_file_path=str(self.target_file),
+            baseline_file_path=str(baseline_path) if baseline_path.exists() else None,
         )
         # When the catch-all "runner_failed" fires, peek at the lane's
         # session_end summary to refine the diagnosis — rate limits,
@@ -225,6 +238,16 @@ class LaneAssignmentRunner:
             kind = session_end_failure_kind(read_last_session_end(self.raw_log_path))
             if kind is not None:
                 failure_reason = kind
+        # Cancellation is its own category — keep it distinct from
+        # provider failures so the dashboard / review can tell that the
+        # lane was preempted, not that it crashed.
+        if cancelled and not strict_success:
+            failure_reason = 'cancelled_by_winner'
+
+        early_stop_worthy = assignment_early_stop_worthy(
+            success=strict_success,
+            assigned_file_path=str(self.target_file),
+        )
 
         return {
             'assignment_id': self.assignment.assignment_id,
@@ -233,6 +256,8 @@ class LaneAssignmentRunner:
             'assigned_file': self.assignment.assigned_file,
             'worktree_path': self.assignment.worktree_path,
             'success': strict_success,
+            'early_stop_worthy': early_stop_worthy,
+            'cancelled': cancelled,
             'failure_reason': failure_reason,
             'changed_files': changed_files,
             'escaped_files': escaped_files,
@@ -244,3 +269,67 @@ class LaneAssignmentRunner:
             'raw_log_path': self.raw_log_path,
             'promote_readiness': 'manual-only',
         }
+
+    def _write_cancelled_summary(self) -> None:
+        """Auto-write a `task_results/<file>.md` for a cancelled lane.
+
+        Without this, a lane that was preempted mid-flight leaves no
+        summary, so the merger and review agent can't see what it
+        attempted (its work sits only as raw JSONL events). Generates a
+        terse markdown digest from the JSONL: edit count, last tool
+        call, last text excerpt. If the prover already wrote its own
+        summary before SIGTERM, leave that file alone.
+        """
+        result_path = Path(self.assignment.result_path)
+        if result_path.exists():
+            return
+        edits = 0
+        last_tool = ''
+        last_text = ''
+        last_edited_file = ''
+        try:
+            for raw_line in self.log_jsonl.read_text(
+                encoding='utf-8', errors='ignore',
+            ).splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    evt = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                event = evt.get('event')
+                if event == 'tool_call' and evt.get('tool') in {'Edit', 'Write'}:
+                    edits += 1
+                    last_tool = str(evt.get('tool') or '')
+                    fp = (evt.get('input') or {}).get('file_path')
+                    if isinstance(fp, str):
+                        last_edited_file = fp
+                elif event == 'text':
+                    content = evt.get('content') or ''
+                    if isinstance(content, str) and content.strip():
+                        last_text = content.strip()[-400:]
+        except OSError:
+            pass
+
+        body = (
+            f"# {self.assignment.assigned_file}\n\n"
+            f"**Cancelled mid-flight by Archon multilane** "
+            f"(lane `{self.assignment.lane_id}`; another lane finished "
+            f"this file cleanly first and the grace timer expired).\n\n"
+            f"## Auto-generated digest of work before cancellation\n\n"
+            f"- Edits/Writes attempted: **{edits}**\n"
+            f"- Last tool: `{last_tool or 'n/a'}`\n"
+            f"- Last edited file: `{last_edited_file or 'n/a'}`\n"
+            f"- Last text excerpt:\n\n"
+            f"  > {last_text or '(no text emitted)'}\n\n"
+            f"This summary was generated automatically because the "
+            f"prover was preempted before it could write its own "
+            f"task_results entry. The raw JSONL log is at "
+            f"`{self.log_jsonl}`.\n"
+        )
+        try:
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(body, encoding='utf-8')
+        except OSError as e:
+            log.warn(f"could not write cancelled-lane summary to {result_path}: {e}")

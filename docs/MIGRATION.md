@@ -411,23 +411,6 @@ in when you are ready.
 | `archon branch <name> /path/to/project` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). |
 | `archon version /path/to/project` | Show the Archon CLI version and, in a project, the project version. |
 
-### 7.6 The `--multilane-*` CLI flags are gone
-
-If you were experimenting with the preview multilane flags on `archon loop`,
-move the configuration into `.archon/config.json` under the `multilane`
-section. `archon init` writes a self-documenting template the first time.
-The default config keeps multilane disabled — single Anthropic lane behaves
-exactly like v0.1.0.
-
-### 7.7 The `[proxy]` install extra is gone
-
-If you previously installed with `pip install 'archon[proxy]'` for OpenAI /
-Gemini lanes via the bundled LiteLLM proxy, those lanes are no longer
-supported. Multi-lane providers are now Anthropic, Moonshot/Kimi, and
-DeepSeek (each speaks the Anthropic API natively). Run OpenAI / Gemini in
-their respective native CLIs instead. Plain `pip install archon` (or
-`archon update`) is now sufficient for full multilane.
-
 ---
 
 ## Questions or issues

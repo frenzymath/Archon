@@ -76,42 +76,6 @@ Upgrading from v0.1.0? See [MIGRATION.md](MIGRATION.md#7-upgrading-from-v010-to-
   / step / runner is a small class in its own file. The largest
   per-file footprint dropped from ~2400 lines (loop.py) to under 500.
 
-### Fixed
-
-- **`/diffs` no longer shows an empty file** during the in-flight window
-  between phase start and the first prover snapshot or phase commit. The
-  timeline correctly falls through to the synthetic-fallback path when the
-  snapshot dir exists but is empty.
-- **Proof-graph code panel no longer truncates docstrings**. The body
-  extractor was off-by-one and was including the leading docstring of the
-  *next* declaration, making the comment look unfinished. The body now ends
-  cleanly at the last meaningful line of the current declaration.
-- **No more useless prover launches on off-limits files**. When the plan
-  agent listed protected files in `## Current Objectives` with markers like
-  `— DO NOT TOUCH`, the dispatcher previously fanned out a prover that
-  immediately stopped with a no-op task result. The objective parser now
-  filters out lines containing unambiguous stop markers (`do not touch`,
-  `off-limits`, `do not assign`, etc.).
-- **Multilane review** runs over the merged log instead of the per-lane logs,
-  so the proof journal reflects the merged reality.
-- **Lane logs in the dashboard**: `/api/logs` walks `multilane/lanes/...`
-  too, so the Logs panel shows per-lane work that previously stayed
-  invisible.
-- **Proxy lanes neutralise inherited Claude Code credentials** so a
-  Moonshot / DeepSeek lane can't accidentally hit the user's primary
-  Anthropic key.
-- **`--from` resumes** mid-iteration correctly (the previous behaviour
-  always started a fresh iteration even with `--from`).
-
-### Removed
-
-- **Bundled OpenAI ↔ LiteLLM proxy** + the `[proxy]` install extra. OpenAI
-  and Gemini lanes are out of scope: Claude Code's tool-use semantics don't
-  translate cleanly through a wire-format proxy. Use those models in their
-  native CLIs instead.
-- **`--multilane-*` CLI flags** on `archon loop`. Multilane is now driven
-  exclusively from `.archon/config.json`.
-
 ## [0.1.0] — 2026-04
 
 It replaces the earlier shell-script checkout workflow with an installable `archon` CLI, adds an

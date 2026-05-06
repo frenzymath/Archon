@@ -54,6 +54,11 @@ def default_config() -> dict[str, Any]:
             ),
             'enabled': False,
             'base_ref': 'main',
+            # Minutes other lanes keep running on a file after one lane
+            # finishes it cleanly. Set 0 to cancel slow lanes immediately.
+            # The default (10 min) gives a slower provider a chance to
+            # land its own version for the merge agent to consider.
+            'grace_minutes': 10,
             'lanes': [
                 # Default: a single Anthropic lane. Multilane stays
                 # disabled until ``enabled`` is flipped to true.

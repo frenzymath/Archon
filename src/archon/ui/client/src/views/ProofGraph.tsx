@@ -38,14 +38,17 @@ const BRANCH_COLORS = ['#0366d6', '#6f42c1', '#e36209', '#28a745', '#cb2431', '#
 // ── Layout ───────────────────────────────────────────────────────────
 
 interface LN { id: string; d: GraphDeclaration; x: number; y: number; w: number; h: number; c: string; t: boolean; }
-interface LG { file: string; label: string; x: number; y: number; w: number; h: number; ci: number; }
+interface LG {
+  file: string; label: string; x: number; y: number; w: number; h: number; ci: number;
+  laneStatus?: 'cleared' | 'progressed' | 'attempted';
+}
 interface LE { from: LN; to: LN; blocked: boolean; }
 
 const NW = 170, NH = 42, NG = 8, GP = 14, GH = 20, GG = 22;
 const BG = ['rgba(3,102,214,0.06)','rgba(111,66,193,0.06)','rgba(227,98,9,0.06)','rgba(40,167,69,0.06)','rgba(203,36,49,0.06)','rgba(0,134,114,0.06)'];
 const BS = ['rgba(3,102,214,0.22)','rgba(111,66,193,0.22)','rgba(227,98,9,0.22)','rgba(40,167,69,0.22)','rgba(203,36,49,0.22)','rgba(0,134,114,0.22)'];
 
-function doLayout(decls: GraphDeclaration[], edgeList: { from: string; to: string }[], files: { file: string }[], changed: Set<string>) {
+function doLayout(decls: GraphDeclaration[], edgeList: { from: string; to: string }[], files: { file: string; laneStatus?: 'cleared' | 'progressed' | 'attempted' }[], changed: Set<string>) {
   const nm = new Map<string, LN>(); const gs: LG[] = [];
   const af = files.filter(f => decls.some(d => d.file === f.file));
   if (!af.length) return { n: [] as LN[], g: gs, e: [] as LE[], w: 400, h: 400 };
@@ -61,7 +64,11 @@ function doLayout(decls: GraphDeclaration[], edgeList: { from: string; to: strin
       const t = changed.has(d.id);
       nm.set(d.id, { id: d.id, d, x, y, w: NW, h: NH, c: ncolor(d.hasSorry, t), t });
     }
-    gs.push({ file: af[fi].file, label: basename(af[fi].file), x: gx, y: gy, w: gw, h: gh, ci: fi % BG.length });
+    gs.push({
+      file: af[fi].file, label: basename(af[fi].file),
+      x: gx, y: gy, w: gw, h: gh, ci: fi % BG.length,
+      laneStatus: af[fi].laneStatus,
+    });
     rowH = Math.max(rowH, gh); col++;
     if (col >= cols) { col = 0; gx = GG; gy += rowH + GG; rowH = 0; } else { gx += gw + GG; }
   }
@@ -819,10 +826,28 @@ export default function ProofGraph() {
           {/* Graph canvas */}
           <div className={styles.gc} ref={cRef}>
             <svg ref={svgRef} className={styles.svg} viewBox={`${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`} preserveAspectRatio="xMidYMid meet" width="100%" height="100%">
-              {lo?.g.map(g => <g key={g.file}>
+              {lo?.g.map(g => {
+                const dotColor = g.laneStatus === 'cleared' ? C_GREEN
+                  : g.laneStatus === 'progressed' ? C_ORANGE
+                  : g.laneStatus === 'attempted' ? C_RED
+                  : null;
+                const dotTitle = g.laneStatus === 'cleared'
+                  ? 'Latest multilane round: at least one lane fully cleared this file (sorry-free).'
+                  : g.laneStatus === 'progressed'
+                  ? 'Latest multilane round: at least one lane made merge-worthy progress (sorry count decreased).'
+                  : g.laneStatus === 'attempted'
+                  ? 'Latest multilane round: lanes ran on this file but none was merge-worthy.'
+                  : '';
+                return <g key={g.file}>
                 <rect x={g.x} y={g.y} width={g.w} height={g.h} rx={10} ry={10} fill={BG[g.ci]} stroke={BS[g.ci]} strokeWidth={1.5} />
                 <text x={g.x + 8} y={g.y + 14} fontSize="10" fontWeight="600" fill="var(--text-muted)" fontFamily="var(--font-mono)">{g.label}</text>
-              </g>)}
+                {dotColor && (
+                  <circle cx={g.x + g.w - 10} cy={g.y + 10} r={4} fill={dotColor}>
+                    <title>{dotTitle}</title>
+                  </circle>
+                )}
+              </g>;
+              })}
               {lo?.n.map(n => {
                 const sel = n.id === selNode, att = n.d.totalAttempts ?? 0, ms = n.d.latestMilestoneStatus;
                 return <g key={n.id} data-node="1" onClick={() => clickNode(n.id)} style={{ cursor: 'pointer' }}>

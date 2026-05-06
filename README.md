@@ -27,6 +27,8 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 - [Usage](#usage)
   - [1. Initialize a project](#1-initialize-a-project)
   - [2. Start the automated loop](#2-start-the-automated-loop)
+    - [The plan agent's expanded role](#the-plan-agents-expanded-role)
+    - [Per-project config: `.archon/config.json` and `.archon/.env`](#per-project-config-archonconfigjson-and-archonenv)
     - [Multi-lane proving (optional)](#multi-lane-proving-optional)
     - [Frozen signatures: `archon-protected.yaml`](#frozen-signatures-archon-protectedyaml)
   - [Guiding agents](#guiding-agents)
@@ -46,12 +48,14 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 > 1. **Use a non-root account** (RECOMMENDED) — e.g. create one with `adduser` — so you are not running with excessive root privileges.
 > 2. **Set `export IS_SANDBOX=1`** so Claude Code is allowed to start with this high-risk option.
 
-To install the CLI tools and system dependencies, run the following command in your terminal (it is recommended, but not required, to run inside a Python virtual environment):
+To install the CLI tools and system dependencies, run the following command in your terminal:
+> Note: It is recommended, but not required, to run inside a Python virtual environment like `conda`. Most recent versions of Python should work, for instance `conda create -n archon python=3.11` works well. 
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/frenzymath/Archon/refs/heads/main/install.sh | bash
 ```
 
-This fetches the repository, runs `pip install .`, and executes `archon setup` to install system-level dependencies (uv, Claude Code) and verify your Lean toolchain. *The installation process might be slow the first time.*
+If prefer manual installation, [`install.sh`](./install.sh) fetches the repository, runs `pip install .`, and executes `archon setup` to install system-level dependencies (uv, Claude Code, ...) and verify your Lean toolchain. *The installation process might be slow the first time.*
 
 You should now be able to verify the installation and be guided on its usage with:
 
@@ -65,8 +69,7 @@ To update an existing install later:
 archon update
 ```
 
-`archon setup` also checks for API keys used by the informal agent
-(`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENROUTER_API_KEY`) — at least one is recommended but not required.
+`archon setup` also checks for API keys used by the informal agent (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENROUTER_API_KEY`) — at least one is recommended but not required. The API keys can also be set in `.archon/.env` at the project level. 
 
 > The bundled informal agent is a simplified demonstration: a single API call
 > to an external model for proof sketches. Our internal implementation is more
@@ -142,7 +145,26 @@ The loop alternates plan and prover agents through stages, with an optional refa
 
 Each iteration runs `plan → (refactor if requested) → prover(s) → review → finalize`. The refactor phase is conditional: it fires only when the plan agent writes a directive to `.archon/REFACTOR_DIRECTIVE.md`, runs at most once per iteration, and is followed by a verification pass. Every phase commits its output to an inner git at `.archon/git-dir/` as `archon[NNN/phase]: …`, so the dashboard's git tree shows the per-phase history independently of your project's outer git. Use `archon branch` to fork a branch from any historical agent commit if a run goes sideways.
 
+#### The plan agent's expanded role
+
+In v0.2.0 the **plan agent is the strategic centre of the loop**, not just a per-iteration scheduler. Its responsibilities now include:
+
+- **Long-arc strategy** — maintains `.archon/STRATEGY.md`, the living plan from the project's current state to its end-state. Each iteration is grounded in this arc instead of optimising locally; only the plan agent reads or writes this file.
+- **Blueprint authorship** — writes the informal proof sketches in `blueprint/src/chapters/<slug>.tex` (one chapter per Lean file) and registers `\lean{…}` hints. The prover reads its assigned chapter as the source of truth for the math; the review agent later updates `\leanok` / `\mathlibok` markers based on verified compilation.
+- **Refactor triggering** — when current objectives can't be reached without structural changes (wrong definitions, missing infrastructure, signature drift), the plan agent writes `.archon/REFACTOR_DIRECTIVE.md`. The next loop body runs the refactor agent against that directive; the plan agent then verifies the result before assigning the next prover round.
+- **Independent verification** — never trusts prover self-reports. After each prover round it independently checks sorry counts, compilation, and axiom usage before promoting results into `task_done.md`.
+- **Dependency-graph-aware scheduling** — calls the bundled `dependency_graph.py` script every iteration so objective ordering reflects the real `.lean` import graph and blueprint `\uses{…}` edges, instead of being reconstructed by hand.
+
 By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL. The dashboard keeps running after the loop finishes so you can review results; stop it with Ctrl-C or by closing the terminal. Disable it with `--no-dashboard`, or open a browser automatically with `--open`.
+
+#### Per-project config: `.archon/config.json` and `.archon/.env`
+
+`archon init` creates two files for per-project configuration. Both are written once and then yours to edit:
+
+- **`.archon/config.json`** — loop and multilane settings (max iterations, parallelism, multilane lane list, base ref, …). It is committed to the inner git so it travels with your project. The file ships self-documenting with a `multilane._examples` block; copy entries from there into `multilane.lanes` to enable a provider.
+- **`.archon/.env`** — API keys for the informal agent (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) and for multilane providers (`MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY`, …). **Gitignored** — never committed. You can also still set these in your shell environment; the `.env` file just provides a stable per-project home.
+
+Most users won't need to touch either file unless they're enabling multi-lane or wiring up a different informal-agent provider.
 
 #### Multi-lane proving (optional)
 
@@ -193,7 +215,7 @@ If you're coming from a version that used symlinks, see [MIGRATION.md](docs/MIGR
 Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfreer/lean4-skills), installed as `lean4@archon-local` (providing `/archon-lean4:prove`, `/archon-lean4:doctor`, etc.). Skills are sourced from the installed `archon` package and registered with Claude Code as a local plugin marketplace.
 
 **Modifying global skills**: Edit files under the installed package's
-`skills/lean4/` directory. `archon init` re-registers the marketplace at the correct path on each run, so your edits take effect after re-init.
+`skills/lean4/` directory (the path might look like `/site-packages/archon/skills/lean4/`). `archon init` re-registers the marketplace at the correct path on each run, so your edits take effect after re-init.
 
 **Adding new global skills**: Create a new directory under the bundled
 `skills/<your-skill-name>/` with a `SKILL.md` or `.claude-plugin/plugin.json` inside, and add it to `skills/.claude-plugin/marketplace.json`. Run `archon init` again on your project to pick up the new skill.

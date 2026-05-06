@@ -1,5 +1,5 @@
 """Shared helpers for lane-round work: dirty-tree probes, snapshot
-extraction, and the strict-success classifier.
+extraction, and the success / early-stop classifiers.
 
 These are pure functions on filesystem state — no Claude I/O — so they
 unit-test cleanly and are reused by `LaneAssignmentRunner` and the
@@ -10,8 +10,43 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
+
+
+# Comment-aware sorry counter. The previous implementation used a bare
+# substring match (`'sorry' in text`), which fired on `-- discuss the
+# sorry tactic` and identifiers like `sorrys`. We strip line and block
+# comments, then count word-boundary matches.
+_LEAN_BLOCK_COMMENT = re.compile(r'/-.*?-/', re.DOTALL)
+_LEAN_LINE_COMMENT = re.compile(r'--[^\n]*')
+_LEAN_STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
+_SORRY_WORD = re.compile(r'\bsorry\b')
+
+
+def count_sorries_in_text(text: str) -> int:
+    """Count `sorry` placeholders, ignoring comments and string literals.
+
+    Lean block comments don't nest in this stripper — that's fine for
+    counting because nested comments are rare in real proof bodies and
+    even false positives only come from comment text, not real proofs.
+    """
+    stripped = _LEAN_BLOCK_COMMENT.sub('', text)
+    stripped = _LEAN_LINE_COMMENT.sub('', stripped)
+    stripped = _LEAN_STRING_LITERAL.sub('""', stripped)
+    return len(_SORRY_WORD.findall(stripped))
+
+
+def _read_sorry_count(path: str | Path | None) -> int | None:
+    """Read a Lean file and return its sorry count, or None if unreadable."""
+    if path is None:
+        return None
+    try:
+        text = Path(path).read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return None
+    return count_sorries_in_text(text)
 
 
 def git_diff_files(repo_path: Path) -> list[str]:
@@ -134,12 +169,20 @@ def assignment_success(
     escaped_files: list[str],
     summary_path: str | None,
     assigned_file_path: str | None = None,
+    baseline_file_path: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Strict success classifier.
+    """Loose 'merge-worthy' classifier — did the lane do useful work?
 
-    A lane assignment is successful only if every guardrail passes:
-    runner returned ok, no escaped paths, summary exists, exactly the
-    assigned file changed, and no `sorry` placeholder remains.
+    A lane is merge-worthy iff: runner returned ok, no escaped paths, a
+    summary exists, the *only* changed file is the assigned one, and
+    the sorry count in the assigned file strictly decreased (or was
+    already 0). The "decreased" check replaces the old "no sorry
+    remaining" rule, which incorrectly failed legitimate partial wins
+    on files that have multiple sorries but only one assigned.
+
+    Use `assignment_early_stop_worthy` for the stricter "lane has fully
+    cleared this file" check that drives the early-stop / first-clean-
+    wins timer.
     """
     if not ok:
         return False, 'runner_failed'
@@ -149,14 +192,35 @@ def assignment_success(
         return False, 'missing_summary'
     if not changed_files:
         return False, 'no_file_change'
-    changed = set(changed_files)
-    if changed != {assigned_file}:
+    if set(changed_files) != {assigned_file}:
         return False, 'cross_file_change'
     if assigned_file_path is not None:
-        try:
-            text = Path(assigned_file_path).read_text(encoding='utf-8', errors='ignore')
-        except OSError:
+        sorry_after = _read_sorry_count(assigned_file_path)
+        if sorry_after is None:
             return False, 'missing_assigned_file'
-        if 'sorry' in text:
-            return False, 'placeholder_remaining'
+        sorry_before = _read_sorry_count(baseline_file_path)
+        # If we have a baseline, require strict progress.
+        # If we don't (no snapshot was taken), accept rather than
+        # reject — better to count the lane as merge-worthy than to
+        # drop a real win because we couldn't compare.
+        if sorry_before is not None:
+            if sorry_after >= sorry_before and sorry_after > 0:
+                return False, 'no_sorry_decrease'
     return True, None
+
+
+def assignment_early_stop_worthy(
+    *,
+    success: bool,
+    assigned_file_path: str | None,
+) -> bool:
+    """Strict 'lane has fully cleared this file' check.
+
+    Used by the multi-lane early-stop trigger: only a fully sorry-free
+    win on the assigned file should kill slower lanes. Partial wins go
+    to the merger but do not preempt other lanes.
+    """
+    if not success or assigned_file_path is None:
+        return False
+    sorry_after = _read_sorry_count(assigned_file_path)
+    return sorry_after == 0

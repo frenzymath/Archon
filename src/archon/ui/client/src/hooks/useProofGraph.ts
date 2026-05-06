@@ -13,7 +13,17 @@ export interface GraphDeclaration {
 }
 
 export interface GraphEdge { from: string; to: string; }
-export interface GraphFileGroup { file: string; declarations: string[]; }
+export interface GraphFileGroup {
+  file: string;
+  declarations: string[];
+  /** Per-file outcome from the latest multilane round, when applicable.
+   *   cleared    — at least one lane fully cleared the file (no sorries left)
+   *   progressed — at least one lane made merge-worthy partial progress
+   *   attempted  — lanes ran but none was merge-worthy
+   *   undefined  — file was not an objective in the latest iter
+   */
+  laneStatus?: 'cleared' | 'progressed' | 'attempted';
+}
 
 export interface DeclarationsResponse {
   declarations: GraphDeclaration[];

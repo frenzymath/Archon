@@ -16,6 +16,10 @@ from archon.commands.loop.lane_round import (
     non_archon_dirty_files,
     select_writeback_rows,
 )
+from archon.commands.loop.lane_round.helpers import (
+    assignment_early_stop_worthy,
+    count_sorries_in_text,
+)
 from archon.commands.tooling.inner_git import InnerGit
 
 
@@ -141,20 +145,87 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, 'escaped_worktree')
 
-    def test_assignment_success_rejects_remaining_sorry(self):
+    def test_assignment_success_accepts_partial_sorry_decrease(self):
+        """A lane that fills 1 of 3 sorries is merge-worthy under the
+        loose criterion (sorry count strictly decreased), even though
+        sorries remain."""
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'Foo.lean'
-            target.write_text("theorem foo : True := by\n  sorry\n")
+            baseline = Path(tmp) / 'Foo.baseline.lean'
+            after = Path(tmp) / 'Foo.lean'
+            baseline.write_text(
+                "theorem a : True := by sorry\n"
+                "theorem b : True := by sorry\n"
+                "theorem c : True := by sorry\n"
+            )
+            after.write_text(
+                "theorem a : True := by trivial\n"
+                "theorem b : True := by sorry\n"
+                "theorem c : True := by sorry\n"
+            )
             ok, reason = assignment_success(
                 ok=True,
                 assigned_file='Foo.lean',
                 changed_files=['Foo.lean'],
                 escaped_files=[],
                 summary_path='/tmp/Foo.md',
-                assigned_file_path=str(target),
+                assigned_file_path=str(after),
+                baseline_file_path=str(baseline),
+            )
+            self.assertTrue(ok)
+            self.assertIsNone(reason)
+
+    def test_assignment_success_rejects_no_decrease(self):
+        """A lane that left the sorry count unchanged is NOT merge-worthy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / 'Foo.baseline.lean'
+            after = Path(tmp) / 'Foo.lean'
+            baseline.write_text("theorem a : True := by sorry\n")
+            after.write_text("theorem a : True := by sorry  -- still stuck\n")
+            ok, reason = assignment_success(
+                ok=True,
+                assigned_file='Foo.lean',
+                changed_files=['Foo.lean'],
+                escaped_files=[],
+                summary_path='/tmp/Foo.md',
+                assigned_file_path=str(after),
+                baseline_file_path=str(baseline),
             )
             self.assertFalse(ok)
-            self.assertEqual(reason, 'placeholder_remaining')
+            self.assertEqual(reason, 'no_sorry_decrease')
+
+    def test_count_sorries_ignores_comments(self):
+        """The bare-substring check used to fire on `sorry` inside
+        comments; the new counter must ignore them."""
+        text = (
+            "-- this proof used to be a sorry\n"
+            "/- block comment about the sorry tactic -/\n"
+            "theorem a : True := trivial\n"
+        )
+        self.assertEqual(count_sorries_in_text(text), 0)
+        self.assertEqual(
+            count_sorries_in_text("theorem a : True := sorry  -- explanation\n"),
+            1,
+        )
+
+    def test_assignment_early_stop_worthy_only_when_sorry_free(self):
+        """Early-stop-worthy is the strict criterion: only fully clearing
+        the file should kill slower lanes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sorry_free = Path(tmp) / 'Done.lean'
+            still_dirty = Path(tmp) / 'Partial.lean'
+            sorry_free.write_text("theorem a : True := trivial\n")
+            still_dirty.write_text("theorem a : True := trivial\ntheorem b : True := by sorry\n")
+            self.assertTrue(assignment_early_stop_worthy(
+                success=True, assigned_file_path=str(sorry_free),
+            ))
+            self.assertFalse(assignment_early_stop_worthy(
+                success=True, assigned_file_path=str(still_dirty),
+            ))
+            # Even a sorry-free file isn't early-stop-worthy if the lane
+            # itself failed (e.g. crashed before producing output).
+            self.assertFalse(assignment_early_stop_worthy(
+                success=False, assigned_file_path=str(sorry_free),
+            ))
 
     def test_assignment_code_snapshot_files_detects_escaped_edit(self):
         with tempfile.TemporaryDirectory() as tmp:

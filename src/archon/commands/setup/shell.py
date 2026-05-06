@@ -65,7 +65,14 @@ def source_nvm() -> None:
 
 
 def ensure_path_in_rc() -> None:
-    """Add `~/.local/bin` to PATH in the user's shell rc, if not already there."""
+    """Add `~/.local/bin` to PATH in the user's shell rc, if not already there.
+
+    Silent: setup already prepends the path to its own in-process PATH, and
+    new terminals will source the rc automatically, so no user action is
+    required for `archon` to work. We don't log this — the older "Run:
+    source ~/.bashrc" message just made the setup output noisier without
+    being actionable.
+    """
     rc = shell_rc()
     if rc is None or not rc.exists():
         return
@@ -74,5 +81,3 @@ def ensure_path_in_rc() -> None:
     if "$HOME/.local/bin" not in content:
         with rc.open("a") as f:
             f.write(f"\n# Added by Archon setup\n{line}\n")
-        log.success(f"Added ~/.local/bin to PATH in {rc}")
-        log.step(f"Run: source {rc}")
