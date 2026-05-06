@@ -20,6 +20,7 @@ from archon.commands.loop.lane_round.helpers import (
     assignment_early_stop_worthy,
     count_sorries_in_text,
 )
+from archon.state.cost import cost_summary, safe_jsonl_lines
 from archon.commands.tooling.inner_git import InnerGit
 
 
@@ -656,6 +657,53 @@ class MultiLaneWorktreeTests(unittest.TestCase):
             self.assertEqual(actual, expected)
             self.assertEqual(health['synced_to'], expected)
             self.assertFalse((lane_path / 'scratch.txt').exists())
+
+
+class MultiLaneStaleSymlinkTests(unittest.TestCase):
+    """Multilane symlinks `iter_dir/provers/<slug>__<lane>.jsonl` to the
+    per-lane log file. When a lane is cancelled before its parser
+    flushed, OR a prior run on the same iter dir had a different lane
+    set, the symlink dangles. Every consumer that walks the iter tree
+    must tolerate this — a single stale symlink should not crash the
+    loop (cost summary, review extraction, parallel-round-end emit).
+    """
+
+    def test_safe_jsonl_lines_on_dangling_symlink_returns_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / 'broken__kimi.raw.jsonl'
+            link.symlink_to(Path(tmp) / 'never-existed.jsonl')
+            # Sanity: it IS a symlink, but the target is missing.
+            self.assertTrue(link.is_symlink())
+            self.assertFalse(link.is_file())
+            # The helper must return [] instead of raising FileNotFoundError.
+            self.assertEqual(safe_jsonl_lines(link), [])
+
+    def test_cost_summary_skips_dangling_symlinks(self):
+        """Reproduces the iter-004 crash: cost_summary walked an iter
+        dir that contained a stale __kimi.raw.jsonl symlink and threw
+        FileNotFoundError instead of skipping the unreadable file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            iter_dir = Path(tmp) / 'iter-004'
+            provers = iter_dir / 'provers'
+            provers.mkdir(parents=True)
+            # One real, valid prover log with a session_end row.
+            real = provers / 'Foo__anthropic.jsonl'
+            real.write_text(json.dumps({
+                'event': 'session_end',
+                'total_cost_usd': 0.42,
+                'duration_ms': 60_000,
+                'input_tokens': 100,
+                'output_tokens': 50,
+                'num_turns': 3,
+            }) + '\n')
+            # And a dangling symlink alongside it (the iter-004 crash case).
+            dangling = provers / 'Foo__kimi.raw.jsonl'
+            dangling.symlink_to(iter_dir / 'lane-was-cancelled.jsonl')
+
+            data = cost_summary(iter_dir)
+            self.assertIsNotNone(data)
+            self.assertAlmostEqual(data.cost_usd, 0.42)
+            self.assertEqual(data.input_tokens, 100)
 
 
 if __name__ == '__main__':

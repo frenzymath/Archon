@@ -66,6 +66,37 @@ def cost_summary(directory: Path) -> CostData | None:
     return CostData(dur, cost, tin, tout, turns, models)
 
 
+def safe_jsonl_lines(path: Path) -> list[str]:
+    """Read JSONL lines tolerantly.
+
+    Multilane stores per-lane prover logs at
+    ``.archon/multilane/lanes/<lane>/iter-NNN/provers/<file>.jsonl`` and
+    symlinks them into ``logs/iter-NNN/provers/`` as
+    ``<file>__<lane>.jsonl`` for the dashboard. These symlinks can dangle
+    when:
+      - a lane was cancelled mid-flight before its parser wrote the
+        target file (``.raw.jsonl`` is the most common case);
+      - a prior run on the same iter dir had a different lane set
+        enabled (e.g. iter-004 first ran with kimi, now resumes with
+        only anthropic + deepseek), leaving stale `__kimi.*.jsonl`
+        symlinks pointing at non-existent targets;
+      - the lane worktree was deleted between runs.
+
+    Anything that walks the iter tree must tolerate this — crashing the
+    whole loop because one symlink is stale is unacceptable. Returns
+    an empty list for missing / unreadable paths.
+    """
+    try:
+        if not path.is_file():
+            # is_file() returns False for dangling symlinks, missing
+            # files, and non-regular entries. Either way we can't read
+            # it.
+            return []
+        return path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+
+
 def _iter_session_end_rows(directory: Path):
     """Yield every session_end JSON object under `directory`'s .jsonl files."""
     for jsonl in directory.rglob("*.jsonl"):
@@ -73,7 +104,7 @@ def _iter_session_end_rows(directory: Path):
         # already counted from the per-prover logs.
         if jsonl.name == "provers-combined.jsonl":
             continue
-        for line in jsonl.read_text().splitlines():
+        for line in safe_jsonl_lines(jsonl):
             line = line.strip()
             if not line:
                 continue

@@ -287,7 +287,12 @@ class ParallelProverRunner:
         provers_dir = self.iter_dir / "provers"
         target = None
         if provers_dir.exists():
-            logs = sorted(provers_dir.glob("*.jsonl"))
+            # is_file() filters dangling symlinks — left over from cancelled
+            # multilane runs or prior runs with a different lane set.
+            logs = sorted(
+                p for p in provers_dir.glob("*.jsonl")
+                if not p.name.endswith(".raw.jsonl") and p.is_file()
+            )
             if logs:
                 target = logs[0]
         if target is None:
