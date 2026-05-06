@@ -263,7 +263,16 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
     for (const c of commits) c.branch = branchAt.get(c.sha) ?? 'main';
 
-    return { commits };
+    // Hide multilane lane branches from the git tree: each lane writes
+    // commits to its own `lane/<lane_id>` branch in the inner git, but
+    // only the merged result (committed back to main during writeback)
+    // is interesting at this view's level of detail. Showing every
+    // lane's per-phase commit clutters the tree and makes the merged
+    // commit on main hard to find. User-created branches (via
+    // `archon branch …`) are kept — only the lane/* prefix is dropped.
+    const visible = commits.filter(c => !(c.branch ?? '').startsWith('lane/'));
+
+    return { commits: visible };
   });
 
   /**
