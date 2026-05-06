@@ -238,18 +238,46 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         else childrenOf.set(p, [c.sha]);
       }
     }
+    // When a commit is the fork point for both `main` and one or more
+    // `lane/*` branches, all of those tips list this commit as their
+    // first parent. The propagation must NOT pick a lane child over a
+    // main child — otherwise historical main commits inherit `lane/…`
+    // and get filtered out of the visible graph. So we sweep first-
+    // parent children twice: pass 1 only accepts non-lane branches;
+    // pass 2 accepts anything as a last resort (the commit only has
+    // lane descendants and was never reachable from main anyway).
+    const isLane = (b: string | undefined) => !!b && b.startsWith('lane/');
     for (let i = 0; i < commits.length; i++) {
       const c = commits[i];
       if (branchAt.has(c.sha)) continue;
       const kids = childrenOf.get(c.sha) ?? [];
-      // Prefer the child that lists this commit as its FIRST parent (the
-      // "primary" descendant in git's topology).
       let inherited: string | undefined;
+      // Pass 1: first-parent children with a non-lane branch.
       for (const childSha of kids) {
         const child = bySha.get(childSha);
         if (child && child.parents[0] === c.sha) {
           const cb = branchAt.get(childSha);
-          if (cb) { inherited = cb; break; }
+          if (cb && !isLane(cb)) { inherited = cb; break; }
+        }
+      }
+      // Pass 2: any child with a non-lane branch (e.g. user-created
+      // branch from `archon branch`).
+      if (!inherited) {
+        for (const childSha of kids) {
+          const cb = branchAt.get(childSha);
+          if (cb && !isLane(cb)) { inherited = cb; break; }
+        }
+      }
+      // Pass 3: any child at all. Only reached when the commit has
+      // exclusively lane descendants — in that case the lane label is
+      // the right answer.
+      if (!inherited) {
+        for (const childSha of kids) {
+          const child = bySha.get(childSha);
+          if (child && child.parents[0] === c.sha) {
+            const cb = branchAt.get(childSha);
+            if (cb) { inherited = cb; break; }
+          }
         }
       }
       if (!inherited) {
