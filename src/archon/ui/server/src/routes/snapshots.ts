@@ -325,10 +325,29 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
       const timeline: TLEntry[] = [];
       const contentByIndex: (string | null)[] = [];
+      const latestIter = iterDirs[iterDirs.length - 1];
+
+      // For the live/current iter, fall back to the file as it currently
+      // sits on disk when no snapshot exists yet AND no git commit yet
+      // captures it. Without this the diff view shows a deceptive empty
+      // file during the in-flight window between phase start and the
+      // first prover snapshot / phase commit.
+      const liveContent = (() => {
+        if (!leanFile) return null;
+        const live = path.join(projectPath, leanFile);
+        try {
+          if (fs.existsSync(live) && fs.statSync(live).isFile()) {
+            return fs.readFileSync(live, 'utf-8');
+          }
+        } catch { /* ignore */ }
+        return null;
+      })();
 
       for (const iterDir of iterDirs) {
         const snapDir = path.join(logsPath, iterDir, 'snapshots', safeSlug);
-        const hasRealSnapshots = fs.existsSync(snapDir) && fs.statSync(snapDir).isDirectory();
+        const dirExists = fs.existsSync(snapDir) && fs.statSync(snapDir).isDirectory();
+        const hasRealSnapshots = dirExists
+          && fs.readdirSync(snapDir).some(f => f.endsWith('.lean'));
 
         if (hasRealSnapshots) {
           // Collect per-step ts/sourceFile provenance from the prover jsonl.
@@ -370,7 +389,13 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
           const gitContent = gitAvailable && commit
             ? showFileAtCommit(gitDir, projectPath, commit.sha, leanFile)
             : null;
-          const content = gitContent ?? '';  // null → file didn't exist, treat as empty
+          // For the in-flight (latest) iter, when no git snapshot exists yet,
+          // surface the live working-tree content so the diff isn't
+          // confusingly empty during a running phase.
+          const fallback = (gitContent === null && iterDir === latestIter)
+            ? liveContent
+            : null;
+          const content = gitContent ?? fallback ?? '';
           timeline.push({
             iteration: iterDir,
             step: 0,
@@ -434,7 +459,25 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         ? showFileAtCommit(gitDir, projectPath, commit.sha, leanFile)
         : null;
 
-      return { name: safeFile, iteration: safeIter, content: gitContent ?? '' };
+      // For the latest iter, fall back to the live working-tree file when
+      // no snapshot or git commit captures it yet (in-flight phase).
+      let fallback: string | null = null;
+      if (gitContent === null) {
+        const allIters = fs.existsSync(logsPath)
+          ? fs.readdirSync(logsPath).filter(d => d.startsWith('iter-')).sort()
+          : [];
+        const latestIter = allIters[allIters.length - 1];
+        if (safeIter === latestIter) {
+          const live = path.join(projectPath, leanFile);
+          try {
+            if (fs.existsSync(live) && fs.statSync(live).isFile()) {
+              fallback = fs.readFileSync(live, 'utf-8');
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      return { name: safeFile, iteration: safeIter, content: gitContent ?? fallback ?? '' };
     },
   );
 

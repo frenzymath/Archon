@@ -203,6 +203,3 @@ def panel(
 ) -> None:
     """Print a bordered panel with optional title."""
     _console.print(Panel(content, title=title or None, border_style=style, padding=(0, 2)))
-
-if __name__ == "__main__":
-    banner("0.1.0")

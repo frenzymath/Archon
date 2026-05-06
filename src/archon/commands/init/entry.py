@@ -1,0 +1,39 @@
+"""Typer-decorated `init` entry point."""
+
+from __future__ import annotations
+
+import typer
+
+from archon.agent import DEFAULT_MODEL
+
+from .command import InitCommand
+
+
+def init(
+    project_path: str = typer.Argument(
+        None,
+        help="Path to Lean project (directory containing lakefile.lean/toml). "
+        "If omitted, prompts for a name and creates the project.",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Skip the re-init prompt and overwrite existing Archon files.",
+    ),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "--model", "-M",
+        help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
+             "the interactive init pass.",
+    ),
+) -> None:
+    """Initialize a new Archon project.
+
+    Runs the deterministic bootstrap (lake init, Mathlib, blueprint, workspace
+    skeletons) in Python, then hands off to Claude Code for the semantic pass
+    only: reorganizing reference files, writing README/summary.md prose, and
+    proposing initial objectives.
+
+    [bold]Examples:[/bold]
+      [cyan]archon init .[/cyan]
+      [cyan]archon init /path/to/lean-project[/cyan]
+    """
+    InitCommand(project_path, force=force, model=model).run()

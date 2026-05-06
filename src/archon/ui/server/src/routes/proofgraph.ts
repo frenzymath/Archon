@@ -34,8 +34,26 @@ function parseContent(content: string, rel: string): LD[] {
       if (j > i && bd <= 0 && j + 1 < lines.length && lines[j + 1].trim() && DECL_RE.test(lines[j + 1].trim())) { e = j + 1; break; }
       e = j + 1;
     }
+    // Trim trailing whitespace + leading docstring of the *next* decl from
+    // the current decl's body. Without this, the body includes the start of
+    // the next /-- ... -/ block, which makes the UI show an unfinished
+    // comment that visually looks like truncated content.
+    let bodyEnd = e;
+    while (bodyEnd > i + 1 && !lines[bodyEnd - 1].trim()) bodyEnd--;
+    if (bodyEnd > i + 1 && lines[bodyEnd - 1].trim().endsWith('-/')) {
+      let k = bodyEnd - 1;
+      // single-line `/-- ... -/` block
+      if (lines[k].trim().startsWith('/--') || lines[k].trim().startsWith('/-')) {
+        bodyEnd = k;
+      } else {
+        // multi-line block: walk back to its `/-` opener
+        while (k > i && !lines[k].trim().startsWith('/--') && !lines[k].trim().startsWith('/-')) k--;
+        if (k > i) bodyEnd = k;
+      }
+      while (bodyEnd > i + 1 && !lines[bodyEnd - 1].trim()) bodyEnd--;
+    }
     let sc = 0; for (let l = s; l <= e; l++) if (sl.has(l)) sc++;
-    const body = lines.slice(i, i + (e - s)).join('\n');
+    const body = lines.slice(i, bodyEnd).join('\n');
     ds.push({ kind, name, file: rel, line: s, endLine: e, hasSorry: sc > 0, sorryCount: sc, signature: lines[i].trim(), body, usedNames: refs(body) });
     i = e;
   }

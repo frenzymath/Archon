@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 import textwrap
-from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Optional
@@ -18,48 +17,14 @@ from archon.agent import ClaudeAgent, DEFAULT_MODEL
 from archon.state import read_stage
 
 
+_HINT_PATTERN = re.compile(r"^- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] .+$")
+
+
 def _data_path(sub_path: str = "") -> Path:
     root = resources.files("archon").joinpath(".archon-src")
     if sub_path:
         return Path(str(root.joinpath(sub_path)))
     return Path(str(root))
-
-
-def _sorry_summary(project_path: Path) -> str:
-    """Run sorry_analyzer and return its output, or a fallback message."""
-    analyzer = _data_path("skills/lean4/lib/scripts/sorry_analyzer.py")
-    if not analyzer.exists():
-        return "(sorry_analyzer not available)"
-    try:
-        r = subprocess.run(
-            [sys.executable, str(analyzer), str(project_path), "--format=markdown"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return "(could not run sorry_analyzer)"
-
-
-def _latest_journal_summary(state_dir: Path) -> str:
-    """Read the latest proof journal session summary and recommendations."""
-    sessions_dir = state_dir / "proof-journal" / "sessions"
-    if not sessions_dir.exists():
-        return ""
-    session_dirs = sorted(sessions_dir.glob("session_*"))
-    if not session_dirs:
-        return ""
-    latest = session_dirs[-1]
-    parts = []
-    for name in ("summary.md", "recommendations.md"):
-        f = latest / name
-        if f.exists():
-            content = f.read_text()
-            if len(content) > 3000:
-                content = content[:3000] + "\n\n... (truncated)"
-            parts.append(f"### {latest.name}/{name}\n\n{content}")
-    return "\n\n".join(parts)
 
 
 def _read_if_exists(path: Path, max_chars: int = 3000) -> str:
@@ -75,95 +40,151 @@ def _count_hints(hints_file: Path) -> list[str]:
     """Return list of hint lines matching the archon-hint format."""
     if not hints_file.exists():
         return []
-    hint_re = re.compile(r"^- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] .+$")
     return [
         line.strip() for line in hints_file.read_text().splitlines()
-        if hint_re.match(line.strip())
+        if _HINT_PATTERN.match(line.strip())
     ]
 
 
-def discuss(
-    project_path: str = typer.Argument(".", help="Path to Lean project"),
-    focus: Optional[str] = typer.Option(
-        None, "--focus", "-f",
-        help="Focus on a specific file or theorem (e.g. 'Algebra/WLocal.lean' or 'wLocal_iff').",
-    ),
-    model: str = typer.Option(
-        DEFAULT_MODEL, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id.",
-    ),
-) -> None:
-    """Start an interactive discussion about the project.
+class DiscussionContext:
+    """Builds the pre-loaded context block sent to Claude.
 
-    Opens a conversation with full project context and Lean tooling so you can:
-    \b
-      - Ask why specific sorries remain unfilled
-      - Understand what approaches were tried and why they failed
-      - Check goal states and search for Mathlib lemmas interactively
-      - Verify whether a proof idea would work (without modifying files)
-      - Record insights as hints for the next plan agent iteration
-
-    \b
-    This command never modifies .lean files or agent state files.
-    The only file it writes to is USER_HINTS.md, in the same format
-    as `archon hint add`, so you can review/clear hints with
-    `archon hint show` and `archon hint clear`.
-
-    \b
-    Examples:
-      archon discuss .
-      archon discuss . --focus Algebra/WLocal.lean
-      archon discuss . --focus wLocal_iff
+    Splits out the read-many-files work so the command class stays a
+    clean orchestrator.
     """
-    resolved = Path(project_path).resolve()
-    project_name = resolved.name
-    state_dir = resolved / ".archon"
-    progress_file = state_dir / "PROGRESS.md"
-    hints_file = state_dir / "USER_HINTS.md"
 
-    # ── preflight ─────────────────────────────────────────────────────
+    def __init__(self, project_path: Path) -> None:
+        self.project_path = project_path
+        self.state_dir = project_path / ".archon"
 
-    if not state_dir.is_dir():
-        log.error(f"No .archon/ found in {resolved}")
-        log.step(f"Run: archon init {resolved}")
-        raise typer.Exit(1)
+    def gather(self) -> dict[str, str]:
+        return {
+            "progress": _read_if_exists(self.state_dir / "PROGRESS.md"),
+            "task_pending": _read_if_exists(self.state_dir / "task_pending.md"),
+            "task_done": _read_if_exists(self.state_dir / "task_done.md"),
+            "project_status": _read_if_exists(self.state_dir / "PROJECT_STATUS.md"),
+            "user_hints": _read_if_exists(self.state_dir / "USER_HINTS.md", max_chars=1000),
+            "sorry_info": self._sorry_summary(),
+            "journal_summary": self._latest_journal_summary(),
+        }
 
-    if not progress_file.exists():
-        log.error("No PROGRESS.md found")
-        log.step(f"Run: archon init {resolved}")
-        raise typer.Exit(1)
+    def _sorry_summary(self) -> str:
+        analyzer = _data_path("skills/lean4/lib/scripts/sorry_analyzer.py")
+        if not analyzer.exists():
+            return "(sorry_analyzer not available)"
+        try:
+            r = subprocess.run(
+                [sys.executable, str(analyzer), str(self.project_path), "--format=markdown"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+        except Exception:
+            pass
+        return "(could not run sorry_analyzer)"
 
-    try:
-        stage = read_stage(progress_file)
-    except (FileNotFoundError, ValueError):
-        stage = "unknown"
+    def _latest_journal_summary(self) -> str:
+        sessions_dir = self.state_dir / "proof-journal" / "sessions"
+        if not sessions_dir.exists():
+            return ""
+        session_dirs = sorted(sessions_dir.glob("session_*"))
+        if not session_dirs:
+            return ""
+        latest = session_dirs[-1]
+        parts = []
+        for name in ("summary.md", "recommendations.md"):
+            f = latest / name
+            if f.exists():
+                content = f.read_text()
+                if len(content) > 3000:
+                    content = content[:3000] + "\n\n... (truncated)"
+                parts.append(f"### {latest.name}/{name}\n\n{content}")
+        return "\n\n".join(parts)
 
-    # ── gather context ────────────────────────────────────────────────
 
-    progress_content = _read_if_exists(progress_file)
-    task_pending = _read_if_exists(state_dir / "task_pending.md")
-    task_done = _read_if_exists(state_dir / "task_done.md")
-    project_status = _read_if_exists(state_dir / "PROJECT_STATUS.md")
-    user_hints = _read_if_exists(hints_file, max_chars=1000)
-    sorry_info = _sorry_summary(resolved)
-    journal_summary = _latest_journal_summary(state_dir)
+class DiscussCommand:
+    """Run an interactive discussion session via Claude."""
 
-    hints_before = len(_count_hints(hints_file))
+    def __init__(
+        self,
+        project_path: str,
+        *,
+        focus: str | None = None,
+        model: str = DEFAULT_MODEL,
+    ) -> None:
+        self.project_path = project_path
+        self.focus = focus
+        self.model = model
 
-    # ── build prompt ──────────────────────────────────────────────────
+    def run(self) -> None:
+        resolved = Path(self.project_path).resolve()
+        state_dir = resolved / ".archon"
+        progress_file = state_dir / "PROGRESS.md"
+        hints_file = state_dir / "USER_HINTS.md"
 
-    focus_section = ""
-    if focus:
-        focus_section = f"""
-FOCUS: The mathematician wants to discuss **{focus}** specifically.
+        self._preflight(resolved, state_dir, progress_file)
+
+        try:
+            stage = read_stage(progress_file)
+        except (FileNotFoundError, ValueError):
+            stage = "unknown"
+
+        context = DiscussionContext(resolved).gather()
+        hints_before = len(_count_hints(hints_file))
+
+        prompt = self._build_prompt(resolved, state_dir, stage, hints_file, context)
+
+        self._announce(resolved, stage)
+        try:
+            ClaudeAgent(model=self.model, role="discuss").run_interactive(
+                prompt, cwd=resolved,
+            )
+        except KeyboardInterrupt:
+            log.info("Discussion ended")
+
+        self._post_session_summary(hints_file, hints_before)
+
+    # ── private ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _preflight(resolved: Path, state_dir: Path, progress_file: Path) -> None:
+        if not state_dir.is_dir():
+            log.error(f"No .archon/ found in {resolved}")
+            log.step(f"Run: archon init {resolved}")
+            raise typer.Exit(1)
+        if not progress_file.exists():
+            log.error("No PROGRESS.md found")
+            log.step(f"Run: archon init {resolved}")
+            raise typer.Exit(1)
+
+    def _build_prompt(
+        self,
+        resolved: Path,
+        state_dir: Path,
+        stage: str,
+        hints_file: Path,
+        context: dict[str, str],
+    ) -> str:
+        focus_section = ""
+        if self.focus:
+            focus_section = f"""
+FOCUS: The mathematician wants to discuss **{self.focus}** specifically.
 - If it looks like a file path, read it and explain the current state of every sorry in it.
 - If it looks like a theorem/lemma name, find it across the project and explain what has been tried.
-- Start the conversation by summarizing the current state of {focus}.
+- Start the conversation by summarizing the current state of {self.focus}.
 """
 
-    sorry_analyzer_path = _data_path("skills/lean4/lib/scripts/sorry_analyzer.py")
+        sorry_analyzer_path = _data_path("skills/lean4/lib/scripts/sorry_analyzer.py")
+        project_name = resolved.name
+        progress_content = context["progress"]
+        sorry_info = context["sorry_info"]
+        project_status = context["project_status"]
+        task_pending = context["task_pending"]
+        task_done = context["task_done"]
+        user_hints = context["user_hints"]
+        journal_summary = context["journal_summary"]
 
-    prompt = textwrap.dedent(f"""\
+        return textwrap.dedent(f"""\
 You are an Archon discussion advisor for project '{project_name}'.
 The mathematician wants to understand the current state of the project,
 ask questions about blockers, and provide mathematical insights.
@@ -270,43 +291,79 @@ This format is compatible with `archon hint show` and `archon hint clear`.
    "try this approach", explain that you can only record it as a hint for the plan
    agent. Suggest they run `archon loop` afterward to act on the hints.""")
 
-    # ── display and launch ────────────────────────────────────────────
+    def _announce(self, resolved: Path, stage: str) -> None:
+        log.header("Archon Discuss")
+        log.key_value({
+            "Project": str(resolved),
+            "Stage": stage,
+            "Focus": self.focus or "(general)",
+            "Writable": "USER_HINTS.md only",
+        })
 
-    log.header("Archon Discuss")
-    log.key_value({
-        "Project": str(resolved),
-        "Stage": stage,
-        "Focus": focus or "(general)",
-        "Writable": "USER_HINTS.md only",
-    })
+        log.info("Starting interactive session — Ctrl+C to exit")
+        log.step(
+            "Archon has Lean LSP access to inspect goals, search lemmas, "
+            "and check diagnostics",
+        )
+        log.step("Any insights will be recorded as hints for the next loop iteration")
+        log.step("Review hints afterward: archon hint show -p " + str(resolved))
+        log.rule()
 
-    log.info("Starting interactive session — Ctrl+C to exit")
-    log.step("Archon has Lean LSP access to inspect goals, search lemmas, and check diagnostics")
-    log.step("Any insights will be recorded as hints for the next loop iteration")
-    log.step("Review hints afterward: archon hint show -p " + str(resolved))
-    log.rule()
+    @staticmethod
+    def _post_session_summary(hints_file: Path, hints_before: int) -> None:
+        log.rule()
+        hints_after = _count_hints(hints_file)
+        new_hints = hints_after[hints_before:]
 
-    try:
-        ClaudeAgent(model=model, role="discuss").run_interactive(prompt, cwd=resolved)
-    except KeyboardInterrupt:
-        log.info("Discussion ended")
+        if new_hints:
+            log.success(f"{len(new_hints)} new hint(s) recorded during this session:")
+            for h in new_hints:
+                log.step(h)
+            log.info(
+                "These will be picked up by the plan agent at the next "
+                "`archon loop` iteration",
+            )
+            log.step("Manage hints: archon hint show / archon hint clear <spec>")
+        else:
+            log.info("No new hints recorded during this session")
 
-    # ── post-session summary ──────────────────────────────────────────
+        if len(hints_after) > 0:
+            log.info(f"Total pending hints: {len(hints_after)}")
 
-    log.rule()
-    hints_after = _count_hints(hints_file)
-    new_hints = hints_after[hints_before:]
+        log.info("Discussion complete")
 
-    if new_hints:
-        log.success(f"{len(new_hints)} new hint(s) recorded during this session:")
-        for h in new_hints:
-            log.step(h)
-        log.info("These will be picked up by the plan agent at the next `archon loop` iteration")
-        log.step("Manage hints: archon hint show / archon hint clear <spec>")
-    else:
-        log.info("No new hints recorded during this session")
 
-    if len(hints_after) > 0:
-        log.info(f"Total pending hints: {len(hints_after)}")
+def discuss(
+    project_path: str = typer.Argument(".", help="Path to Lean project"),
+    focus: Optional[str] = typer.Option(
+        None, "--focus", "-f",
+        help="Focus on a specific file or theorem (e.g. 'Algebra/WLocal.lean' or 'wLocal_iff').",
+    ),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "--model", "-M",
+        help="Claude model alias (e.g. 'opus', 'sonnet') or full id.",
+    ),
+) -> None:
+    """Start an interactive discussion about the project.
 
-    log.info("Discussion complete")
+    Opens a conversation with full project context and Lean tooling so you can:
+    \b
+      - Ask why specific sorries remain unfilled
+      - Understand what approaches were tried and why they failed
+      - Check goal states and search for Mathlib lemmas interactively
+      - Verify whether a proof idea would work (without modifying files)
+      - Record insights as hints for the next plan agent iteration
+
+    \b
+    This command never modifies .lean files or agent state files.
+    The only file it writes to is USER_HINTS.md, in the same format
+    as `archon hint add`, so you can review/clear hints with
+    `archon hint show` and `archon hint clear`.
+
+    \b
+    Examples:
+      archon discuss .
+      archon discuss . --focus Algebra/WLocal.lean
+      archon discuss . --focus wLocal_iff
+    """
+    DiscussCommand(project_path, focus=focus, model=model).run()

@@ -8,8 +8,14 @@ from archon.multilane.config import load_multilane_config, redacted_lane_summary
 from archon.multilane.dispatch import build_assignment_prompt, build_jobs_from_progress, plan_assignments, preview_round
 from archon.multilane.worktree import ensure_lane_worktree, prepare_lane, sync_lane_worktree
 from archon.state import parse_objective_files
-from archon.runner import _read_last_session_end, _session_end_indicates_success, build_plan_prompt
-from archon.commands.loop import _assignment_code_snapshot_files, _assignment_success, _non_archon_dirty_files, _select_writeback_rows
+from archon.prompts import build_plan_prompt
+from archon.session_log import read_last_session_end, session_end_indicates_success
+from archon.commands.loop.lane_round import (
+    assignment_code_snapshot_files,
+    assignment_success,
+    non_archon_dirty_files,
+    select_writeback_rows,
+)
 from archon.commands.tooling.inner_git import InnerGit
 
 
@@ -95,7 +101,7 @@ class MultiLaneConfigTests(unittest.TestCase):
 
 class MultiLaneLoopGuardTests(unittest.TestCase):
     def test_assignment_success_requires_single_target_change(self):
-        ok, reason = _assignment_success(
+        ok, reason = assignment_success(
             ok=True,
             assigned_file='Foo.lean',
             changed_files=['Foo.lean'],
@@ -105,7 +111,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIsNone(reason)
 
-        ok, reason = _assignment_success(
+        ok, reason = assignment_success(
             ok=True,
             assigned_file='Foo.lean',
             changed_files=[],
@@ -115,7 +121,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, 'no_file_change')
 
-        ok, reason = _assignment_success(
+        ok, reason = assignment_success(
             ok=True,
             assigned_file='Foo.lean',
             changed_files=['Foo.lean', 'Bar.lean'],
@@ -125,7 +131,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, 'cross_file_change')
 
-        ok, reason = _assignment_success(
+        ok, reason = assignment_success(
             ok=True,
             assigned_file='Foo.lean',
             changed_files=['Foo.lean'],
@@ -139,7 +145,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'Foo.lean'
             target.write_text("theorem foo : True := by\n  sorry\n")
-            ok, reason = _assignment_success(
+            ok, reason = assignment_success(
                 ok=True,
                 assigned_file='Foo.lean',
                 changed_files=['Foo.lean'],
@@ -163,7 +169,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
                 json.dumps({'event': 'code_snapshot', 'file': '../main/Bar.lean'}) + '\n'
             )
 
-            changed, escaped, source = _assignment_code_snapshot_files(log_path, lane, main)
+            changed, escaped, source = assignment_code_snapshot_files(log_path, lane, main)
             self.assertEqual(changed, ['Foo.lean'])
             self.assertEqual(escaped, ['Bar.lean'])
             self.assertEqual(source, 'code_snapshot')
@@ -184,7 +190,7 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
             (root / '.archon' / 'meta.json').write_text('{"changed": true}')
             (root / 'Foo.lean').write_text('-- changed\n')
 
-            self.assertEqual(_non_archon_dirty_files(root), ['Foo.lean'])
+            self.assertEqual(non_archon_dirty_files(root), ['Foo.lean'])
 
 
 class MultiLaneDispatchTests(unittest.TestCase):
@@ -211,11 +217,13 @@ class MultiLaneDispatchTests(unittest.TestCase):
                 state_dir=state_dir,
                 stage='prover',
                 assignment=assignment,
+                iter_num=42,
             )
             self.assertIn('CRITICAL WORKTREE RULES', prompt)
             self.assertIn(str(root / 'results' / 'Foo.md'), prompt)
             self.assertIn('Your assigned file: Foo.lean', prompt)
             self.assertIn(str(state_dir), prompt)
+            self.assertIn('Archon iteration: 042', prompt)
 
     def test_parse_objective_files_ignores_reference_mentions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -277,6 +285,39 @@ class MultiLaneDispatchTests(unittest.TestCase):
             files = parse_objective_files(progress, project)
             rels = [str(path.relative_to(project)) for path in files]
             self.assertEqual(rels, ['Bar/Baz.lean', 'Foo.lean'])
+
+    def test_parse_objective_files_skips_do_not_touch_headings(self):
+        """Plan agents sometimes list off-limits files in `## Current Objectives`.
+        Without filtering, the dispatcher fans out provers that immediately
+        stop with no-op task results — wasted API time. Lines containing
+        explicit stop markers ("DO NOT TOUCH", "off-limits") should be
+        dropped from the objective list."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            state_dir = project / '.archon'
+            project.mkdir()
+            state_dir.mkdir(parents=True)
+            progress = state_dir / 'PROGRESS.md'
+            progress.write_text(
+                '# Project Progress\n\n'
+                '## Current Stage\nprover\n\n'
+                '## Current Objectives\n'
+                '### 1. **`SheafCompose.lean`** — fill the instance\n'
+                '### 2. **`Functor.lean`** — fill the definition\n'
+                '### 3. The protected files (`Genus.lean`, `Jacobian.lean`, `AbelJacobi.lean`) — DO NOT TOUCH\n'
+                '- The bullet form is also off-limits: `Other.lean`\n'
+            )
+            for rel in (
+                'SheafCompose.lean', 'Functor.lean',
+                'Genus.lean', 'Jacobian.lean', 'AbelJacobi.lean',
+                'Other.lean',
+            ):
+                (project / rel).write_text('-- stub\n')
+
+            files = parse_objective_files(progress, project)
+            rels = sorted(str(p.relative_to(project)) for p in files)
+            self.assertEqual(rels, ['Functor.lean', 'SheafCompose.lean'])
+
     def test_iteration_runtime_paths_follow_requested_iteration(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -389,10 +430,10 @@ class MultiLaneDispatchTests(unittest.TestCase):
                 json.dumps({'event': 'text', 'content': 'hello'}) + '\n' +
                 json.dumps({'event': 'session_end', 'summary': 'Done. Summary: build passes'}) + '\n'
             )
-            row = _read_last_session_end(path)
+            row = read_last_session_end(path)
             self.assertIsNotNone(row)
-            self.assertTrue(_session_end_indicates_success(row))
-            self.assertFalse(_session_end_indicates_success({'summary': 'API Error: The server had an error while processing your request'}))
+            self.assertTrue(session_end_indicates_success(row))
+            self.assertFalse(session_end_indicates_success({'summary': 'API Error: The server had an error while processing your request'}))
 
 
 
@@ -402,7 +443,7 @@ class MultiLaneDispatchTests(unittest.TestCase):
             {'assignment_id': 'claude-main--2', 'lane_id': 'claude-main', 'success': True, 'assigned_file_only': True, 'verification_passed': True, 'assigned_file': 'C.lean', 'worktree_path': '/tmp/claude'},
             {'assignment_id': 'claude-main--1', 'lane_id': 'claude-main', 'success': True, 'assigned_file_only': True, 'verification_passed': True, 'assigned_file': 'A.lean', 'worktree_path': '/tmp/claude'},
         ]
-        selected = _select_writeback_rows(rows, preferred_lane_id='claude-main', limit=1)
+        selected = select_writeback_rows(rows, preferred_lane_id='claude-main', limit=1)
         self.assertEqual([row['assignment_id'] for row in selected], ['claude-main--1'])
 
 class MultiLanePromptTests(unittest.TestCase):
@@ -412,10 +453,12 @@ class MultiLanePromptTests(unittest.TestCase):
             Path('/tmp/project'),
             Path('/tmp/project/.archon'),
             'prover',
+            7,
             ignore_multilane=True,
         )
         self.assertIn('IMPORTANT EXPERIMENTAL MULTI-LANE RULES', prompt)
         self.assertIn('Keep the plan lane-agnostic', prompt)
+        self.assertIn('Archon iteration: 007', prompt)
 
 
 class MultiLaneDashboardSummaryTests(unittest.TestCase):

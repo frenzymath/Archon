@@ -1,105 +1,30 @@
-"""Prompt builders and the legacy ``run_claude`` entry point.
+"""Prompt builders for Archon's plan / prover / refactor / review phases.
 
-The actual ``claude`` invocation now lives in :mod:`archon.agent`. This
-module keeps the per-phase prompt builders (`build_plan_prompt`,
-`build_prover_prompt`, …) and a thin ``run_claude`` shim that delegates
-to a ``ClaudeAgent`` so existing call sites keep working without a
-big-bang rename. New code should construct a ``ClaudeAgent`` directly
-to take advantage of role tagging and explicit model selection.
+The actual ``claude`` invocation lives in :mod:`archon.agent`. This
+module only constructs the prompt strings handed to the agent. The
+session-end inspection helpers (which read the JSONL log after a run)
+live in :mod:`archon.session_log`.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from textwrap import dedent
 
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
 from archon.commands.tooling.blueprint import lean_file_to_chapter_slug
-
-
-# ── session-end inspection (multilane) ────────────────────────────────
-#
-# Lane runs sometimes produce a clean ``session_end`` event but exit
-# non-zero (claude propagating a tool failure, for example). The lane
-# collector treats those as success when the session_end summary
-# doesn't contain known failure markers — that judgment lives here so
-# both the lane runtime and the test suite can reuse it.
-
-
-def _read_last_session_end(jsonl_path: str | Path) -> dict | None:
-    path = Path(jsonl_path)
-    if not path.exists():
-        return None
-    last = None
-    for raw_line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
-        raw_line = raw_line.strip()
-        if not raw_line:
-            continue
-        try:
-            row = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if row.get('event') == 'session_end':
-            last = row
-    return last
-
-
-def _session_end_indicates_success(session_end: dict | None) -> bool:
-    if not session_end:
-        return False
-    summary = str(session_end.get('summary') or '').strip().lower()
-    failure_markers = (
-        'api error',
-        'tool_use_error',
-        'error while processing your request',
-        'build failed',
-        'exited with code',
-        'runner_failed',
-    )
-    return not any(marker in summary for marker in failure_markers)
-
-
-def _session_end_failure_kind(session_end: dict | None) -> str | None:
-    """Classify a non-success session_end so the caller can report the
-    real cause rather than a generic ``runner_failed``.
-
-    Returns ``None`` when the summary doesn't match any known pattern —
-    callers should fall back to ``runner_failed`` in that case.
-    """
-    if not session_end:
-        return None
-    summary = str(session_end.get('summary') or '').strip().lower()
-    # Rate / quota signals from Anthropic, Moonshot, OpenAI, and the
-    # bundled LiteLLM proxy all mention 429 or "rate limit" or TPD/RPM.
-    if (
-        '429' in summary
-        or 'rate limit' in summary
-        or 'rate_limit' in summary
-        or 'rate-limit' in summary
-        or 'tpd' in summary
-        or 'rpm' in summary
-        or 'tokens per day' in summary
-        or 'tokens per minute' in summary
-        or 'organization' in summary and 'limit' in summary
-    ):
-        return 'rate_limited'
-    if 'context length' in summary or 'context_length_exceeded' in summary or 'too many tokens' in summary:
-        return 'context_overflow'
-    if 'auth' in summary and ('failed' in summary or 'invalid' in summary or '401' in summary or '403' in summary):
-        return 'auth_failed'
-    if 'connection' in summary and ('refused' in summary or 'reset' in summary):
-        return 'network_error'
-    return None
 
 
 # ── context injection helpers ─────────────────────────────────────────
 
 
-def _references_summary(state_dir: Path | None, project_path: Path | None = None, max_chars: int = 3000) -> str:
+def _references_summary(
+    state_dir: Path | None,
+    project_path: Path | None = None,
+    max_chars: int = 3000,
+) -> str:
     """Read references/summary.md and return a bounded chunk for prompts.
 
-    Empty string if the file doesn't exist or is just the template.
+    Empty string if the file doesn't exist or contains only the template.
     """
     if project_path is None and state_dir is not None:
         # state_dir is <project>/.archon — its parent is the project.
@@ -120,7 +45,7 @@ def _references_summary(state_dir: Path | None, project_path: Path | None = None
         l for l in content.splitlines()
         if l.strip() and not l.strip().startswith("<!--")
     ]
-    if len(non_meta) <= 3:  # only heading + table header + separator row
+    if len(non_meta) <= 3:  # heading + table header + separator row
         return ""
 
     if len(content) > max_chars:
@@ -128,10 +53,7 @@ def _references_summary(state_dir: Path | None, project_path: Path | None = None
     return content
 
 
-def _blueprint_chapter_hint(
-    project_path: Path,
-    rel_lean_path: str,
-) -> str:
+def _blueprint_chapter_hint(project_path: Path, rel_lean_path: str) -> str:
     """Build the 'your blueprint chapter is at X; create it if missing' hint.
 
     Empty string if no blueprint exists.
@@ -149,11 +71,12 @@ def _blueprint_chapter_hint(
           and note in your task_results that the plan agent should flesh it out.""")
 
 
-# ── prompt building ───────────────────────────────────────────────────
+# ── prompt builders ───────────────────────────────────────────────────
 
 
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
+    iter_num: int,
     *, ignore_multilane: bool = False,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
@@ -201,18 +124,27 @@ def build_plan_prompt(
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
+        Archon iteration: {iter_num:03d} (canonical — use this number anywhere you reference an iteration).
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block
+        The .lean files are in {project_path}/.
+
+        ITERATION NUMBERING — READ THIS FIRST:
+        - The canonical iteration counter is the number above ({iter_num:03d}). It matches the directories under {state_dir}/logs/iter-NNN/ and Archon's commit messages (`archon[NNN/phase]`).
+        - Do NOT invent your own iteration counter. When you write to STRATEGY.md, PROGRESS.md, or anywhere else, use {iter_num:03d} for the current iteration.
+        - If existing entries in STRATEGY.md, the proof journal, or task files use a different counter (drift from earlier agents), treat them as historical noise: align new entries to {iter_num:03d}, and when you next rewrite a section, fix any visibly wrong iteration numbers in it.
+        - Sessions in {state_dir}/proof-journal/sessions/session_N/ are NOT iterations — they count prover rounds only and are independent of the iteration counter.""") + refs_block + blueprint_block + multilane_block
 
 
 def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
+    iter_num: int,
 ) -> str:
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
+        Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage}.md and {state_dir}/PROGRESS.md.
@@ -221,15 +153,13 @@ def build_prover_prompt(
 
 def build_parallel_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
+    iter_num: int,
     assigned_rel_lean_path: str | None = None,
 ) -> str:
     """Build the prover prompt, optionally tailored to a specific assigned file.
 
-    When `assigned_rel_lean_path` is provided, the prompt includes a pointer
-    to the blueprint chapter for that file. The calling code still appends
-    the `Your assigned file: <rel>` line itself (for backwards compatibility
-    with existing loop.py code), but now the blueprint hint is ALSO in the
-    base prompt so the prover can't miss it.
+    When `assigned_rel_lean_path` is provided, the prompt includes a
+    pointer to the blueprint chapter for that file.
     """
     bp_hint = ""
     if assigned_rel_lean_path:
@@ -239,6 +169,7 @@ def build_parallel_prover_prompt(
 
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
+        Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage}.md and {state_dir}/PROGRESS.md.
@@ -253,11 +184,12 @@ def build_parallel_prover_prompt(
 
 
 def build_refactor_prompt(
-    project_name: str, project_path: Path, state_dir: Path,
-    directive: str,
+    project_name: str, project_path: Path, state_dir: Path, directive: str,
+    iter_num: int,
 ) -> str:
     return dedent(f"""\
         You are the refactor agent for project '{project_name}'.
+        Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/refactor.md.
@@ -272,14 +204,15 @@ def build_refactor_prompt(
 def build_review_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     session_num: int, session_dir: Path, attempts_file: Path,
-    combined_prover_log: Path,
+    combined_prover_log: Path, iter_num: int,
 ) -> str:
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
+        Archon iteration: {iter_num:03d} (canonical — use this in recommendations.md / summary.md when you reference an iteration; do NOT invent your own counter).
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/review.md.
-        Session number: {session_num}.
+        Session number: {session_num} (counts prover rounds, independent of the iteration counter).
         Pre-processed attempt data: {attempts_file} (READ THIS FIRST).
         Prover log: {combined_prover_log}
 
@@ -288,48 +221,3 @@ def build_review_prompt(
           {session_dir}/summary.md
           {session_dir}/recommendations.md
           {state_dir}/PROJECT_STATUS.md""")
-
-
-# ── run_claude (delegating shim) ──────────────────────────────────────
-
-
-def run_claude(
-    prompt: str,
-    *,
-    cwd: Path,
-    log_base: Path | None = None,
-    verbose_logs: bool = False,
-    extra_args: list[str] | None = None,
-    model: str = DEFAULT_MODEL,
-    role: str | None = None,
-    env_overrides: dict[str, str] | None = None,
-) -> bool:
-    """Run `claude -p` with optional JSONL logging.
-
-    Thin delegating wrapper around :class:`archon.agent.ClaudeAgent` kept
-    for callers that don't yet construct an agent themselves. New code
-    should instantiate ``ClaudeAgent(model=..., role=...)`` directly so
-    role tagging is explicit at the construction site.
-
-    Args:
-        prompt: The prompt string to pass to Claude.
-        cwd: Working directory (project path).
-        log_base: If provided, enables JSONL logging to {log_base}.jsonl
-                  (and optionally {log_base}.raw.jsonl).
-        verbose_logs: If True, also write raw stream events.
-        extra_args: Additional arguments to pass to claude.
-        model: Model alias (`opus`, `sonnet`) or full id forwarded to
-            ``claude --model``. Default ``opus``.
-        role: Phase tag (`plan` / `prover` / …) stamped into the JSONL.
-
-    Returns:
-        True if claude exited successfully, False otherwise.
-    """
-    return ClaudeAgent(model=model, role=role).run(
-        prompt,
-        cwd=cwd,
-        log_base=log_base,
-        verbose_logs=verbose_logs,
-        extra_args=extra_args,
-        env_overrides=env_overrides,
-    )

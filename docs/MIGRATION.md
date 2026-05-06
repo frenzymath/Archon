@@ -1,10 +1,19 @@
-# Migrating to Archon v0.1.0
+# Migrating to a newer Archon
 
-Archon v0.1.0 reworks installation and project setup around a single
-`archon` CLI. This guide walks you through upgrading an existing Archon
-install and, separately, an existing Archon-initialized project. If you are
-starting from scratch, you don't need this file — follow the
+This guide walks you through upgrading an existing Archon install and,
+separately, an existing Archon-initialized project. If you are starting
+from scratch, you don't need this file — follow the
 [README](../README.md) instead.
+
+- **Coming from a pre-CLI checkout?** Start with section 1 (v0.1.0 reworked
+  installation around a single `archon` CLI) and continue through to
+  section 6.
+- **Coming from v0.1.0?** Skip to [section 7](#7-upgrading-from-v010-to-v020) —
+  v0.2.0 adds multi-lane proving, the refactor agent, inner-git
+  versioning, and `archon-protected.yaml`, but the v0.1.0 install you have
+  keeps working.
+
+## Notes for v0.1.0 readers (kept for reference)
 
 ## TL;DR
 
@@ -328,6 +337,96 @@ pip uninstall archon
 ```
 
 Then reinstall whichever version you were on previously.
+
+---
+
+## 7. Upgrading from v0.1.0 to v0.2.0
+
+v0.2.0 adds multi-lane proving, the refactor agent, inner-git versioning of
+agent work, and a frozen-signature surface (`archon-protected.yaml`). Most of
+this is transparent — your existing v0.1.0 projects keep working — but a few
+things are worth doing once per project to pick up the new behaviour.
+
+### 7.1 Reinstall the CLI
+
+```bash
+archon update
+```
+
+If you originally installed without `archon update` available, run the
+one-line installer again — it is idempotent.
+
+### 7.2 Re-run `archon init` in each project (recommended)
+
+The prompts and `CLAUDE.md` template gained several pieces of guidance in
+v0.2.0 — iteration-number canonicalization, LaTeX-macro hygiene, and a rule
+against listing off-limits files in `## Current Objectives`. The plan agent
+also now picks up the bundled dependency-graph script. To pull these into a
+project initialised under v0.1.0:
+
+```bash
+archon init /path/to/your-lean-project
+```
+
+Pick **merge** (recommended) — Archon walks you through the diffs file by
+file. Your `PROGRESS.md`, `task_*.md`, `proof-journal/`, and `.lean` files
+are never touched.
+
+### 7.3 New files inside `.archon/` after v0.2.0 init
+
+| File | What it is | Edit? |
+|------|------------|------|
+| `.archon/git-dir/` | Inner git repo. Every agent phase commits here as `archon[NNN/phase]`. | No — managed by Archon. |
+| `.archon/config.json` | Per-project loop and multilane settings. Versioned with your project. | Yes — see [MULTILANE.md](https://github.com/frenzymath/Archon/blob/main/src/archon/.archon-src/archon-template/MULTILANE.md). |
+| `.archon/.env` | API keys for the informal agent and multilane providers. | Yes — gitignored, never commit. |
+| `.archon/REFACTOR_DIRECTIVE.md` | Where the plan agent writes refactor directives. Cleared after each refactor pass. | Plan agent writes; you can read for context. |
+| `.archon/STRATEGY.md` | Plan agent's living long-arc plan. | Plan agent owns; you can read. |
+| `.archon/VERSION` | Stamped at init time so re-init knows what version produced the project. | No. |
+
+### 7.4 New file at the project root: `archon-protected.yaml`
+
+If you want to freeze certain declaration signatures from agent edits, add
+them here. Example:
+
+```yaml
+src/MyProject/Core.lean:
+  - main_theorem
+  - key_definition
+```
+
+Agents will refuse to rename or re-sign listed declarations. The refactor
+agent may move them between files (and update the file path key in this
+yaml) but cannot otherwise touch them. The file is committed to the project
+git so the whole team shares the protected surface.
+
+`archon init` writes an empty `archon-protected.yaml` if none exists; fill it
+in when you are ready.
+
+### 7.5 The CLI gained four commands
+
+| Command | What it does |
+|---------|--------------|
+| `archon refactor /path/to/project` | Run only the refactor phase against the current `REFACTOR_DIRECTIVE.md`. |
+| `archon discuss /path/to/project` | Open Claude Code interactively with full Archon context loaded — for debugging or brainstorming without firing the loop. |
+| `archon branch <name> /path/to/project` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). |
+| `archon version /path/to/project` | Show the Archon CLI version and, in a project, the project version. |
+
+### 7.6 The `--multilane-*` CLI flags are gone
+
+If you were experimenting with the preview multilane flags on `archon loop`,
+move the configuration into `.archon/config.json` under the `multilane`
+section. `archon init` writes a self-documenting template the first time.
+The default config keeps multilane disabled — single Anthropic lane behaves
+exactly like v0.1.0.
+
+### 7.7 The `[proxy]` install extra is gone
+
+If you previously installed with `pip install 'archon[proxy]'` for OpenAI /
+Gemini lanes via the bundled LiteLLM proxy, those lanes are no longer
+supported. Multi-lane providers are now Anthropic, Moonshot/Kimi, and
+DeepSeek (each speaks the Anthropic API natively). Run OpenAI / Gemini in
+their respective native CLIs instead. Plain `pip install archon` (or
+`archon update`) is now sufficient for full multilane.
 
 ---
 

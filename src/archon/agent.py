@@ -382,12 +382,15 @@ class ClaudeAgent:
         # Some lanes legitimately end with a non-zero return even though
         # the assistant produced a valid session_end — check the JSONL
         # before flagging the run as failed.
-        from archon.runner import _read_last_session_end, _session_end_indicates_success
+        from archon.session_log import (
+            read_last_session_end,
+            session_end_indicates_success,
+        )
 
         if claude_proc.returncode == 0:
             return True
-        session_end = _read_last_session_end(jsonl)
-        return _session_end_indicates_success(session_end)
+        session_end = read_last_session_end(jsonl)
+        return session_end_indicates_success(session_end)
 
 
 def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> None:

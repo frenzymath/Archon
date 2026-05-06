@@ -1,11 +1,11 @@
 # Archon
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 
-> **Archon v0.1.0.** This version introduces a unified `archon` CLI, a one-line installer, an auto-launching web dashboard, and an interactive proof graph.
-> 
-> **Upgrading from a pre-CLI checkout?** See [MIGRATION.md](docs/MIGRATION.md) — it walks through installing the new CLI and reconciling an already-initialized project without losing your local edits.
+> **Archon v0.2.0.** This version adds **multi-lane parallel proving** (Anthropic + Moonshot + DeepSeek side by side), a **refactor agent** driven by the plan agent, **inner-git versioning** of agent work, and a frozen-signature surface (`archon-protected.yaml`). The CLI gains `archon refactor`, `archon discuss`, `archon branch`, and `archon version`.
+>
+> **Upgrading from v0.1.0?** See [section 7 of MIGRATION.md](docs/MIGRATION.md#7-upgrading-from-v010-to-v020). **Upgrading from a pre-CLI checkout?** Start at section 1.
 > 
 > Full release notes: [CHANGELOG.md](docs/CHANGELOG.md).
 
@@ -27,6 +27,8 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 - [Usage](#usage)
   - [1. Initialize a project](#1-initialize-a-project)
   - [2. Start the automated loop](#2-start-the-automated-loop)
+    - [Multi-lane proving (optional)](#multi-lane-proving-optional)
+    - [Frozen signatures: `archon-protected.yaml`](#frozen-signatures-archon-protectedyaml)
   - [Guiding agents](#guiding-agents)
   - [Monitoring progress](#monitoring-progress)
   - [Starting the dashboard manually](#starting-the-dashboard-manually)
@@ -77,10 +79,14 @@ archon update
 | Command | Description |
 |---------|-------------|
 | `archon init` | Initialize a new Archon project (or reconcile an existing one). |
-| `archon loop` | Run the automated plan → prove → review loop. |
+| `archon loop` | Run the automated plan → (refactor) → prove → review loop. |
 | `archon dashboard` | Start the web monitoring interface (auto-launched by `loop` by default). |
 | `archon doctor` | Verify the full Archon setup and health. |
 | `archon prove` | Directly prove an inline statement. |
+| `archon refactor` | Run only the refactor agent against the current `REFACTOR_DIRECTIVE.md`. |
+| `archon discuss` | Open Claude Code interactively in the project with full Archon context — for debugging or brainstorming without firing the loop. |
+| `archon branch` | Create a branch in the inner git (`.archon/git-dir/`) from any historical agent commit. |
+| `archon version` | Show the Archon CLI version and, inside a project, the project version. |
 | `archon setup` | Install required system dependencies. |
 | `archon update` | Update Archon to the latest published version. |
 
@@ -126,7 +132,7 @@ Init automatically runs `/archon-lean4:doctor` at the end to verify the full set
 archon loop /path/to/your-lean-project
 ```
 
-The loop alternates plan and prover agents through stages:
+The loop alternates plan and prover agents through stages, with an optional refactor pass between plan and prove:
 
 | Stage | What happens |
 |-------|-------------|
@@ -134,7 +140,17 @@ The loop alternates plan and prover agents through stages:
 | `prover` | Proving — fill `sorry` placeholders with verified proofs |
 | `polish` | Verification and polish — golf, refactor, extract reusable lemmas |
 
+Each iteration runs `plan → (refactor if requested) → prover(s) → review → finalize`. The refactor phase is conditional: it fires only when the plan agent writes a directive to `.archon/REFACTOR_DIRECTIVE.md`, runs at most once per iteration, and is followed by a verification pass. Every phase commits its output to an inner git at `.archon/git-dir/` as `archon[NNN/phase]: …`, so the dashboard's git tree shows the per-phase history independently of your project's outer git. Use `archon branch` to fork a branch from any historical agent commit if a run goes sideways.
+
 By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL. The dashboard keeps running after the loop finishes so you can review results; stop it with Ctrl-C or by closing the terminal. Disable it with `--no-dashboard`, or open a browser automatically with `--open`.
+
+#### Multi-lane proving (optional)
+
+By default `archon loop` runs a single Anthropic lane, and the rest of this README assumes that. v0.2.0 adds **multi-lane** proving: parallel prover lanes that run different LLM providers (Anthropic, Moonshot/Kimi, DeepSeek) on the same Lean files in isolated worktrees under `.archon/lanes/<lane>/`. The first lane to finish a file cleanly wins; other lanes get a 10-minute grace period, are then cancelled, and a per-file merge agent picks the best proof per declaration across whichever lanes did finish. To enable it, edit `.archon/config.json` (`multilane.enabled: true` plus a `lanes` list) and put provider keys in `.archon/.env`. See [MULTILANE.md](src/archon/.archon-src/archon-template/MULTILANE.md) for the full setup.
+
+#### Frozen signatures: `archon-protected.yaml`
+
+Add an `archon-protected.yaml` at the project root to declare signatures that the mathematician owns. Listed declarations cannot be renamed or re-signed by any agent — the refactor agent may only move them between files (and update the file path key). The file is committed to your project git so the whole team shares the protected surface. `archon init` writes an empty template; fill it in when you are ready.
 
 **NOTE:** The prover agent is instructed to push formalization as far as possible, so the first few runs typically take **several hours** as it clears all low-hanging fruits. Once only genuinely difficult sorrys remain, each iteration becomes much shorter. To confirm the agent is running, watch the dashboard or tail `.archon/logs/iter-*/provers/*.jsonl`; the agent also writes Lean files while running, which you can see directly.
 
@@ -202,11 +218,12 @@ The **Journal** view tracks proof milestones across sessions — see which theor
 <img src="docs/dashboard-journal.jpg" alt="Archon Dashboard — Journal view" width="800">
 </p>
 
-A new **Graph** view (v0.1.0) renders the proof dependency graph
-interactively, so you can see which theorems block which and how the
-formalization is structured.
-
-See [`src/archon/ui/README.md`](src/archon/ui/README.md) for more details on Overview / Diffs / Logs / Journal / Graph and the supporting API surface.
+The **Graph** view renders the proof dependency graph interactively so you
+can see which theorems block which, and the **Diffs** view replays
+per-iteration code snapshots — including a live fallback that reads the
+working tree when an iteration is mid-flight and no snapshot has been
+captured yet (v0.2.0). When multi-lane is enabled, lane-specific logs and
+the per-file merge agent's output show up alongside the single-lane view.
 
 You can also inspect state files directly:
 
@@ -239,15 +256,20 @@ claude mcp add lean-lsp -s project -- uvx lean-lsp-mcp  # re-enable standard MCP
 
 | Flag | Description |
 |------|-------------|
-| `--max-iterations N` / `-m N` | Max plan→prover→review cycles (default: 10). Exits early if stage reaches `COMPLETE`. |
+| `--max-iterations N` / `-m N` | Max plan → (refactor) → prover → review cycles (default: 10). Exits early if stage reaches `COMPLETE`. |
 | `--max-parallel N` | Max concurrent provers in parallel mode (default: 8). |
 | `--stage STAGE` / `-s STAGE` | Force a stage (`autoformalize`, `prover`, `polish`) instead of reading from PROGRESS.md. |
 | `--serial` | One prover at a time instead of parallel (one per file). |
 | `--verbose-logs` | Save raw Claude stream events to `.raw.jsonl` for debugging. |
 | `--no-review` | Skip review phase. Saves time/cost; plan agent still works without it. |
+| `--no-refactor` | Skip the refactor phase even if the plan agent wrote a directive. |
+| `--no-finalize` | Skip end-of-iteration commit / lake build / blueprint web rebuild. |
+| `--from PHASE` | Resume the first iteration at `plan` / `refactor` / `prover` / `review` instead of restarting it. Subsequent iterations run the full sequence. |
 | `--no-dashboard` | Do not auto-start the web dashboard. |
 | `--open` | Open the dashboard in a browser as soon as it starts. |
 | `--dry-run` | Print prompts without launching Claude. |
+
+Multi-lane proving is configured exclusively via `.archon/config.json` (no CLI flag) — see [MULTILANE.md](src/archon/.archon-src/archon-template/MULTILANE.md).
 
 ## Supplying informal material
 

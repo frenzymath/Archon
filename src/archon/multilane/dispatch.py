@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
-from archon.runner import build_parallel_prover_prompt
+from archon.prompts import build_parallel_prover_prompt
 from archon.state import parse_objective_files
 
 from .collect import summarize_assignments, write_runtime_jsonl
@@ -93,10 +93,12 @@ def build_assignment_prompt(
     state_dir: Path,
     stage: str,
     assignment: LaneAssignment,
+    iter_num: int,
 ) -> str:
     state_view = Path(assignment.state_view_path) if assignment.state_view_path else state_dir
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
+        Archon iteration: {iter_num:03d}.
         Project directory: {lane_project_path}
         Instruction/state directory (read-only): {state_view}
         Read {state_view}/CLAUDE.md for your role, then read {state_view}/prompts/prover-{stage}.md and {state_view}/PROGRESS.md.

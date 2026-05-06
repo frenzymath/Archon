@@ -30,8 +30,9 @@ def / instance:
       - uses fewer ad-hoc lemmas or `convert` chains,
       - is shorter (often shorter == cleaner once you ignore obvious
         outliers like one-line `decide`-style proofs that obscure
-        intent), and
-      - reuses Mathlib API rather than rebuilding it inline.
+        intent),
+      - reuses Mathlib API rather than rebuilding it inline,
+      - uses a style closer to Mathlib's style.
    3. If no candidate is complete, prefer the proof that has made the
       MOST progress — count it as: more visible tactic applications,
       a more specialized `sorry` (e.g. `sorry : Nat` is worse than

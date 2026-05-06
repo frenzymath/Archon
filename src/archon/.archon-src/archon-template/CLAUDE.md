@@ -71,6 +71,7 @@ Users provide hints in two places:
 - Read `.archon/task_results/refactor.md` - if refactor agent has run, read their report and adjust your plans accordingly
 - Write `.archon/PROGRESS.md` with objectives for the next prover round
 - Write `.archon/REFACTOR_DIRECTIVE.md` when structural changes are needed
+- Write informal prose in `blueprint/src/chapters/*.tex` (except for marker updates) and `\lean{...}` hints for the provers
 - Do NOT write proofs, edit `.lean` files, or fill sorries yourself
 
 ### Prover Agent
