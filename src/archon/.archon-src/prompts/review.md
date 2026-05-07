@@ -167,6 +167,14 @@ In `session_<N>/summary.md`, include a "Blueprint markers updated" section listi
 - `Core.tex`, `thm:old_name`: stripped stale `\notready`
 ```
 
+### File D: `.archon/TO_USER.md`
+
+While the agents should be autonomous, you might want to inform the user of any critical issues that require their attention. The content of `TO_USER.md` will be surfaced in the UI as an alert banner, however the user might not see it immediately or never see it at all (its content will be refreshed every iteration before the review agent is called). It might include for instance issues with the environment, critical missing dependencies, required user actions, etc. 
+
+**Rules:**
+- Be extremely concise (1-2 sentences per item, listed in markdown format).
+- If nothing relevant for the user is detected, leave the file completely empty.
+
 ## Step 7: Self-Validation
 
 After writing all files, validate your output by checking:

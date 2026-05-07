@@ -1,4 +1,4 @@
-import { useProgress, useStrategy, useSummary, useSorryCount, useTasks } from '../hooks/useApi';
+import { useProgress, useStrategy, useSummary, useSorryCount, useTasks, useToUserAlert } from '../hooks/useApi';
 import { useGitHead } from '../hooks/useGitLog';
 import { fmtDuration, fmtTime } from '../utils/format';
 import { STATUS_COLORS } from '../utils/constants';
@@ -22,6 +22,7 @@ export default function Overview() {
   const { data: sorryData } = useSorryCount();
   const { data: tasks } = useTasks();
   const { data: headData } = useGitHead();
+  const { data: toUserAlert } = useToUserAlert();
 
   const stage = progress?.stage || 'init';
   const stageIdx = STAGES.indexOf(stage);
@@ -29,6 +30,12 @@ export default function Overview() {
 
   return (
     <div className={styles.root}>
+      {toUserAlert && (
+        <div className={styles.alertBanner}>
+          <strong>Message from Archon to the user</strong> <br/>
+          <MarkdownBlock content={toUserAlert} className={styles.alertText} />
+        </div>
+      )}
       {head && (
         <div className={styles.commitBanner} title={head.subject}>
           <span className={styles.commitSha}>{head.shortSha}</span>

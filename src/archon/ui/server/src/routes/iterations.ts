@@ -211,4 +211,15 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       return { name: safeFile, content: readFileOr(filePath, '') };
     },
   );
+
+  // ── User Alerts ─────────────────────────────────────────────────────
+
+  fastify.get('/api/to-user', async (_, reply) => {
+    const alertPath = path.join(archonPath, 'TO_USER.md');
+    if (!fs.existsSync(alertPath)) return { content: null };
+    
+    const content = fs.readFileSync(alertPath, 'utf-8').trim();
+    // Only return content if it's not empty
+    return { content: content.length > 0 ? content : null };
+  });
 }

@@ -1,5 +1,72 @@
 .root { max-width: 960px; display: flex; flex-direction: column; gap: 20px; }
 
+.alertBanner {
+  /* Soft red background (using the app's standard red RGB: 203, 36, 49) */
+  background: rgba(203, 36, 49, 0.08); 
+  border: 1px solid rgba(203, 36, 49, 0.25);
+  padding: 12px 16px;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+.alertBanner strong {
+  color: var(--red, #cb2431);
+}
+
+/* Keep markdown elements tight inside the banner */
+.alertText {
+  line-height: 1.5;
+  white-space: normal; /* Prevents \n artifacts from bleeding through */
+}
+
+.alertText p {
+  margin: 0 0 6px 0;
+}
+
+.alertText p:last-child {
+  margin-bottom: 0;
+}
+
+.alertText ul, .alertText ol {
+  margin: 4px 0 0 0;
+  padding-left: 20px;
+}
+
+.alertText li {
+  margin-bottom: 4px;
+}
+
+/* Style inline code `like this` to stand out against the red */
+.alertText code {
+  background: rgba(203, 36, 49, 0.15); /* Slightly darker translucent red */
+  border: 1px solid rgba(203, 36, 49, 0.2);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* Style multi-line code blocks */
+.alertText pre {
+  background: rgba(203, 36, 49, 0.1);
+  border: 1px solid rgba(203, 36, 49, 0.2);
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.alertText pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-primary);
+}
+
 .commitBanner {
   display: flex;
   align-items: center;

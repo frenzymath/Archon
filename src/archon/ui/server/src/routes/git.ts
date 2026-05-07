@@ -335,14 +335,25 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
     for (const c of commits) c.branch = branchAt.get(c.sha) ?? 'main';
 
-    // Hide multilane lane branches from the git tree: each lane writes
-    // commits to its own `lane/<lane_id>` branch in the inner git, but
-    // only the merged result (committed back to main during writeback)
-    // is interesting at this view's level of detail. Showing every
-    // lane's per-phase commit clutters the tree and makes the merged
-    // commit on main hard to find. User-created branches (via
-    // `archon branch …`) are kept — only the lane/* prefix is dropped.
-    const visible = commits.filter(c => !(c.branch ?? '').startsWith('lane/'));
+    // 1. Hide multilane branches to avoid clutter.
+    // 2. Only keep the most recent commit for each iteration to match 
+    //    the graph snapshot granularity.
+    const seenIters = new Set<string>();
+    
+    const visible = commits.filter(c => {
+      // Drop lane branches entirely
+      if ((c.branch ?? '').startsWith('lane/')) return false;
+
+      // Keep commits that aren't tied to an iteration (like initial repo setup)
+      if (!c.iteration) return true;
+
+      // Because commits are newest-first, the first time we see an iteration, 
+      // it's the final phase of that iteration. Keep it, and drop the rest.
+      if (seenIters.has(c.iteration)) return false;
+      
+      seenIters.add(c.iteration);
+      return true;
+    });
 
     return { commits: visible };
   });

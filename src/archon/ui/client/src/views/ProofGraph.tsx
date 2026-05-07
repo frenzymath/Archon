@@ -544,11 +544,11 @@ function GitTree({
                 fill={isSel ? 'var(--blue)' : col}
                 stroke={isSel ? 'white' : 'var(--bg-primary)'}
                 strokeWidth={isSel ? 2 : 1.5} />
-              {isPhaseEnd && (
+              {c.iteration && (
                 <text x={n.x} y={n.y - COMMIT_R - 3}
-                  fontSize={7} fill="var(--text-muted)"
-                  textAnchor="middle" fontFamily="var(--font-mono)">
-                  {c.phase}
+                  fontSize={8} fill="var(--text-primary)"
+                  textAnchor="middle" fontFamily="var(--font-mono)" fontWeight={600}>
+                  {c.iteration.replace('iter-', '#')}
                 </text>
               )}
               {c.shortSha && !isPhaseEnd && (

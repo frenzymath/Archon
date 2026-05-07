@@ -91,6 +91,9 @@ class ReviewPhase(Phase):
                 [sys.executable, str(extract_script), str(combined), str(attempts_file)],
                 capture_output=True,
             )
+        
+        to_user_file = ctx.state_dir / "TO_USER.md"
+        to_user_file.write_text("", encoding="utf-8")
 
         prompt = build_review_prompt(
             ctx.project_name, ctx.project_path, ctx.state_dir, ctx.current_stage,

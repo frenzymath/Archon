@@ -119,3 +119,16 @@ export function useIterationProver(iterationId: string, file: string) {
     enabled: !!iterationId && !!file,
   });
 }
+
+export function useToUserAlert() {
+  return useQuery({
+    queryKey: ['toUserAlert'],
+    queryFn: async () => {
+      const res = await fetch('/api/to-user');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.content as string | null;
+    },
+    refetchInterval: 5000, 
+  });
+}
