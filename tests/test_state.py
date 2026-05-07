@@ -1,6 +1,10 @@
 """Regression tests for archon.state stage parsing.
 
-Run with::
+Run from the repo root with either::
+
+    PYTHONPATH=src python -m unittest tests.test_state
+
+or, after an editable install (``pip install -e .``)::
 
     python -m unittest tests.test_state
 """
