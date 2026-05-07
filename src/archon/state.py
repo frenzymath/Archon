@@ -16,7 +16,15 @@ from pathlib import Path
 
 
 def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
-    """Read the current stage from PROGRESS.md (or return forced override)."""
+    """Read the canonical stage token from PROGRESS.md.
+
+    The plan agent is allowed to annotate the line with a parenthetical
+    note (e.g. ``COMPLETE  (re-attained 2026-05-07 via polish iter-001)``).
+    Only the first whitespace-separated token is returned, so callers can
+    safely compare against canonical values like ``"COMPLETE"`` or
+    ``"init"`` and build paths like ``prover-{stage}.md`` without being
+    broken by trailing annotations.
+    """
     if force_stage:
         return force_stage
     if not progress_file.exists():
@@ -25,7 +33,9 @@ def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
     for i, line in enumerate(lines):
         if line.startswith("## Current Stage"):
             if i + 1 < len(lines):
-                return lines[i + 1].strip()
+                tokens = lines[i + 1].split()
+                if tokens:
+                    return tokens[0]
     raise ValueError("Could not read current stage from PROGRESS.md")
 
 
