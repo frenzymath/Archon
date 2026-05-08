@@ -49,24 +49,32 @@ export default function LogEntryLine({ entry }: Props) {
     }
     case 'tool_call': {
       const toolName = entry.tool || '?';
+      const inp = (entry.input || {}) as Record<string, unknown>;
       let argSummary = '';
-      if (entry.input) {
-        const inp = entry.input as Record<string, unknown>;
-        if (inp.command) argSummary = String(inp.command).split('\n')[0].slice(0, 120);
-        else if (toolName === 'Edit' && inp.file_path) {
-          const fname = String(inp.file_path).split('/').pop() || '';
-          const oldStr = String(inp.old_string || '').slice(0, 60).replace(/\n/g, '↵');
-          argSummary = `${fname}: ${oldStr}`;
-        }
-        else if (inp.file_path) argSummary = String(inp.file_path);
-        else if (inp.path) argSummary = String(inp.path);
-        else if (inp.pattern) argSummary = String(inp.pattern);
-        else {
-          const firstVal = Object.values(inp).find(v => typeof v === 'string');
-          if (firstVal) argSummary = String(firstVal).slice(0, 120);
-        }
+      // Subagent invocations (Task / Agent tool) carry `subagent_type`.
+      // Surface that plus the human-readable description so the
+      // analogy/challenger/refactor calls are easy to spot in plan.jsonl.
+      const subagentType = typeof inp.subagent_type === 'string' ? inp.subagent_type : '';
+      if (subagentType) {
+        const desc = typeof inp.description === 'string' ? inp.description : '';
+        argSummary = desc ? `${subagentType} — ${desc}` : subagentType;
+      } else if (inp.command) argSummary = String(inp.command).split('\n')[0].slice(0, 120);
+      else if (toolName === 'Edit' && inp.file_path) {
+        const fname = String(inp.file_path).split('/').pop() || '';
+        const oldStr = String(inp.old_string || '').slice(0, 60).replace(/\n/g, '↵');
+        argSummary = `${fname}: ${oldStr}`;
       }
-      headline = argSummary ? `${toolName}: ${argSummary}` : `${toolName}:`;
+      else if (inp.file_path) argSummary = String(inp.file_path);
+      else if (inp.path) argSummary = String(inp.path);
+      else if (inp.pattern) argSummary = String(inp.pattern);
+      else {
+        const firstVal = Object.values(inp).find(v => typeof v === 'string');
+        if (firstVal) argSummary = String(firstVal).slice(0, 120);
+      }
+      // Relabel Task/Agent tool calls so the chip reads like "subagent:"
+      // rather than the generic "Task:" — clearer at a glance.
+      const displayTool = subagentType ? 'subagent' : toolName;
+      headline = argSummary ? `${displayTool}: ${argSummary}` : `${displayTool}:`;
       ({ toolLabel, rest: toolRest } = splitToolHeadline(headline));
       hasDetail = true;
       break;

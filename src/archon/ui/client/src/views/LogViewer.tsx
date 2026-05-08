@@ -125,6 +125,12 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
           {group.files.map(f => {
             const isProver = f.role === 'prover' && f.path.includes('/provers/');
             const isArtifact = f.name.endsWith('.md');
+            // Subagent reports follow `<role>-<slug>-report.md`; surface
+            // the slug so multiple reports per iter are distinguishable.
+            const subagentMatch = isArtifact
+              ? f.name.replace(/\.md$/, '').match(SUBAGENT_REPORT_RE)
+              : null;
+            const subagentSlug = subagentMatch ? subagentMatch[2] : '';
 
             let displayName: string;
             if (isProver) {
@@ -152,8 +158,10 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
               const fileName = fileBase ? `${fileBase}.lean` : '';
               displayName = lane ? `${lane}//${fileName}` : fileName;
             } else if (isArtifact) {
-              // For .md artifacts we already show the role prefix — no extra name needed
-              displayName = '';
+              // For .md artifacts the role prefix already labels the
+              // file; only subagent reports need the slug appended so
+              // multiple reports per iter stay distinguishable.
+              displayName = subagentSlug;
             } else {
               displayName = f.role || f.name.replace('.jsonl', '');
             }
@@ -175,9 +183,16 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
                     color: proverStatus === 'done' ? 'var(--green)' : proverStatus === 'running' ? 'var(--blue)' : proverStatus === 'error' ? 'var(--red)' : 'var(--text-muted)'
                   }}>●</span>
                 )}
-                {isArtifact && <span className={styles.fileStatus} style={{ color: '#e36209' }}>◆</span>}
+                {isArtifact && (
+                  <span
+                    className={styles.fileStatus}
+                    style={{ color: ROLE_COLORS[f.role || ''] || '#e36209' }}
+                  >◆</span>
+                )}
                 {!isProver && <span className={styles.fileRole}>{f.role}</span>}
-                <span className={styles.fileName}>{isProver ? displayName : ''}</span>
+                <span className={styles.fileName}>
+                  {isProver ? displayName : (subagentSlug || '')}
+                </span>
                 {f.commit && <span className={styles.fileCommit}>{f.commit.shortSha}</span>}
               </div>
             );
@@ -196,9 +211,14 @@ const ROLE_COLORS: Record<string, string> = {
   'refactor-manual': '#e36209',
   'refactor-directive': '#e36209',
   'refactor-report': '#e36209',
+  // Subagent reports archived by the plan agent.
+  'analogy-report': '#a371f7',     // Mathlib-precedent analogies.
+  'challenger-report': '#cf222e',  // Challenges/<Name>.lean sanity checks.
   prover: 'var(--purple)',
   review: 'var(--orange)',
 };
+
+const SUBAGENT_REPORT_RE = /^(analogy|challenger|refactor)-(.+)-report$/;
 
 const FILTER_OPTIONS = [
   { value: 'shell', label: 'shell' },

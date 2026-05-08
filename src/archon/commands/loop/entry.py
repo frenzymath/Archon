@@ -79,17 +79,16 @@ def loop(
     model: Optional[str] = typer.Option(
         None, "--model", "-M",
         help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
-             "every plan / refactor / prover / review phase in the loop. "
+             "every plan / prover / review phase in the loop. "
              "(default from .archon/config.json or 'opus')",
     ),
     from_phase: Optional[str] = typer.Option(
         None, "--from",
         help="Skip earlier phases on the FIRST iteration so you can resume "
              "after stopping mid-iteration. Choices: plan, prover, "
-             "review. E.g. '--from prover' keeps the existing PROGRESS.md and "
-             "REFACTOR_DIRECTIVE.md, skips plan + refactor, and starts the "
-             "first iteration at the prover phase. Subsequent iterations run "
-             "the full sequence as usual.",
+             "review. E.g. '--from prover' keeps the existing PROGRESS.md, "
+             "skips plan, and starts the first iteration at the prover phase. "
+             "Subsequent iterations run the full sequence as usual.",
     ),
 ) -> None:
     """Start the automated plan → prove → review loop.

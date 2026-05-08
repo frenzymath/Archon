@@ -34,6 +34,13 @@ class InnerGitStep(InitStep):
         else:
             log.step("Inner git already present at .archon/git-dir")
 
+        # Refresh info/exclude on every init so existing projects pick
+        # up new exclusion patterns (notably .env). `init()` only writes
+        # the file on first creation, so without this older repos would
+        # keep their stale rules forever.
+        if inner.ensure_excludes():
+            log.step("Refreshed inner-git info/exclude with latest patterns")
+
         made_initial = inner.ensure_initial_commit("archon[000/init]: initial state")
         if made_initial:
             log.success(f"Inner git first commit: {inner.head_sha() or '?'}")

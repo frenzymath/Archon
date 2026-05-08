@@ -29,6 +29,10 @@ function commitForFile(
   if (role === 'plan' || role === 'plan-post-refactor') return phaseCommits.plan;
   if (role === 'refactor' || role === 'refactor-manual'
       || role === 'refactor-directive' || role === 'refactor-report') return phaseCommits.refactor;
+  // Subagent reports archived by the plan agent — they live under the
+  // plan phase since the plan agent is the one that invoked the subagent.
+  if (role === 'analogy-report' || role === 'challenger-report'
+      || role === 'subagent-report') return phaseCommits.plan;
   if (role === 'review') return phaseCommits.review;
   if (role === 'finalize') return phaseCommits.finalize;
   if (role === 'prover') {
@@ -108,7 +112,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         });
       }
 
-      // Refactor artifacts (archived markdown).
+      // Refactor artifacts (legacy archived markdown from the
+      // pre-subagent refactor phase).
       for (const artifact of ['refactor-directive.md', 'refactor-report.md']) {
         const full = path.join(dirPath, artifact);
         if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
@@ -121,6 +126,32 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
           modified: stat.mtime.toISOString(),
           role,
           commit: commitForFile(phaseCommits, role, artifact),
+        });
+      }
+
+      // Subagent reports archived by the plan agent. The agreed
+      // convention (see prompts/plan.md > "After each subagent returns")
+      // is `<role>-<slug>-report.md` with role ∈ {analogy, challenger,
+      // refactor}. Surface each as a separate artifact in the iter
+      // sidebar so the dashboard can render the report inline.
+      const subagentReportRe = /^(analogy|challenger|refactor)-(.+)-report\.md$/;
+      for (const f of fs.readdirSync(dirPath)) {
+        const m = f.match(subagentReportRe);
+        if (!m) continue;
+        // Skip the legacy plain refactor-report.md (no slug between
+        // "refactor-" and "-report") — it's already handled above.
+        if (f === 'refactor-report.md' || f === 'refactor-directive.md') continue;
+        const full = path.join(dirPath, f);
+        if (!fs.statSync(full).isFile()) continue;
+        const stat = fs.statSync(full);
+        const role = `${m[1]}-report`;  // e.g. "analogy-report"
+        files.push({
+          name: f,
+          path: `${dir}/${f}`,
+          size: stat.size,
+          modified: stat.mtime.toISOString(),
+          role,
+          commit: commitForFile(phaseCommits, role, f),
         });
       }
 

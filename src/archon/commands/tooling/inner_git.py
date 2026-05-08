@@ -221,10 +221,14 @@ class InnerGit:
         "# own checkout sharing this same git-dir; the parent worktree must\n"
         "# not stage them or 'git add' would recurse into nested checkouts.\n"
         ".archon/lanes/\n"
-        "# Per-project secrets — .archon/.env contains alternative-provider\n"
-        "# API keys. Outer git already ignores .archon/, but the inner repo\n"
-        "# DOES track .archon/, so we have to exclude .env here explicitly.\n"
-        ".archon/.env\n"
+        "# Secret env files anywhere in the worktree — provider keys, OAuth\n"
+        "# tokens, DB passwords. The loop loads these via load_env_file() at\n"
+        "# startup; they must not flow through inner-git time-travel either.\n"
+        "# Note: `_stage_all` ALSO skips these by name when force-adding\n"
+        "# `.archon/` children, since `git add -f` bypasses info/exclude.\n"
+        ".env\n"
+        ".env.local\n"
+        ".env.*.local\n"
         "# Auto-generated lane provider settings ({\"env\": {ANTHROPIC_AUTH_TOKEN, …}})\n"
         "# materialize per-iteration in this directory. They embed API keys —\n"
         "# never commit them. The lane runtime regenerates them at the start\n"
@@ -285,7 +289,9 @@ class InnerGit:
         commit zero agent state and `archon branch` time-travel would
         restore nothing but .lean files. To bypass that, we force-add
         each child of `.archon/` explicitly (except `git-dir`, which is
-        the inner repo itself and must never be committed into itself).
+        the inner repo itself and must never be committed into itself,
+        and except env-secret files, since `git add -f` bypasses
+        `info/exclude` and would otherwise commit `.archon/.env`).
         This is per-child rather than blanket `git add -f .archon/` so
         the git-dir exclusion still holds when -f overrides ignores.
         """
@@ -295,6 +301,11 @@ class InnerGit:
             return
         for entry in sorted(archon_dir.iterdir()):
             if entry.name == "git-dir":
+                continue
+            if _is_env_secret(entry.name):
+                # Force-adding (-f) would override info/exclude and put
+                # secret env files into the commit. Skip them here so
+                # the exclude actually holds.
                 continue
             # -f bypasses outer .gitignore; -A picks up new + modified + deleted.
             self._run(["add", "-f", "-A", "--", f".archon/{entry.name}"])
@@ -437,6 +448,15 @@ class InnerGit:
 
 
 _BRANCH_SANITIZE = re.compile(r"[^A-Za-z0-9._/-]+")
+
+# Files that look like secret env files. Matches the patterns in
+# _DEFAULT_EXCLUDES (`.env`, `.env.local`, `.env.*.local`). Used by
+# `_stage_all` so `git add -f` doesn't punch through the exclude.
+_ENV_SECRET_RE = re.compile(r"^\.env(\.local|\..+\.local)?$")
+
+
+def _is_env_secret(name: str) -> bool:
+    return bool(_ENV_SECRET_RE.match(name))
 
 
 def _safe_branch_name(name: str) -> str:

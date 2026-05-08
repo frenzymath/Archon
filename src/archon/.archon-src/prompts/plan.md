@@ -114,7 +114,9 @@ Aim for the big picture, not the details. Rely on the details to keep the pictur
 
 If nothing strategically changed this iteration, leave the body alone and add nothing to the Revision log. When the strategy changes, rewrite the affected parts in place and append one bullet to the Revision log explaining *why*: `- iter NNN — <one-line reason>`.
 
-Because the file is cumulative, if it becomes too long, you can remove, reduce or merge old iteration notes in the Revision log; you can also remove old strategy steps that have been completed.
+Indicate clearly in the beginning the current estimation of iterations and LOC remaining (e.g., in a tabular). 
+
+Because the file is cumulative, if it becomes too long, for readability and context management, you can remove, reduce or merge old iteration notes in the Revision log; you can also remove old strategy steps that have been completed.
 
 ## Feasibility Gate
 
