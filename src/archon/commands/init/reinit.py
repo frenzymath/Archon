@@ -123,6 +123,13 @@ class PromptMerger:
             for f in sorted(prompts_src.glob("*.md")):
                 shutil.copy2(f, prompts_stage / f.name)
 
+        agents_src = data_path("agents")
+        if agents_src.exists():
+            agents_stage = staging / "agents"
+            agents_stage.mkdir(exist_ok=True)
+            for f in sorted(agents_src.glob("*.md")):
+                shutil.copy2(f, agents_stage / f.name)
+
         template_dir = data_path("archon-template")
         if template_dir.exists():
             for name in ("CLAUDE.md",):
@@ -140,41 +147,58 @@ class PromptMerger:
             self._print_diff_summary(staging)
             return
 
+        project_path = self.state_dir.parent
+        claude_agents_dir = project_path / ".claude" / "agents"
+
         prompt = textwrap.dedent(f"""\
             You are helping the user reconcile their existing Archon setup with the newer bundled
             versions. This is a merge session, NOT a normal init.
 
             Paths:
-              - Existing (local, user-edited): {self.state_dir}
-              - Incoming (bundled, new version): {staging}
+            - Existing local prompts (user may have edited): {self.state_dir}/prompts/
+            - Existing local CLAUDE.md:                     {self.state_dir}/CLAUDE.md
+            - Existing local subagents (user may have edited): {claude_agents_dir}/
+            - Incoming (bundled, new version):              {staging}/
 
-            For every file under {staging} (prompts/*.md and CLAUDE.md), compare against the
-            corresponding file under {self.state_dir}. For each file that differs, show a concise
-            summary of what changed, then ask the user to choose:
-              [L] keep local   [N] take new   [M] merge manually
+            Path mapping for incoming files:
+            - {staging}/prompts/<f>.md  ↔  {self.state_dir}/prompts/<f>.md
+            - {staging}/agents/<f>.md   ↔  {claude_agents_dir}/<f>.md
+            - {staging}/CLAUDE.md       ↔  {self.state_dir}/CLAUDE.md
+
+            For every file under {staging}, compare against the corresponding existing local file
+            per the mapping above. For each file that differs, show a concise summary of what
+            changed, then ask the user to choose:
+            [L] keep local   [N] take new   [M] merge manually
 
             Rules:
-              - Never edit .lean files.
-              - Never touch {self.state_dir}/PROGRESS.md, task_pending.md, task_done.md,
+            - Never edit .lean files.
+            - Never touch {self.state_dir}/PROGRESS.md, task_pending.md, task_done.md,
                 USER_HINTS.md, or REFACTOR_DIRECTIVE.md.
-              - Only reconcile {self.state_dir}/prompts/*.md and {self.state_dir}/CLAUDE.md.
-              - When done, delete {staging} and report: "Merged N files, kept M files."
+            - Only reconcile the files listed in the path mapping above.
+            - If {claude_agents_dir}/ does not exist yet (e.g. project predates the
+                subagent feature), create it and copy all incoming agents/*.md as new files.
+            - When done, delete {staging} and report: "Merged N files, kept M files."
             """)
 
         ClaudeAgent(model=self.model, role="init-merge").run_interactive(
-            prompt, cwd=self.project_path,
+            prompt, cwd=project_path,                                    
         )
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
 
     def _print_diff_summary(self, staging: Path) -> None:
         log.step("Files that differ between your local setup and the bundled version:")
+        project_path = self.state_dir.parent
         differs = 0
         for incoming in staging.rglob("*"):
             if not incoming.is_file():
                 continue
             rel = incoming.relative_to(staging)
-            local = self.state_dir / rel
+            # Map incoming path → local path
+            if rel.parts and rel.parts[0] == "agents":
+                local = project_path / ".claude" / "agents" / Path(*rel.parts[1:])
+            else:
+                local = self.state_dir / rel
             if not local.exists():
                 log.warn(f"  + {rel} (new in bundled version)")
                 differs += 1

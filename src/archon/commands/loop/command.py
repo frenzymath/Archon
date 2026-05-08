@@ -28,7 +28,6 @@ from .phases import (
     FinalizePhase,
     PlanPhase,
     ProverPhase,
-    RefactorPhase,
     ReviewPhase,
 )
 from .preflight import (
@@ -41,7 +40,7 @@ from .sorry_count import count_sorries
 from .utils import describe_finalize
 
 
-_PHASES = ("plan", "refactor", "prover", "review")
+_PHASES = ("plan", "prover", "review")
 
 
 class LoopCommand:
@@ -130,7 +129,6 @@ class LoopCommand:
             "Max iterations": str(opts.max_iterations),
             "Prover mode": prover_mode,
             "Review": "enabled" if not opts.no_review else "disabled",
-            "Refactor": "enabled" if not opts.no_refactor else "disabled",
             "Finalize": describe_finalize(opts.do_git, opts.do_lake, opts.do_bp_web),
             "Dashboard": "disabled" if opts.no_dashboard else "enabled",
             "Blueprint server": "enabled" if opts.blueprint_server_flag else "disabled",
@@ -182,7 +180,7 @@ class LoopCommand:
             return False
 
         # ``--from <phase>`` only affects the first iteration; subsequent
-        # iterations always run the full plan→refactor→prover→review.
+        # iterations always run the full plan→prover→review.
         ctx.skip_now = self.options.skip_first_iter if i == 0 else set()
         if ctx.skip_now:
             log.info(
@@ -203,15 +201,11 @@ class LoopCommand:
         # Phase 1 — Plan
         if PlanPhase(ctx).run().completed:
             return False
-
-        # Phase 2 — Refactor (conditional)
-        if RefactorPhase(ctx).run().completed:
-            return False
-
-        # Phase 3 — Prover
+        
+        # Phase 2 — Prover
         ProverPhase(ctx).run()
 
-        # Phase 4 — Review
+        # Phase 3 — Review
         ReviewPhase(ctx).run()
 
         # Post-iteration: sorry count + finalize

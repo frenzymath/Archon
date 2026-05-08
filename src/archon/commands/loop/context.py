@@ -26,7 +26,6 @@ class LoopOptions:
     parallel: bool
     verbose_logs: bool
     no_review: bool
-    no_refactor: bool
     no_finalize: bool
     no_git_commit: bool
     no_lake_build: bool

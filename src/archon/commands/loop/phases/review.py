@@ -18,7 +18,7 @@ from .base import Phase, PhaseResult
 
 class ReviewPhase(Phase):
     name = "Review agent"
-    number = 4
+    number = 3
     skip_token = "review"
 
     def run(self) -> PhaseResult:

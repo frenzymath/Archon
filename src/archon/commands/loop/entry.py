@@ -44,10 +44,6 @@ def loop(
         None, "--no-review/--review",
         help="Skip review phase after each iteration. (default from config or off)",
     ),
-    no_refactor: bool = typer.Option(
-        False, "--no-refactor",
-        help="Skip the refactor phase even if a directive exists.",
-    ),
     no_finalize: bool = typer.Option(
         False, "--no-finalize",
         help="Skip the end-of-iteration git commit / lake build / blueprint web.",
@@ -89,7 +85,7 @@ def loop(
     from_phase: Optional[str] = typer.Option(
         None, "--from",
         help="Skip earlier phases on the FIRST iteration so you can resume "
-             "after stopping mid-iteration. Choices: plan, refactor, prover, "
+             "after stopping mid-iteration. Choices: plan, prover, "
              "review. E.g. '--from prover' keeps the existing PROGRESS.md and "
              "REFACTOR_DIRECTIVE.md, skips plan + refactor, and starts the "
              "first iteration at the prover phase. Subsequent iterations run "
@@ -100,10 +96,9 @@ def loop(
 
     Each iteration:
       1. Plan agent (reads project state, writes objectives)
-      2. Refactor agent (only if the plan wrote REFACTOR_DIRECTIVE.md)
-      3. Prover agent(s) — parallel or serial
-      4. Review agent (unless --no-review)
-      5. Finalize: git commit, lake build, leanblueprint web (non-fatal)
+      2. Prover agent(s) — parallel or serial
+      3. Review agent (unless --no-review)
+      4. Finalize: git commit, lake build, leanblueprint web (non-fatal)
 
     By default the web dashboard is launched in the background. Pass
     --blueprint-server to also start the blueprint HTML server.
@@ -148,7 +143,6 @@ def loop(
         parallel=parallel,
         verbose_logs=verbose_logs,
         no_review=no_review,
-        no_refactor=no_refactor,
         no_finalize=no_finalize,
         no_git_commit=no_git_commit,
         no_lake_build=no_lake_build,

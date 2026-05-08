@@ -1,5 +1,6 @@
 """Init step classes — each phase of `archon init` as a self-contained class."""
 
+from .agents import AgentsStep 
 from .base import InitStep
 from .bootstrap import BootstrapStep
 from .copy_prompts import CopyPromptsStep
@@ -20,6 +21,7 @@ __all__ = [
     "BootstrapStep",
     "LeanLspMcpStep",
     "SkillsStep",
+    "AgentsStep",
     "DisableConflictingPluginsStep",
     "SemanticPassStep",
     "ReportProtectedStep",

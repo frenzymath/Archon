@@ -17,7 +17,7 @@ from .base import Phase, PhaseResult
 
 class ProverPhase(Phase):
     name = "Prover agent(s)"
-    number = 3
+    number = 2
     skip_token = "prover"
 
     def run(self) -> PhaseResult:

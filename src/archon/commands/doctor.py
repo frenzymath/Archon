@@ -155,6 +155,7 @@ class PackageDataDoctorCheck(DoctorCheck):
         "templates": "archon-template/PROGRESS.md",
         "prompts": "prompts",
         "skills": "skills/lean4/.claude-plugin/plugin.json",
+        "agents": "agents",
         "scripts": "scripts",
         "tools": "tools",
     }
@@ -257,6 +258,30 @@ class ProjectClaudeDoctorCheck(DoctorCheck):
             rows.append(("user skills", "ok", f"{skill_count} skill(s)"))
         else:
             rows.append(("user skills", "skipped", "none"))
+
+        agents_dir = claude_dir / "agents"
+        expected_agents = {"refactor.md", "challenger.md", "analogy.md"}
+        if agents_dir.is_dir():
+            present = {f.name for f in agents_dir.glob("*.md")}
+            missing = expected_agents - present
+            if missing:
+                rows.append((
+                    "subagents",
+                    "warning",
+                    f"missing: {', '.join(sorted(missing))} — run: archon init",
+                ))
+            else:
+                rows.append((
+                    "subagents",
+                    "ok",
+                    f"{len(present)} agent(s)",
+                ))
+        else:
+            rows.append((
+                "subagents",
+                "warning",
+                "not found — run: archon init",
+            ))
 
         agent = claude_dir / "tools" / "archon-informal-agent.py"
         if agent.exists():

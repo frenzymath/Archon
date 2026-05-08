@@ -1,4 +1,4 @@
-"""Prompt builders for Archon's plan / prover / refactor / review phases.
+"""Prompt builders for Archon's plan / prover / review phases.
 
 The actual ``claude`` invocation lives in :mod:`archon.agent`. This
 module only constructs the prompt strings handed to the agent. The
@@ -64,7 +64,7 @@ def _blueprint_chapter_hint(project_path: Path, rel_lean_path: str) -> str:
     rel_chapter = f"blueprint/src/chapters/{slug}.tex"
     return dedent(f"""\
         Blueprint chapter for your file: {rel_chapter}
-        - Read it BEFORE writing any Lean code — it contains the informal proof sketch
+        - Read it BEFORE writing any Lean code — it contains the informal proof
           written by the plan agent.
         - After you formalize a declaration, mark its blueprint environment with \\leanok.
         - If the chapter file does not yet exist, create it with a minimal \\chapter block
@@ -101,16 +101,13 @@ def build_plan_prompt(
             ## Blueprint
 
             This project has a blueprint at {project_path / 'blueprint'}. Informal proof
-            sketches live in {project_path / 'blueprint' / 'src' / 'chapters'}/<slug>.tex,
+            live in {project_path / 'blueprint' / 'src' / 'chapters'}/<slug>.tex,
             one file per Lean source file. The slug mapping is:
               Lean file  Algebra/WLocal.lean  →  chapter  Algebra_WLocal.tex
 
             When you set objectives, write or update the corresponding chapter .tex file
             with the informal proof sketch BEFORE assigning the prover. The prover reads
-            its chapter file and uses it as the source of truth for mathematical content.
-
-            This REPLACES the older informal/*.md convention. Do not write new informal/*.md
-            files — write to chapters/*.tex instead.""")
+            its chapter file and uses it as the source of truth for mathematical content.""")
 
     multilane_block = ""
     if ignore_multilane:
@@ -124,18 +121,12 @@ def build_plan_prompt(
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
-        Archon iteration: {iter_num:03d} (canonical — use this number anywhere you reference an iteration).
+        Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.
-
-        ITERATION NUMBERING — READ THIS FIRST:
-        - The canonical iteration counter is the number above ({iter_num:03d}). It matches the directories under {state_dir}/logs/iter-NNN/ and Archon's commit messages (`archon[NNN/phase]`).
-        - Do NOT invent your own iteration counter. When you write to STRATEGY.md, PROGRESS.md, or anywhere else, use {iter_num:03d} for the current iteration.
-        - If existing entries in STRATEGY.md, the proof journal, or task files use a different counter (drift from earlier agents), treat them as historical noise: align new entries to {iter_num:03d}, and when you next rewrite a section, fix any visibly wrong iteration numbers in it.
-        - Sessions in {state_dir}/proof-journal/sessions/session_N/ are NOT iterations — they count prover rounds only and are independent of the iteration counter.""") + refs_block + blueprint_block + multilane_block
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block
 
 
 def build_prover_prompt(
@@ -208,7 +199,7 @@ def build_review_prompt(
 ) -> str:
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
-        Archon iteration: {iter_num:03d} (canonical — use this in recommendations.md / summary.md when you reference an iteration; do NOT invent your own counter).
+        Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/review.md.
