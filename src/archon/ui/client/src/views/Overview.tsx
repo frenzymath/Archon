@@ -1,6 +1,6 @@
 import { useProgress, useStrategy, useSummary, useSorryCount, useTasks, useToUserAlert } from '../hooks/useApi';
 import { useGitHead } from '../hooks/useGitLog';
-import { fmtDuration, fmtTime } from '../utils/format';
+import { fmtDuration, fmtTime, truncateSubject } from '../utils/format';
 import { STATUS_COLORS } from '../utils/constants';
 import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './Overview.module.css';
@@ -40,7 +40,7 @@ export default function Overview() {
         <div className={styles.commitBanner} title={head.subject}>
           <span className={styles.commitSha}>{head.shortSha}</span>
           <span className={styles.commitBranch}>{head.branch}</span>
-          <span className={styles.commitSubject}>{head.subject}</span>
+          <span className={styles.commitSubject}>{truncateSubject(head.subject, 100)}</span>
         </div>
       )}
       <div className={styles.stages}>

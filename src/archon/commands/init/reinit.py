@@ -123,12 +123,9 @@ class PromptMerger:
             for f in sorted(prompts_src.glob("*.md")):
                 shutil.copy2(f, prompts_stage / f.name)
 
-        agents_src = data_path("agents")
-        if agents_src.exists():
-            agents_stage = staging / "agents"
-            agents_stage.mkdir(exist_ok=True)
-            for f in sorted(agents_src.glob("*.md")):
-                shutil.copy2(f, agents_stage / f.name)
+        # Note: bundled .claude/agents/*.md files were removed when the
+        # subagents migrated to Python tool wrappers (.claude/tools/).
+        # Nothing to stage here.
 
         template_dir = data_path("archon-template")
         if template_dir.exists():
@@ -148,7 +145,23 @@ class PromptMerger:
             return
 
         project_path = self.state_dir.parent
-        claude_agents_dir = project_path / ".claude" / "agents"
+        legacy_agents_dir = project_path / ".claude" / "agents"
+        legacy_agents = [
+            legacy_agents_dir / f"{name}.md"
+            for name in ("analogy", "challenger", "refactor")
+        ]
+        legacy_agents_present = [p for p in legacy_agents if p.exists()]
+
+        legacy_block = ""
+        if legacy_agents_present:
+            legacy_list = "\n            ".join(f"- {p}" for p in legacy_agents_present)
+            legacy_block = textwrap.dedent(f"""
+
+            Legacy cleanup — these Markdown subagent files predate the migration to
+            Python tool wrappers (.claude/tools/archon-<role>-agent.py). Delete them
+            so the plan agent doesn't pick them up via the Agent tool by mistake:
+            {legacy_list}
+            """)
 
         prompt = textwrap.dedent(f"""\
             You are helping the user reconcile their existing Archon setup with the newer bundled
@@ -157,12 +170,10 @@ class PromptMerger:
             Paths:
             - Existing local prompts (user may have edited): {self.state_dir}/prompts/
             - Existing local CLAUDE.md:                     {self.state_dir}/CLAUDE.md
-            - Existing local subagents (user may have edited): {claude_agents_dir}/
             - Incoming (bundled, new version):              {staging}/
 
             Path mapping for incoming files:
             - {staging}/prompts/<f>.md  ↔  {self.state_dir}/prompts/<f>.md
-            - {staging}/agents/<f>.md   ↔  {claude_agents_dir}/<f>.md
             - {staging}/CLAUDE.md       ↔  {self.state_dir}/CLAUDE.md
 
             For every file under {staging}, compare against the corresponding existing local file
@@ -175,10 +186,8 @@ class PromptMerger:
             - Never touch {self.state_dir}/PROGRESS.md, task_pending.md, task_done.md,
                 USER_HINTS.md, or REFACTOR_DIRECTIVE.md.
             - Only reconcile the files listed in the path mapping above.
-            - If {claude_agents_dir}/ does not exist yet (e.g. project predates the
-                subagent feature), create it and copy all incoming agents/*.md as new files.
             - When done, delete {staging} and report: "Merged N files, kept M files."
-            """)
+            """) + legacy_block
 
         ClaudeAgent(model=self.model, role="init-merge").run_interactive(
             prompt, cwd=project_path,                                    
@@ -188,17 +197,12 @@ class PromptMerger:
 
     def _print_diff_summary(self, staging: Path) -> None:
         log.step("Files that differ between your local setup and the bundled version:")
-        project_path = self.state_dir.parent
         differs = 0
         for incoming in staging.rglob("*"):
             if not incoming.is_file():
                 continue
             rel = incoming.relative_to(staging)
-            # Map incoming path → local path
-            if rel.parts and rel.parts[0] == "agents":
-                local = project_path / ".claude" / "agents" / Path(*rel.parts[1:])
-            else:
-                local = self.state_dir / rel
+            local = self.state_dir / rel
             if not local.exists():
                 log.warn(f"  + {rel} (new in bundled version)")
                 differs += 1

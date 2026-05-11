@@ -15,6 +15,7 @@ import typer
 from archon import log
 from archon.commands.tooling.version import warn_if_mismatch, warn_if_prompts_drifted
 from archon.state import (
+    cleanup_empty_sessions,
     cost_summary,
     is_complete,
     next_iter_num,
@@ -27,8 +28,11 @@ from .context import LoopContext, LoopOptions
 from .phases import (
     FinalizePhase,
     PlanPhase,
+    PreCompactPlanPhase,
+    PreCompactReviewPhase,
     ProverPhase,
     ReviewPhase,
+    SyncLeanokPhase,
 )
 from .preflight import (
     check_informal_agent_keys,
@@ -101,6 +105,17 @@ class LoopCommand:
             (state_dir / "task_results").mkdir(exist_ok=True)
             (state_dir / "proof-journal" / "sessions").mkdir(parents=True, exist_ok=True)
             (state_dir / "proof-journal" / "current_session").mkdir(parents=True, exist_ok=True)
+            # Sweep stub session_* dirs left behind by interrupted
+            # review runs or by `git reset --hard`s that walked back
+            # past dirs the inner git doesn't track. Keeps the Journal
+            # UI's session list aligned with the iter numbers it
+            # actually has data for.
+            removed = cleanup_empty_sessions(state_dir)
+            if removed:
+                log.info(
+                    f"Cleaned up {removed} empty session dir(s) in "
+                    f"proof-journal/sessions/"
+                )
 
         current_stage = read_stage(progress_file, opts.force_stage)
 
@@ -198,12 +213,26 @@ class LoopCommand:
         iter_start = time.monotonic()
         self._setup_iteration_dir(i)
 
+        # Phase 0a — Pre-compact (plan side)
+        # Shrinks STRATEGY.md / task_pending.md / task_done.md before
+        # the plan agent reads them. Per-target threshold gating means
+        # this is silent on small/early-iteration projects.
+        PreCompactPlanPhase(ctx).run()
+
         # Phase 1 — Plan
         if PlanPhase(ctx).run().completed:
             return False
-        
+
         # Phase 2 — Prover
         ProverPhase(ctx).run()
+
+        # Phase 2b — Sync \leanok markers deterministically.
+        # Replaces the review agent's mechanical marker placement;
+        # review still owns \mathlibok and prose.
+        SyncLeanokPhase(ctx).run()
+
+        # Phase 3a — Pre-compact (review side)
+        PreCompactReviewPhase(ctx).run()
 
         # Phase 3 — Review
         ReviewPhase(ctx).run()

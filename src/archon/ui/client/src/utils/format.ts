@@ -25,3 +25,12 @@ export function truncate(s: string, max: number): { text: string; truncated: boo
   if (s.length <= max) return { text: s, truncated: false };
   return { text: s.slice(0, max), truncated: true };
 }
+
+/** Hard-truncate to `max` chars + `…`. Use for displays where CSS
+ *  ellipsis can't be relied on (narrow sidebars, flex containers
+ *  whose width chain doesn't propagate, etc.). */
+export function truncateSubject(s: string | undefined | null, max: number): string {
+  if (!s) return '';
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
+}

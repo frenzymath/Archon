@@ -1,11 +1,11 @@
 """Init step classes — each phase of `archon init` as a self-contained class."""
 
-from .agents import AgentsStep 
 from .base import InitStep
 from .bootstrap import BootstrapStep
 from .copy_prompts import CopyPromptsStep
 from .disable_conflicts import DisableConflictingPluginsStep
 from .env_config import EnvAndConfigStep
+from .git_hooks import GitHooksStep
 from .inner_git import InnerGitStep
 from .lean_lsp import LeanLspMcpStep
 from .report_protected import ReportProtectedStep
@@ -21,11 +21,11 @@ __all__ = [
     "BootstrapStep",
     "LeanLspMcpStep",
     "SkillsStep",
-    "AgentsStep",
     "DisableConflictingPluginsStep",
     "SemanticPassStep",
     "ReportProtectedStep",
     "EnvAndConfigStep",
     "InnerGitStep",
+    "GitHooksStep",
     "VersionStampStep",
 ]

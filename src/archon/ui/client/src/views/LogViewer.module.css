@@ -18,12 +18,26 @@
   cursor: pointer;
   font-size: 12px;
   user-select: none;
+  /* Constrain to the sidebar width — a free-form `meta.stage` value
+     could otherwise push the commit badge past the right edge. */
+  max-width: 100%;
+  overflow: hidden;
 }
 .groupHeader:hover { background: var(--bg-secondary); }
 
 .toggle { font-size: 10px; color: var(--text-muted); width: 12px; flex-shrink: 0; }
-.groupTitle { font-weight: 600; font-size: 12px; }
-.groupStage { color: var(--text-secondary); font-size: 10px; }
+.groupTitle { font-weight: 600; font-size: 12px; flex-shrink: 0; }
+/* Truncate the running-stage badge with ellipsis. The label itself is
+   already capped to 14 chars in the component, but min-width: 0 lets
+   the flex child shrink in narrow sidebars too. */
+.groupStage {
+  color: var(--text-secondary);
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .groupMode { color: var(--purple); font-size: 10px; font-weight: 700; }
 .groupDone { color: var(--green); font-size: 10px; }
 .groupLive { color: var(--blue); font-size: 10px; animation: pulse 1.5s infinite; }
@@ -50,9 +64,20 @@
   padding: 2px 10px 4px 22px;
   font-size: 10px;
   color: var(--text-muted);
+  /* Constrain to the sidebar width so .commitSubject's ellipsis kicks in. */
+  max-width: 100%;
+  overflow: hidden;
 }
 .commitSha { font-family: var(--font-mono); font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
-.commitSubject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* min-width: 0 lets the flex child shrink below its intrinsic content width
+   so text-overflow: ellipsis takes effect inside the 220 px sidebar. */
+.commitSubject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Phase summary */
 .metaBar {
@@ -83,6 +108,20 @@
 
 .fileStatus { font-size: 8px; flex-shrink: 0; }
 .fileRole { font-size: 10px; font-weight: 500; color: var(--text-muted); text-transform: capitalize; min-width: 40px; }
+/* Subagent role tag — colored by ROLE_COLORS (refactor=orange,
+   analogy=violet, challenger=red) so the three streams are visually
+   distinct from each other and from the phase logs above them. */
+.fileSubagentRole {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+/* Subagent items render after the phase logs (plan/refactor/prover/
+   review). Indenting them slightly makes the visual hierarchy clear:
+   "these belong to the plan agent's run, not its peers." */
+.fileItemSubagent { padding-left: 26px; }
 .fileName { font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fileCommit {
   margin-left: auto;
@@ -220,6 +259,10 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
+  /* Cap height — agent session summaries can be multi-page reports
+     that otherwise push every log entry off-screen. */
+  max-height: 320px;
+  overflow-y: auto;
 }
 .summaryLabel {
   font-weight: 600; font-size: 10px; text-transform: uppercase;

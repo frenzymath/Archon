@@ -99,7 +99,21 @@
 }
 .logHeader:hover { background: rgba(111,66,193,0.08); }
 .logStats { padding: 6px 16px; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); background: var(--bg-primary); border-bottom: 1px solid var(--border); }
-.logSummary { padding: 8px 16px; font-size: 11px; color: var(--text-secondary); line-height: 1.45; background: var(--bg-primary); border-bottom: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+.logSummary {
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Cap the height — agent session summaries can be very long
+     (multi-page plan-agent reports). Without this the side panel
+     becomes a wall of wrapped text. */
+  max-height: 240px;
+  overflow-y: auto;
+}
 .logList { display: flex; flex-direction: column; gap: 1px; background: var(--border); }
 .logEntry { background: var(--bg-primary); }
 .logHead { display: flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 11px; min-height: 26px; }

@@ -33,7 +33,8 @@ class SkillsStep(InitStep):
 
         self._register_marketplace(home, skills_dir)
         self._install_plugin(home)
-        self._copy_informal_agent()
+        self._copy_archon_tools()
+        self._cleanup_legacy_subagents()
 
     # ── private ────────────────────────────────────────────────────────
 
@@ -86,12 +87,83 @@ class SkillsStep(InitStep):
             log.error(f"Failed to install lean4@archon-local: {output.strip()}")
             raise typer.Exit(1)
 
-    def _copy_informal_agent(self) -> None:
+    # The single ``subagent_wrapper.py`` source is installed under one
+    # filename per subagent role; the wrapper itself derives its role
+    # from ``sys.argv[0]``. Keeping the list here (instead of in the
+    # wrapper) means adding a new subagent is a one-line edit.
+    _SUBAGENT_ROLES = ("refactor", "analogy", "challenger")
+    _SUBAGENT_WRAPPER_STEM = "subagent_wrapper"
+
+    def _copy_archon_tools(self) -> None:
+        """Copy every Archon tool script into the project's .claude/tools/.
+
+        Each script in our package's ``data/tools/`` becomes
+        ``.claude/tools/archon-<stem-with-dashes>.py`` in the project. The
+        sole exception is ``subagent_wrapper.py``: it's installed under
+        three role-specific names (one per subagent) so Claude can keep
+        invoking ``archon-<role>-agent.py`` while the underlying script
+        is single-sourced.
+
+        The plan agent's CLAUDE.md and prompt document the invocation
+        patterns; Claude calls them via Bash.
+        """
         ctx = self.ctx
-        tools_dir = ctx.project_path / ".claude" / "tools"
-        tools_dir.mkdir(parents=True, exist_ok=True)
-        agent_src = data_path("tools/informal_agent.py")
-        agent_dst = tools_dir / "archon-informal-agent.py"
-        if agent_src.exists():
-            copy_file(agent_src, agent_dst, overwrite=True)
-            log.success("Informal agent copied to .claude/tools/")
+        tools_src = data_path("tools")
+        tools_dst = ctx.project_path / ".claude" / "tools"
+        tools_dst.mkdir(parents=True, exist_ok=True)
+
+        if not tools_src.is_dir():
+            log.warn("Archon tools directory not found in package data")
+            return
+
+        for src in sorted(tools_src.glob("*.py")):
+            if src.stem == self._SUBAGENT_WRAPPER_STEM:
+                self._install_subagent_wrappers(src, tools_dst)
+                continue
+            # informal_agent.py -> archon-informal-agent.py
+            stem = src.stem.replace("_", "-")
+            dst = tools_dst / f"archon-{stem}.py"
+            copy_file(src, dst, overwrite=True)
+            log.success(f"Copied {dst.name}")
+
+        # Older Archon installs created one file per role; the wrapper
+        # source is now consolidated. Sweep any abandoned per-role file
+        # that doesn't match our installed naming scheme so the project
+        # doesn't carry stale logic. (We only remove files we know we
+        # used to install — never anything else under .claude/tools/.)
+        for stale in (
+            "archon-refactor-wrapper.py",
+            "archon-analogy-wrapper.py",
+            "archon-challenger-wrapper.py",
+        ):
+            stale_path = tools_dst / stale
+            if stale_path.is_file():
+                stale_path.unlink()
+
+    def _install_subagent_wrappers(self, src: Path, tools_dst: Path) -> None:
+        """Install ``subagent_wrapper.py`` under one filename per role."""
+        for role in self._SUBAGENT_ROLES:
+            dst = tools_dst / f"archon-{role}-agent.py"
+            copy_file(src, dst, overwrite=True)
+            log.success(f"Copied {dst.name}")
+
+    def _cleanup_legacy_subagents(self) -> None:
+        """Remove pre-migration ``.claude/agents/{analogy,challenger,refactor}.md``.
+
+        These were the Markdown-defined subagents replaced by Python tool
+        wrappers. Leaving them in place creates a second invocation route
+        (the Agent tool) that bypasses Archon's JSONL parser. We remove
+        only those three filenames; any other user-defined ``.claude/
+        agents/*.md`` is left alone.
+        """
+        agents_dir = self.ctx.project_path / ".claude" / "agents"
+        if not agents_dir.is_dir():
+            return
+        for stem in ("analogy", "challenger", "refactor"):
+            stale = agents_dir / f"{stem}.md"
+            if stale.is_file() or stale.is_symlink():
+                try:
+                    stale.unlink()
+                    log.success(f"Removed legacy .claude/agents/{stem}.md")
+                except OSError as e:
+                    log.warn(f"Could not remove {stale}: {e}")

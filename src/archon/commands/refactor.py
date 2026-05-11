@@ -27,7 +27,6 @@ from archon.agent import ClaudeAgent, DEFAULT_MODEL
 from archon.commands.tooling.inner_git import InnerGit
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.version import warn_if_mismatch
-from archon.prompts import build_refactor_prompt
 
 
 app = typer.Typer(
@@ -217,38 +216,42 @@ class RefactorRunCommand:
     def _invoke_agent(
         self, resolved: Path, state_dir: Path, iter_num: int, directive: str,
     ) -> tuple[bool, int]:
-        prompt = build_refactor_prompt(
-            resolved.name, resolved, state_dir, directive, iter_num,
-        )
+        from archon.subagents.refactor import RefactorSubagent
 
         iter_log_dir = state_dir / "logs" / f"iter-{iter_num:03d}"
         iter_log_dir.mkdir(parents=True, exist_ok=True)
-        log_base = iter_log_dir / "refactor"
-        start = time.monotonic()
-        ok = ClaudeAgent(model=self.model, role="refactor").run(
-            prompt, cwd=resolved, log_base=log_base, verbose_logs=self.verbose_logs,
+        # CLI flow uses a fixed slug. The subagent writes to
+        # task_results/refactor-cli.md; _summarize_report below reads from
+        # there. Older runs may have written task_results/refactor.md;
+        # _summarize_report falls back to that for backwards compatibility.
+        slug = "cli"
+        log_base = iter_log_dir / f"refactor-{slug}"
+
+        sub = RefactorSubagent(
+            resolved, model=self.model, verbose_logs=self.verbose_logs,
         )
-        secs = int(time.monotonic() - start)
-        if ok:
-            log.success(f"Refactor agent finished ({secs}s)")
-        else:
-            log.error(f"Refactor agent failed ({secs}s)")
-        return ok, secs
+        result = sub.run(
+            directive=directive, slug=slug, iter_num=iter_num, log_base=log_base,
+        )
+        return result.ok, result.duration_s
 
     @staticmethod
     def _summarize_report(state_dir: Path) -> str:
-        """Extract a short first-line summary from task_results/refactor.md."""
-        report = state_dir / "task_results" / "refactor.md"
-        if not report.exists():
-            return ""
-        try:
-            for line in report.read_text(encoding="utf-8").splitlines():
-                s = line.strip()
-                if not s or s.startswith("#") or s.startswith("<!--"):
-                    continue
-                return s[:120]
-        except OSError:
-            return ""
+        candidates = [
+            state_dir / "task_results" / "refactor-cli.md",
+            state_dir / "task_results" / "refactor.md",
+        ]
+        for report in candidates:
+            if not report.exists():
+                continue
+            try:
+                for line in report.read_text(encoding="utf-8").splitlines():
+                    s = line.strip()
+                    if not s or s.startswith("#") or s.startswith("<!--"):
+                        continue
+                    return s[:120]
+            except OSError:
+                continue
         return ""
 
     @staticmethod
@@ -276,7 +279,10 @@ def draft(
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id.",
+        help=(
+            "Model alias. Anthropic: 'opus', 'sonnet', 'haiku' or a full id. "
+            "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
+        ),
     ),
 ) -> None:
     """Interview the user and write a REFACTOR_DIRECTIVE.md.
@@ -299,7 +305,10 @@ def run(
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id.",
+        help=(
+            "Model alias. Anthropic: 'opus', 'sonnet', 'haiku' or a full id. "
+            "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
+        ),
     ),
 ) -> None:
     """Execute REFACTOR_DIRECTIVE.md with the refactor agent.

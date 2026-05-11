@@ -43,6 +43,7 @@ class PlanPhase(Phase):
             ClaudeAgent(model=ctx.model, role="plan").run(
                 plan_prompt, cwd=ctx.project_path,
                 log_base=plan_log, verbose_logs=ctx.verbose_logs,
+                env_overrides={"ARCHON_ITER_NUM": f"{ctx.iter_num:03d}"},
             )
 
         plan_secs = int(time.monotonic() - plan_start)

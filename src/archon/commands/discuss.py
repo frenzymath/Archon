@@ -341,7 +341,10 @@ def discuss(
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id.",
+        help=(
+            "Model alias. Anthropic: 'opus', 'sonnet', 'haiku' or a full id. "
+            "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
+        ),
     ),
 ) -> None:
     """Start an interactive discussion about the project.

@@ -307,8 +307,26 @@ class InnerGit:
                 # secret env files into the commit. Skip them here so
                 # the exclude actually holds.
                 continue
+            if entry.name == "multilane" and entry.is_dir():
+                # The per-lane provider settings JSON under
+                # multilane/lanes/ embeds ANTHROPIC_AUTH_TOKEN. It's
+                # listed in info/exclude, but `git add -f` would punch
+                # right through that. Stage every other child of
+                # multilane/ individually, skipping lanes/.
+                self._stage_multilane(entry)
+                continue
             # -f bypasses outer .gitignore; -A picks up new + modified + deleted.
             self._run(["add", "-f", "-A", "--", f".archon/{entry.name}"])
+
+    def _stage_multilane(self, multilane_dir: Path) -> None:
+        """Stage everything under .archon/multilane EXCEPT the
+        secret-bearing ``lanes/`` subdir (regenerated per round,
+        contains plaintext API keys in ``{lane}-settings.json``).
+        """
+        for sub in sorted(multilane_dir.iterdir()):
+            if sub.name == "lanes":
+                continue
+            self._run(["add", "-f", "-A", "--", f".archon/multilane/{sub.name}"])
 
     def add_all(self) -> None:
         if not self.is_initialized():

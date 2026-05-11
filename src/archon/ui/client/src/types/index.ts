@@ -29,6 +29,9 @@ export interface LogFile {
   size: number;
   modified: string;
   role?: string;
+  /** Slug of a subagent run (`<role>-<slug>.jsonl|.md`). Set by the
+   *  server when the file is a subagent JSONL stream or report. */
+  subagentSlug?: string;
   /** Commit associated with this specific file/phase. */
   commit?: { sha: string; shortSha: string; subject: string; date: string };
 }

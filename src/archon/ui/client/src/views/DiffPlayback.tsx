@@ -590,7 +590,7 @@ export default function DiffPlayback() {
                 fromFile={compareMode === 'previous'
                   ? (currentIdx === 0 ? '(initial)' : timeline![currentIdx - 1]?.file)
                   : (compareEntry?.file || '(initial)')}
-                toFile={currentEntry.file}
+                toFile={currentEntry?.file || ''}
                 addedLines={displayDiff.addedLines}
                 removedLines={displayDiff.removedLines}
                 activeId={activeId}

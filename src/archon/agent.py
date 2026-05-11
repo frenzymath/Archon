@@ -36,6 +36,20 @@ from archon import log
 DEFAULT_MODEL = "opus"
 
 
+# Model aliases that select a non-Anthropic provider. When the agent's
+# ``model`` matches one of these, ``_resolve_provider`` swaps in the
+# corresponding ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN`` env
+# overrides at run() time — no settings file is ever written to disk,
+# so the API key can't leak into commits, logs, or shared snapshots.
+# The keys are read from ``.archon/.env`` (or the shell) via
+# ``provider_env`` in ``env_loader``.
+PROVIDER_ALIASES: dict[str, str] = {
+    "kimi": "moonshot",
+    "moonshot": "moonshot",
+    "deepseek": "deepseek",
+}
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -200,13 +214,51 @@ class ClaudeAgent:
 
     # ── command assembly ─────────────────────────────────────────────
 
-    def _common_flags(self) -> list[str]:
+    def _build_flags(self, model: str) -> list[str]:
         flags: list[str] = []
         if self.skip_permissions:
             flags.append("--dangerously-skip-permissions")
         flags.extend(["--permission-mode", self.permission_mode])
-        flags.extend(["--model", self.model])
+        flags.extend(["--model", model])
         return flags
+
+    def _resolve_provider(self) -> tuple[str, dict[str, str], str | None]:
+        """Resolve the agent's ``model`` to (real_model, env, provider).
+
+        For standard Anthropic aliases (``opus``, ``sonnet``, …) this is
+        a no-op: returns ``(self.model, {}, None)``.
+
+        For non-Anthropic aliases declared in :data:`PROVIDER_ALIASES`
+        (``kimi``, ``deepseek``, …), looks up
+        :func:`env_loader.provider_env` and returns:
+
+        - ``real_model``: the concrete provider model (e.g. ``kimi-k2.6``)
+          to pass via ``claude --model``;
+        - ``env``: the ``{ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …}``
+          dict that the spawned ``claude`` will read to redirect itself
+          to the provider's Anthropic-compatible endpoint;
+        - ``provider``: the provider name, used only to label log lines.
+
+        Raises ``RuntimeError`` when the provider's API key isn't set —
+        single-agent flows (plan / review / discuss / subagents) have no
+        graceful fallback the way a multilane round does, so failing
+        loud is the right call.
+        """
+        if self.model not in PROVIDER_ALIASES:
+            return self.model, {}, None
+        from archon.commands.tooling.env_loader import PROVIDERS, provider_env
+
+        provider = PROVIDER_ALIASES[self.model]
+        env = provider_env(provider)
+        if not env:
+            key_name = PROVIDERS.get(provider, [provider.upper() + "_API_KEY"])[0]
+            raise RuntimeError(
+                f"Model '{self.model}' resolves to provider '{provider}', "
+                f"but {key_name} is not set. Add it to .archon/.env or "
+                f"export it in your shell, then re-run."
+            )
+        real_model = env.get("ANTHROPIC_MODEL", self.model)
+        return real_model, env, provider
 
     # ── invocation modes ─────────────────────────────────────────────
 
@@ -230,6 +282,9 @@ class ClaudeAgent:
         ``env_overrides`` is forwarded to the spawned subprocess so lane
         runs can set provider-specific variables (e.g. an alternate
         ``ANTHROPIC_BASE_URL``) without leaking them into the parent.
+        When the agent's own ``model`` is a non-Anthropic provider alias,
+        the matching provider env vars are merged in here too —
+        caller-supplied overrides win on conflict.
 
         ``cancel_event`` is checked while waiting for claude to finish.
         Setting it from another thread sends SIGTERM to the spawned
@@ -237,19 +292,23 @@ class ClaudeAgent:
         Used by multilane to stop slow lanes once another lane has won
         the same file. Returns False on cancellation.
         """
-        cmd = ["claude", "-p", prompt, *self._common_flags()]
+        real_model, provider_env_vars, provider = self._resolve_provider()
+        cmd = ["claude", "-p", prompt, *self._build_flags(real_model)]
         if extra_args:
             cmd.extend(extra_args)
 
-        env = self._build_env(env_overrides)
+        merged = dict(provider_env_vars)
+        if env_overrides:
+            merged.update(env_overrides)
+        env = self._build_env(merged)
 
-        self._announce_model()
+        self._announce_model(real_model=real_model, provider=provider)
 
         if log_base is None:
             return subprocess.run(cmd, cwd=cwd, env=env).returncode == 0
         return self._run_with_logging(
             cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
-            env=env, cancel_event=cancel_event,
+            env=env, cancel_event=cancel_event, jsonl_model=real_model,
         )
 
     def run_interactive(
@@ -266,19 +325,27 @@ class ClaudeAgent:
         the terminal and expects user input. Returns the subprocess exit
         code so the caller can decide how to react to non-zero.
         """
-        cmd = ["claude", *self._common_flags()]
+        real_model, provider_env_vars, provider = self._resolve_provider()
+        cmd = ["claude", *self._build_flags(real_model)]
         if extra_args:
             cmd.extend(extra_args)
         cmd.append(prompt)
 
-        self._announce_model()
-        return subprocess.run(cmd, cwd=cwd).returncode
+        env = self._build_env(provider_env_vars) if provider_env_vars else None
+        self._announce_model(real_model=real_model, provider=provider)
+        return subprocess.run(cmd, cwd=cwd, env=env).returncode
 
     # ── internals ────────────────────────────────────────────────────
 
-    def _announce_model(self) -> None:
-        suffix = f" ({self.role})" if self.role else ""
-        log.info(f"Agent model: {self.model}{suffix}")
+    def _announce_model(
+        self, *, real_model: str | None = None, provider: str | None = None,
+    ) -> None:
+        role_suffix = f" ({self.role})" if self.role else ""
+        shown = real_model or self.model
+        if provider:
+            log.info(f"Agent model: {shown} via {provider}{role_suffix}")
+        else:
+            log.info(f"Agent model: {shown}{role_suffix}")
 
     def _build_env(self, overrides: dict[str, str] | None) -> dict[str, str]:
         env = os.environ.copy()
@@ -301,6 +368,7 @@ class ClaudeAgent:
         verbose_logs: bool,
         env: dict[str, str] | None = None,
         cancel_event: 'threading.Event | None' = None,
+        jsonl_model: str | None = None,
     ) -> bool:
         log_base.parent.mkdir(parents=True, exist_ok=True)
         jsonl = f"{log_base}.jsonl"
@@ -308,8 +376,10 @@ class ClaudeAgent:
 
         # Stamp the model BEFORE claude starts streaming, so the
         # dashboard/postprocessors can read which model produced every
-        # subsequent event.
-        _emit_session_start(jsonl, model=self.model, role=self.role)
+        # subsequent event. Use the resolved real model (post
+        # provider-alias mapping) so non-Anthropic runs log the actual
+        # name that ran, not the local alias.
+        _emit_session_start(jsonl, model=jsonl_model or self.model, role=self.role)
 
         cmd = cmd + ["--verbose", "--output-format", "stream-json"]
         parser_script = _STREAM_PARSER.format(

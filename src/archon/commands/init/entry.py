@@ -21,8 +21,9 @@ def init(
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
-             "the interactive init pass.",
+        help="Model used for the interactive init pass. Anthropic: 'opus', "
+             "'sonnet', 'haiku' or a full id. Non-Anthropic (requires "
+             ".archon/.env credentials): 'kimi', 'deepseek'.",
     ),
 ) -> None:
     """Initialize a new Archon project.

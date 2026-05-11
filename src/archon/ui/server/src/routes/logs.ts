@@ -12,10 +12,23 @@ interface LogFileEntry {
   size: number;
   modified: string;
   role?: string;
+  /** For subagent files (`<role>-<slug>.jsonl|.md`), the bare slug — used
+   *  by the dashboard to render `<role> <slug>` distinctly from a phase log. */
+  subagentSlug?: string;
   /** Commit for this specific file's phase (plan/refactor/prover/review). */
   commit?: InnerCommit;
 }
 interface LogGroup { id: string; files: LogFileEntry[]; meta?: Record<string, unknown> }
+
+/** Pattern for autonomous-loop subagent JSONL streams. Matches files
+ *  produced by ``archon subagent <role> --slug <slug> ...`` — i.e. the
+ *  ``<role>-<slug>.jsonl`` written under ``iter-NNN/``. The plain
+ *  ``refactor.jsonl`` (legacy phase log) and ``refactor-cli.jsonl``
+ *  (manual ``archon refactor run``) are intentionally NOT matched as
+ *  subagents — the legacy phase log has no slug, and the CLI flow uses a
+ *  fixed slug we want surfaced as such (still routed via this regex,
+ *  but tagged like other subagent runs). */
+const SUBAGENT_JSONL_RE = /^(refactor|analogy|challenger)-(.+)\.jsonl$/;
 
 /** Pick the commit that "belongs" to a file, given its role and prover slug. */
 function commitForFile(
@@ -33,6 +46,11 @@ function commitForFile(
   // plan phase since the plan agent is the one that invoked the subagent.
   if (role === 'analogy-report' || role === 'challenger-report'
       || role === 'subagent-report') return phaseCommits.plan;
+  // Subagent JSONL streams (refactor/analogy/challenger invocations from
+  // inside the plan agent). Route them to the plan commit — there's no
+  // separate phase commit for an in-loop subagent run.
+  if (role === 'subagent-refactor' || role === 'subagent-analogy'
+      || role === 'subagent-challenger') return phaseCommits.plan;
   if (role === 'review') return phaseCommits.review;
   if (role === 'finalize') return phaseCommits.finalize;
   if (role === 'prover') {
@@ -104,10 +122,21 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       for (const f of fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl') && f !== 'provers-combined.jsonl')) {
         const full = path.join(dirPath, f);
         if (!fs.statSync(full).isFile()) continue;
-        const role = f.replace('.jsonl', '');
         const stat = fs.statSync(full);
+
+        // Subagent JSONL streams emit `<role>-<slug>.jsonl`. Tag them
+        // with role=`subagent-<role>` and surface the bare slug so the
+        // dashboard can render them under their role with the slug
+        // shown alongside, instead of one anonymous "refactor-foo" tag.
+        const subagentMatch = f.match(SUBAGENT_JSONL_RE);
+        const role = subagentMatch
+          ? `subagent-${subagentMatch[1]}`
+          : f.replace('.jsonl', '');
+        const subagentSlug = subagentMatch ? subagentMatch[2] : undefined;
+
         files.push({
           name: f, path: `${dir}/${f}`, size: stat.size, modified: stat.mtime.toISOString(), role,
+          subagentSlug,
           commit: commitForFile(phaseCommits, role, f),
         });
       }
@@ -151,6 +180,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
           size: stat.size,
           modified: stat.mtime.toISOString(),
           role,
+          subagentSlug: m[2],
           commit: commitForFile(phaseCommits, role, f),
         });
       }

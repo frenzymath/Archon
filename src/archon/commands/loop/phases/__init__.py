@@ -3,14 +3,19 @@
 from .base import Phase, PhaseResult
 from .finalize import FinalizePhase
 from .plan import PlanPhase
+from .precompact import PreCompactPlanPhase, PreCompactReviewPhase
 from .prover import ProverPhase
 from .review import ReviewPhase
+from .sync_leanok import SyncLeanokPhase
 
 __all__ = [
     "Phase",
     "PhaseResult",
+    "PreCompactPlanPhase",
+    "PreCompactReviewPhase",
     "PlanPhase",
     "ProverPhase",
     "ReviewPhase",
+    "SyncLeanokPhase",
     "FinalizePhase",
 ]

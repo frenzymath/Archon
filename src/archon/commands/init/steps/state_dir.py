@@ -14,8 +14,11 @@ _USER_STATE_FILES = (
     "USER_HINTS.md",
     "task_pending.md",
     "task_done.md",
-    "REFACTOR_DIRECTIVE.md",
 )
+# Note: REFACTOR_DIRECTIVE.md is no longer created on init. The
+# autonomous loop uses the refactor *subagent* with inline directives,
+# not a file. The interactive `archon refactor draft` command still
+# writes the file on demand when the user runs it by hand.
 
 _SUBDIRS = (
     "task_results", "logs", "prompts",

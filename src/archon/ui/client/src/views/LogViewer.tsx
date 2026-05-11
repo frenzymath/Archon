@@ -4,7 +4,7 @@ import { useLogs } from '../hooks/useApi';
 import { useLogDeepLink } from '../hooks/useLogDeepLink';
 import { useLogStream } from '../hooks/useLogStream';
 import type { LogEntry, LogGroup } from '../types';
-import { fmtDuration } from '../utils/format';
+import { fmtDuration, truncateSubject } from '../utils/format';
 import LogEntryLine from '../components/LogEntryLine';
 import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './LogViewer.module.css';
@@ -81,6 +81,14 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
       : meta.plan?.status === 'running' ? 'plan'
       : meta.stage)
     : undefined;
+  // ``meta.stage`` is read literally from PROGRESS.md's "## Current
+  // Stage" line, which is sometimes a single word (`prover`, `polish`)
+  // and sometimes a free-form sentence. Cap the visible width so the
+  // sidebar header doesn't grow to the whole subject when the stage
+  // line is verbose. Full text remains in the title attribute below.
+  const activePhaseDisplay = activePhase
+    ? truncateSubject(activePhase, 14)
+    : '';
 
   return (
     <div className={styles.group}>
@@ -91,7 +99,11 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
         </span>
         {meta?.mode === 'parallel' && <span className={styles.groupMode}>∥</span>}
         {isComplete && <span className={styles.groupDone}>✓</span>}
-        {canShowRunning && activePhase && <span className={styles.groupStage}>{activePhase}</span>}
+        {canShowRunning && activePhase && (
+          <span className={styles.groupStage} title={activePhase}>
+            {activePhaseDisplay}
+          </span>
+        )}
         {canShowRunning && isAnyRunning && <span className={styles.groupLive}>●</span>}
         {runningElapsed && <span className={styles.groupElapsed}>{runningElapsed}</span>}
         {meta?.commit && (
@@ -109,7 +121,9 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
           {meta?.commit && (
             <div className={styles.commitRow} title={meta.commit.subject}>
               <span className={styles.commitSha}>{meta.commit.shortSha}</span>
-              <span className={styles.commitSubject}>{meta.commit.subject}</span>
+              <span className={styles.commitSubject}>
+                {truncateSubject(meta.commit.subject, 32)}
+              </span>
             </div>
           )}
           {meta && (
@@ -125,12 +139,17 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
           {group.files.map(f => {
             const isProver = f.role === 'prover' && f.path.includes('/provers/');
             const isArtifact = f.name.endsWith('.md');
-            // Subagent reports follow `<role>-<slug>-report.md`; surface
-            // the slug so multiple reports per iter are distinguishable.
-            const subagentMatch = isArtifact
-              ? f.name.replace(/\.md$/, '').match(SUBAGENT_REPORT_RE)
-              : null;
-            const subagentSlug = subagentMatch ? subagentMatch[2] : '';
+            const isSubagentStream = SUBAGENT_STREAM_ROLES.has(f.role || '');
+            const isSubagentReport = SUBAGENT_REPORT_ROLES.has(f.role || '');
+            const isSubagent = isSubagentStream || isSubagentReport;
+            // Server attaches `subagentSlug` for subagent files; fall
+            // back to the legacy filename match so the sidebar still
+            // labels archived reports written by older Archon versions.
+            let subagentSlug = f.subagentSlug ?? '';
+            if (!subagentSlug && isArtifact) {
+              const m = f.name.replace(/\.md$/, '').match(SUBAGENT_REPORT_RE);
+              if (m) subagentSlug = m[2];
+            }
 
             let displayName: string;
             if (isProver) {
@@ -157,10 +176,9 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
                 : fileSlug;
               const fileName = fileBase ? `${fileBase}.lean` : '';
               displayName = lane ? `${lane}//${fileName}` : fileName;
+            } else if (isSubagent) {
+              displayName = subagentSlug;
             } else if (isArtifact) {
-              // For .md artifacts the role prefix already labels the
-              // file; only subagent reports need the slug appended so
-              // multiple reports per iter stay distinguishable.
               displayName = subagentSlug;
             } else {
               displayName = f.role || f.name.replace('.jsonl', '');
@@ -170,11 +188,17 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
 
             const proverSlug = f.name.replace('.jsonl', '');
             const proverStatus = isProver && meta?.provers?.[proverSlug]?.status;
+            const subagentRoleLabel = isSubagent
+              ? subagentDisplayRole(f.role || '')
+              : '';
+            // Subagent stream icon: ▶ to read as "running invocation"
+            // versus ◆ for the archived report (same family color).
+            const subagentColor = ROLE_COLORS[f.role || ''] || '#888';
 
             return (
               <div
                 key={f.path}
-                className={`${styles.fileItem} ${f.path === selectedFile ? styles.fileItemActive : ''}`}
+                className={`${styles.fileItem} ${f.path === selectedFile ? styles.fileItemActive : ''} ${isSubagent ? styles.fileItemSubagent : ''}`}
                 onClick={() => onSelect(f.path)}
                 title={f.commit ? `${f.name}\n${f.commit.shortSha} · ${f.commit.subject}` : f.name}
               >
@@ -183,13 +207,26 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
                     color: proverStatus === 'done' ? 'var(--green)' : proverStatus === 'running' ? 'var(--blue)' : proverStatus === 'error' ? 'var(--red)' : 'var(--text-muted)'
                   }}>●</span>
                 )}
-                {isArtifact && (
+                {isSubagentStream && (
+                  <span className={styles.fileStatus} style={{ color: subagentColor }}>▶</span>
+                )}
+                {isSubagentReport && (
+                  <span className={styles.fileStatus} style={{ color: subagentColor }}>◆</span>
+                )}
+                {isArtifact && !isSubagent && (
                   <span
                     className={styles.fileStatus}
                     style={{ color: ROLE_COLORS[f.role || ''] || '#e36209' }}
                   >◆</span>
                 )}
-                {!isProver && <span className={styles.fileRole}>{f.role}</span>}
+                {isSubagent ? (
+                  <span
+                    className={styles.fileSubagentRole}
+                    style={{ color: subagentColor }}
+                  >{subagentRoleLabel}</span>
+                ) : (
+                  !isProver && <span className={styles.fileRole}>{f.role}</span>
+                )}
                 <span className={styles.fileName}>
                   {isProver ? displayName : (subagentSlug || '')}
                 </span>
@@ -211,12 +248,36 @@ const ROLE_COLORS: Record<string, string> = {
   'refactor-manual': '#e36209',
   'refactor-directive': '#e36209',
   'refactor-report': '#e36209',
+  // Subagent JSONL streams (one entry per `archon subagent <role>` run).
+  // Same colors as the corresponding `<role>-report` so a stream and
+  // its archived report read as the same family.
+  'subagent-refactor': '#e36209',
+  'subagent-analogy': '#a371f7',
+  'subagent-challenger': '#cf222e',
   // Subagent reports archived by the plan agent.
   'analogy-report': '#a371f7',     // Mathlib-precedent analogies.
   'challenger-report': '#cf222e',  // Challenges/<Name>.lean sanity checks.
   prover: 'var(--purple)',
   review: 'var(--orange)',
 };
+
+// Roles whose sidebar item is one invocation of a subagent. The plan
+// agent fires one of these per `archon subagent <role> --slug <slug>`
+// call; each gets its own JSONL/report. Used to drive the sidebar's
+// "<role> · <slug>" display.
+const SUBAGENT_STREAM_ROLES = new Set([
+  'subagent-refactor', 'subagent-analogy', 'subagent-challenger',
+]);
+const SUBAGENT_REPORT_ROLES = new Set([
+  'refactor-report', 'analogy-report', 'challenger-report',
+]);
+
+function subagentDisplayRole(role: string): string {
+  // "subagent-refactor" → "refactor"; "analogy-report" → "analogy".
+  if (role.startsWith('subagent-')) return role.slice('subagent-'.length);
+  if (role.endsWith('-report')) return role.slice(0, -'-report'.length);
+  return role;
+}
 
 const SUBAGENT_REPORT_RE = /^(analogy|challenger|refactor)-(.+)-report$/;
 
@@ -330,6 +391,29 @@ export default function LogViewer() {
     return '';
   }, [logsData, selectedFile]);
 
+  const selectedSubagentSlug = useMemo(() => {
+    if (!logsData || !selectedFile) return '';
+    for (const g of logsData.groups) {
+      const f = g.files.find(f => f.path === selectedFile);
+      if (f) return f.subagentSlug || '';
+    }
+    return '';
+  }, [logsData, selectedFile]);
+
+  const selectedRoleLabel = useMemo(() => {
+    if (!selectedRole) return '';
+    const isSubagent = SUBAGENT_STREAM_ROLES.has(selectedRole)
+      || SUBAGENT_REPORT_ROLES.has(selectedRole);
+    if (!isSubagent) return selectedRole;
+    const role = subagentDisplayRole(selectedRole);
+    const tag = SUBAGENT_STREAM_ROLES.has(selectedRole)
+      ? 'subagent'
+      : 'report';
+    return selectedSubagentSlug
+      ? `${role} ${tag} · ${selectedSubagentSlug}`
+      : `${role} ${tag}`;
+  }, [selectedRole, selectedSubagentSlug]);
+
   const selectedCommit = useMemo(() => {
     if (!logsData || !selectedFile) return undefined;
     for (const g of logsData.groups) {
@@ -422,7 +506,7 @@ export default function LogViewer() {
           )}
           {selectedRole && (
             <span className={styles.roleTag} style={{ color: ROLE_COLORS[selectedRole] || 'var(--text-muted)' }}>
-              {selectedRole}
+              {selectedRoleLabel}
             </span>
           )}
           <span className={styles.selectedLabel}>{selectedLabel || 'Select a log'}</span>
@@ -432,7 +516,9 @@ export default function LogViewer() {
               title={`${selectedCommit.shortSha} · ${selectedCommit.subject}`}
             >
               {selectedCommit.shortSha}
-              <span className={styles.selectedCommitSubject}>{selectedCommit.subject}</span>
+              <span className={styles.selectedCommitSubject}>
+                {truncateSubject(selectedCommit.subject, 80)}
+              </span>
             </span>
           )}
           {!selectedIsArtifact && (

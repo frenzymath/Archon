@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Pre-push hook: refuse to push commits that introduce an API-key-shaped string.
+
+Installed by ``archon init`` into both the outer ``.git/hooks/`` and the
+inner ``.archon/git-dir/hooks/`` of every Archon project. Runs the same
+pattern set Archon uses to scan its own state — Anthropic ``sk-ant-``
+keys, Moonshot / DeepSeek / OpenAI ``sk-`` keys, Google ``AIza`` keys,
+plus any ``<PROVIDER>_API_KEY=…`` env-style assignments with a
+plausible value.
+
+Conservative on false positives: each pattern requires either a known
+provider prefix or an env-var name pair, never a raw "long random
+string". If you do trigger a false positive, bypass with
+``git push --no-verify`` once.
+
+Hook contract (man githooks(5), pre-push):
+    A push is blocked when this hook exits with a non-zero status.
+    Per-ref lines arrive on stdin:
+        <local_ref> <local_sha> <remote_ref> <remote_sha>
+    where ``remote_sha`` is 40 zeros when the remote ref does not exist
+    yet (new branch).
+
+This script intentionally has no archon-specific imports — it must run
+standalone, since the hook fires before the Python environment has
+loaded anything. stdlib only.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from typing import Iterable
+
+
+ZERO = "0" * 40
+
+# Patterns identifying ACTUAL secret material (not just env-var names).
+# Each is a (label, regex) pair. Keep them tight — false positives erode
+# trust in the hook fast.
+SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Anthropic sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("OpenAI sk-proj-",   re.compile(r"sk-proj-[A-Za-z0-9_\-]{30,}")),
+    ("Google AIza",       re.compile(r"AIza[A-Za-z0-9_\-]{30,}")),
+    # Generic sk- with a long opaque body (Moonshot, DeepSeek, others).
+    ("Provider sk- key",  re.compile(r"sk-[A-Za-z0-9]{40,}")),
+]
+
+# Env-var assignment patterns: catch `KEY=value` even when the value
+# doesn't match a known provider prefix (e.g. an env-style block in a
+# JSON settings file). Negative lookahead excludes the redaction marker
+# so already-cleaned content doesn't re-trip the hook.
+ENV_KEY_NAMES = (
+    "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+    "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+    "AWS_SECRET_ACCESS_KEY", "HUGGINGFACE_TOKEN",
+)
+ENV_ASSIGN = re.compile(
+    r"(?P<key>" + "|".join(ENV_KEY_NAMES) + r")"
+    r"\s*[=:]\s*['\"]?"
+    r"(?!ARCHON_REDACTED_SECRET)"
+    r"(?P<val>[A-Za-z0-9_\-]{16,})"
+)
+
+# Path-based file-type filter — most leaks happen in these. Other files
+# are still scanned, but this is a fast-path.
+HOT_PATH_SUFFIXES = (".env", ".json", ".jsonl", ".md", ".txt", ".log",
+                     ".yaml", ".yml", ".toml", ".cfg", ".ini")
+
+
+def _run(cmd: list[str]) -> str:
+    return subprocess.run(
+        cmd, check=False, capture_output=True, text=True, errors="replace"
+    ).stdout
+
+
+def _commits_in_range(local_sha: str, remote_sha: str) -> list[str]:
+    """Commits to scan: those in local..remote, or — for a new branch —
+    everything local that isn't already reachable from any remote ref."""
+    if remote_sha == ZERO:
+        out = _run(["git", "rev-list", local_sha, "--not", "--remotes"])
+    else:
+        out = _run(["git", "rev-list", f"{remote_sha}..{local_sha}"])
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _scan_commit(commit: str) -> list[tuple[str, str, str]]:
+    """Return (file, label, redacted_snippet) for every secret-shaped
+    line introduced by ``commit``."""
+    findings: list[tuple[str, str, str]] = []
+    diff = _run([
+        "git", "show", "--unified=0", "--no-color", "--no-renames", commit,
+    ])
+    current_file = "(unknown)"
+    for raw in diff.splitlines():
+        if raw.startswith("+++ b/"):
+            current_file = raw[len("+++ b/"):]
+            continue
+        if raw.startswith("+++") or raw.startswith("---"):
+            continue
+        if not raw.startswith("+"):
+            continue
+        line = raw[1:]
+        for label, pat in SECRET_PATTERNS:
+            m = pat.search(line)
+            if m:
+                findings.append((current_file, label, _redact(line, m)))
+        m = ENV_ASSIGN.search(line)
+        if m:
+            label = f"{m.group('key')}="
+            findings.append((current_file, label, _redact(line, m)))
+    return findings
+
+
+def _redact(line: str, match: re.Match) -> str:
+    """Truncate around the match and replace the matched text with a
+    visibly-redacted form, so the hook output doesn't itself leak the key."""
+    full = match.group(0)
+    if len(full) >= 10:
+        masked = full[:4] + "***" + full[-3:]
+    else:
+        masked = "***"
+    redacted_line = line[:match.start()] + masked + line[match.end():]
+    if len(redacted_line) > 120:
+        s = max(0, match.start() - 30)
+        redacted_line = "..." + redacted_line[s:s + 120] + "..."
+    return redacted_line
+
+
+def _read_push_specs() -> Iterable[tuple[str, str, str, str]]:
+    for raw in sys.stdin:
+        parts = raw.strip().split()
+        if len(parts) < 4:
+            continue
+        yield parts[0], parts[1], parts[2], parts[3]
+
+
+def main() -> int:
+    all_findings: list[tuple[str, str, str, str]] = []
+    for _local_ref, local_sha, _remote_ref, remote_sha in _read_push_specs():
+        if local_sha == ZERO:
+            continue  # Branch deletion — nothing to scan.
+        for commit in _commits_in_range(local_sha, remote_sha):
+            for f, label, snippet in _scan_commit(commit):
+                all_findings.append((commit[:8], f, label, snippet))
+
+    if not all_findings:
+        return 0
+
+    red = "\033[1;31m"
+    rst = "\033[0m"
+    print(f"{red}✗ Pre-push secret scan: refusing to push.{rst}", file=sys.stderr)
+    print(f"  Found {len(all_findings)} potential secret(s) in the commits "
+          f"about to be pushed:", file=sys.stderr)
+    print("", file=sys.stderr)
+    for sha, path, label, snippet in all_findings[:20]:
+        print(f"  {sha}  {path}", file=sys.stderr)
+        print(f"           [{label}]  {snippet}", file=sys.stderr)
+    if len(all_findings) > 20:
+        print(f"  ... and {len(all_findings) - 20} more", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("If these are NOT real secrets (false positive), bypass once:",
+          file=sys.stderr)
+    print("    git push --no-verify", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("If they ARE real, rotate the keys immediately and rewrite "
+          "history before pushing. See:", file=sys.stderr)
+    print("    https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository",
+          file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Treat Ctrl-C during scan as a refusal, not a pass-through.
+        sys.exit(1)

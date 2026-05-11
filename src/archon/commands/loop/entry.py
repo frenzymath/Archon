@@ -78,8 +78,10 @@ def loop(
     ),
     model: Optional[str] = typer.Option(
         None, "--model", "-M",
-        help="Claude model alias (e.g. 'opus', 'sonnet') or full id used for "
-             "every plan / prover / review phase in the loop. "
+        help="Model used for every plan / prover / review phase in the loop. "
+             "Anthropic aliases: 'opus', 'sonnet', 'haiku' or a full id. "
+             "Non-Anthropic providers (require credentials in .archon/.env): "
+             "'kimi', 'deepseek'. "
              "(default from .archon/config.json or 'opus')",
     ),
     from_phase: Optional[str] = typer.Option(

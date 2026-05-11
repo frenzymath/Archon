@@ -445,7 +445,7 @@ function GitTree({
   const [branchHintPos, setBranchHintPos] = useState<{ left: number; top: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { ordered, nodes, branchOrder, shaToPos, svgW, svgH, spacing } = useMemo(
+  const { nodes, branchOrder, shaToPos, svgW, svgH, spacing } = useMemo(
     () => computeGitLayout(commits, containerW),
     [commits, containerW],
   );
@@ -486,7 +486,7 @@ function GitTree({
           const display = b.length > 10 ? b.slice(0, 9) + '…' : b;
           return (
             <g key={b}
-              onMouseEnter={e => {
+              onMouseEnter={() => {
                 if (b.length <= 10) return;
                 const pos = svgToContainer(PAD_X - 4, y - 22);
                 setBranchTooltip({ label: b, left: pos.left, top: pos.top });

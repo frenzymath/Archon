@@ -19,11 +19,11 @@ from archon.commands.tooling.version import warn_if_mismatch
 from .context import InitContext
 from .reinit import PromptMerger, ReinitController
 from .steps import (
-    AgentsStep,
     BootstrapStep,
     CopyPromptsStep,
     DisableConflictingPluginsStep,
     EnvAndConfigStep,
+    GitHooksStep,
     InnerGitStep,
     LeanLspMcpStep,
     ReportProtectedStep,
@@ -138,8 +138,9 @@ class InitCommand:
         """Verify-only path — keep existing setup, refresh registrations."""
         log.info("Keeping existing setup. Verifying MCP / plugin registration only.")
         for step_cls in (
-            LeanLspMcpStep, SkillsStep, DisableConflictingPluginsStep, AgentsStep,  
-            ReportProtectedStep, EnvAndConfigStep, InnerGitStep, VersionStampStep,
+            LeanLspMcpStep, SkillsStep, DisableConflictingPluginsStep,
+            ReportProtectedStep, EnvAndConfigStep, InnerGitStep,
+            GitHooksStep, VersionStampStep,
         ):
             step_cls(self.ctx).run()
         log.success("Verification complete.")
@@ -149,7 +150,7 @@ class InitCommand:
         ctx = self.ctx
 
         for step_cls in (
-            StateDirStep, CopyPromptsStep, BootstrapStep, AgentsStep,
+            StateDirStep, CopyPromptsStep, BootstrapStep,
             LeanLspMcpStep, SkillsStep, DisableConflictingPluginsStep,
         ):
             step_cls(ctx).run()
@@ -161,9 +162,12 @@ class InitCommand:
             log.step(f"Next: archon loop {ctx.project_path}")
 
         # Always show the protected-declarations summary, then config /
-        # inner-git / version stamp (in that order so the inner-git
-        # commit captures the freshly-written .env and config.json).
+        # inner-git / hook install / version stamp (in that order so the
+        # inner-git commit captures the freshly-written .env and
+        # config.json, and the hook is installed against the git-dir
+        # that was just created).
         for step_cls in (
-            ReportProtectedStep, EnvAndConfigStep, InnerGitStep, VersionStampStep,
+            ReportProtectedStep, EnvAndConfigStep, InnerGitStep,
+            GitHooksStep, VersionStampStep,
         ):
             step_cls(ctx).run()

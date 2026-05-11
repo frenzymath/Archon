@@ -10,7 +10,7 @@ from archon import log
 from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
 from archon.prompts import build_review_prompt
-from archon.state import next_session_num, write_meta
+from archon.state import write_meta
 
 from ..utils import data_path
 from .base import Phase, PhaseResult
@@ -53,7 +53,14 @@ class ReviewPhase(Phase):
 
     def _invoke_review(self) -> None:
         ctx = self.ctx
-        session_num = next_session_num(ctx.state_dir)
+        # Session number == iteration number. The pre-2026 monotonic
+        # counter drifted away from iter numbers whenever the user did
+        # ``git reset --hard`` past existing review dirs (the dirs are
+        # filesystem-only, never tracked by the inner archon git, so a
+        # reset would leave them in place while the iter numbers
+        # rewound). Aligning the two means session_NNN/ is always
+        # exactly the review of iter-NNN.
+        session_num = ctx.iter_num
         journal_dir = ctx.state_dir / "proof-journal"
         session_dir = journal_dir / "sessions" / f"session_{session_num}"
         current_session_dir = journal_dir / "current_session"
@@ -112,3 +119,25 @@ class ReviewPhase(Phase):
                 [sys.executable, str(validate_script), str(session_dir), str(attempts_file)],
                 capture_output=True,
             )
+
+        # If the agent crashed before writing anything, drop the empty
+        # session_NNN/ rather than leaving a stub the UI will surface.
+        if session_dir.is_dir():
+            try:
+                content = list(session_dir.iterdir())
+            except OSError:
+                content = []
+            if not content or all(
+                p.is_file() and p.stat().st_size == 0 for p in content
+            ):
+                for p in content:
+                    if p.is_file():
+                        p.unlink()
+                try:
+                    session_dir.rmdir()
+                    log.warn(
+                        f"Removed empty session_{session_num}/ — review "
+                        f"agent produced no output"
+                    )
+                except OSError:
+                    pass

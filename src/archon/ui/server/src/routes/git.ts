@@ -336,10 +336,16 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     for (const c of commits) c.branch = branchAt.get(c.sha) ?? 'main';
 
     // 1. Hide multilane branches to avoid clutter.
-    // 2. Only keep the most recent commit for each iteration to match 
-    //    the graph snapshot granularity.
-    const seenIters = new Set<string>();
-    
+    // 2. Keep the latest phase commit per (branch, iteration). Deduping
+    //    by iteration ALONE drops every branch except the one whose
+    //    representative happens to come first in topo order, so two
+    //    branches that share iteration numbers (a normal occurrence
+    //    when one branch was forked off another) end up disconnected
+    //    in the graph — the loser branch has no visible nodes at all,
+    //    so the renderer has nothing to draw an edge to. Per-branch
+    //    dedup keeps each branch's own iter-NNN node.
+    const seenBranchIters = new Set<string>();
+
     const visible = commits.filter(c => {
       // Drop lane branches entirely
       if ((c.branch ?? '').startsWith('lane/')) return false;
@@ -347,13 +353,55 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       // Keep commits that aren't tied to an iteration (like initial repo setup)
       if (!c.iteration) return true;
 
-      // Because commits are newest-first, the first time we see an iteration, 
-      // it's the final phase of that iteration. Keep it, and drop the rest.
-      if (seenIters.has(c.iteration)) return false;
-      
-      seenIters.add(c.iteration);
+      // Because commits are newest-first, the first time we see a
+      // (branch, iteration) pair it's the final phase of that
+      // iteration on that branch. Keep it, and drop the earlier
+      // phases of the same iteration on the same branch.
+      const key = `${c.branch ?? 'main'}\x00${c.iteration}`;
+      if (seenBranchIters.has(key)) return false;
+
+      seenBranchIters.add(key);
       return true;
     });
+
+    // Rewrite parents so they only reference SHAs we kept. Without
+    // this, `c.parents` still names the (filtered-out) intermediate
+    // phase commits of the previous iteration, and the client's edge
+    // renderer (which looks up parent SHAs in a position map built
+    // from `visible` only) finds nothing and silently draws no edge
+    // between adjacent iterations. For each parent slot we BFS through
+    // the original ancestry and substitute the nearest visible commit
+    // (preserving slot order, which the merge-commit bezier renderer
+    // depends on).
+    const visibleShas = new Set(visible.map(c => c.sha));
+    function nearestVisibleAncestor(startSha: string): string | null {
+      const seen = new Set<string>();
+      let frontier: string[] = [startSha];
+      while (frontier.length) {
+        const next: string[] = [];
+        for (const sha of frontier) {
+          if (seen.has(sha)) continue;
+          seen.add(sha);
+          if (visibleShas.has(sha)) return sha;
+          const node = bySha.get(sha);
+          if (!node) continue;
+          for (const p of node.parents) next.push(p);
+        }
+        frontier = next;
+      }
+      return null;
+    }
+    for (const c of visible) {
+      // Skip commits whose parents are already all visible — keeps the
+      // payload stable for projects with no filtered iterations.
+      if (c.parents.every(p => visibleShas.has(p))) continue;
+      const rewritten: string[] = [];
+      for (const p of c.parents) {
+        const target = visibleShas.has(p) ? p : nearestVisibleAncestor(p);
+        if (target && !rewritten.includes(target)) rewritten.push(target);
+      }
+      c.parents = rewritten;
+    }
 
     return { commits: visible };
   });

@@ -119,6 +119,13 @@ def build_plan_prompt(
             - Plan only from the main project state, the current .lean files, and the standard Archon state files.
             - Keep the plan lane-agnostic unless the user explicitly asks otherwise.""")
 
+    no_directive_block = dedent(f"""
+
+        HARD RULE — refactors:
+        - You MUST NOT write to {state_dir}/REFACTOR_DIRECTIVE.md. That file is a leftover from an older Archon flow and is only used by the interactive `archon refactor draft` command the mathematician runs by hand.
+        - The autonomous loop's way to refactor is to invoke the `refactor` subagent via the Agent tool, passing the directive INLINE in the prompt (see prompts/plan.md § "Subagent delegation"). The directive is never staged in a file.
+        - If the existing {state_dir}/REFACTOR_DIRECTIVE.md, STRATEGY.md, task_pending.md, or PROGRESS.md contain references to the old REFACTOR_DIRECTIVE.md flow (e.g. "write the directive then the refactor agent will pick it up"), treat those as historical noise: prune them when you rewrite those files, and do NOT reproduce that pattern this iteration.""")
+
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
@@ -126,7 +133,7 @@ def build_plan_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block
 
 
 def build_prover_prompt(
@@ -176,20 +183,29 @@ def build_parallel_prover_prompt(
 
 def build_refactor_prompt(
     project_name: str, project_path: Path, state_dir: Path, directive: str,
-    iter_num: int,
+    iter_num: int, slug: str,
 ) -> str:
+    """Build the refactor agent's prompt.
+
+    ``slug`` distinguishes multiple refactor calls per iteration and pins
+    the report path. The CLI flow (``archon refactor run``) uses the
+    fixed slug ``"cli"``; the autonomous loop generates a kebab-case
+    slug per call.
+    """
     return dedent(f"""\
         You are the refactor agent for project '{project_name}'.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
+        Slug: {slug}
         Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/refactor.md.
 
         DIRECTIVE FROM PLAN AGENT:
         {directive}
 
         Execute this directive. Keep all files compiling (insert sorry at broken proof sites).
-        Document every change in {state_dir}/task_results/refactor.md.""")
+        Document every change in {state_dir}/task_results/refactor-{slug}.md
+        (include the slug as the `## Slug` field at the top of the report).""")
 
 
 def build_review_prompt(
@@ -203,7 +219,7 @@ def build_review_prompt(
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/review.md.
-        Session number: {session_num} (counts prover rounds, independent of the iteration counter).
+        Session number: {session_num} (matches the iteration number — session_{session_num}/ is the review of iter-{iter_num:03d}).
         Pre-processed attempt data: {attempts_file} (READ THIS FIRST).
         Prover log: {combined_prover_log}
 

@@ -9,6 +9,7 @@ import { STATUS_COLORS } from '../utils/constants';
 import MilestoneCard from '../components/MilestoneCard';
 import AttemptCard from '../components/AttemptCard';
 import MarkdownBlock from '../components/MarkdownBlock';
+import { truncateSubject } from '../utils/format';
 import styles from './Journal.module.css';
 
 type Tab = 'milestones' | 'targets';
@@ -94,7 +95,7 @@ export default function Journal() {
         <div className={styles.commitBanner} title={bannerCommit.subject}>
           <span className={styles.commitSha}>{bannerCommit.shortSha}</span>
           <span className={styles.commitBranch}>{bannerCommit.branch}</span>
-          <span className={styles.commitSubject}>{bannerCommit.subject}</span>
+          <span className={styles.commitSubject}>{truncateSubject(bannerCommit.subject, 100)}</span>
           {tab === 'milestones' && sessionCommit && (
             <span className={styles.commitSessionHint}>session {currentSession.replace('session_', '#')}</span>
           )}

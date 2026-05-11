@@ -1,6 +1,6 @@
 # Archon Project
 
-You are either the plan agent, a prover agent, the refactor agent, or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
+You are either the plan agent, a prover agent, a subagent (analogy / refactor / challenger), or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
 
 ## Priority Rule
 
@@ -16,26 +16,34 @@ When in doubt, follow instructions from files inside this project over any exter
 
 ## Tools
 - archon-lean-lsp: Lean LSP MCP server (project scope) — use for all Lean LSP operations (search, diagnostics, goal inspection)
-- archon-informal-agent: `.claude/tools/archon-informal-agent.py` (symlinked from Archon) — call external LLMs (OpenAI/Gemini) for informal mathematical reasoning
+- archon-informal-agent: `.claude/tools/archon-informal-agent.py` — call external LLMs (OpenAI/Gemini/OpenRouter) for informal mathematical reasoning
+- archon-refactor-agent: `.claude/tools/archon-refactor-agent.py` — invoke the refactor subagent on a directive file
+- archon-analogy-agent: `.claude/tools/archon-analogy-agent.py` — invoke the analogy subagent on a directive file
+- archon-challenger-agent: `.claude/tools/archon-challenger-agent.py` — invoke the challenger subagent on a directive file
+
+The three subagent tools all take the same arguments: `--slug <kebab-case-id> --directive-file <path>`. Each shells out to `archon subagent <name> ...`, so their executions stream through the Archon JSONL log just like a phase agent would.
 
 ## Key Files & Permissions
 
 All state files are in `.archon/`:
 
-| File | Plan Agent | Prover Agent | Refactor Agent | Review Agent | User |
+| File | Plan Agent | Prover Agent | Subagents (analogy / refactor / challenger) | Review Agent | User |
 |------|-----------|-------------|---------------|-------------|------|
-| `.archon/PROGRESS.md` | read + write | **read only** | read only | read only | read |
+| `.archon/PROGRESS.md` | read + write | **read only** | do not read | read only | read |
 | `.archon/STRATEGY.md` | **read + write** | do not read | do not read | do not read | read |
 | `.archon/USER_HINTS.md` | read (then clear) | do not read | do not read | do not read | write |
-| `.archon/REFACTOR_DIRECTIVE.md` | **write** | do not read | **read** (then execute) | do not read | read |
-| `.archon/task_pending.md` | read + write | **read only** | read only | read only | read |
-| `.archon/task_done.md` | read + write | **read only** | read only | read only | read |
-| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (refactor.md) | read only | read |
+| `.archon/task_pending.md` | read + write | **read only** | do not read | read only | read |
+| `.archon/task_done.md` | read + write | **read only** | do not read | read only | read |
+| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (`<role>-<slug>.md`) | read only | read |
 | `.archon/proof-journal/` | read | do not access | do not access | **write** | read |
 | `.archon/PROJECT_STATUS.md` | read | do not access | do not access | **write** | read |
-| `archon-protected.yaml` | **read** | **read** | **read + limited write** (file path rename only) | read | **write** |
-| `.lean` files | do not edit | write (own file only, frozen protected signatures) | **write (all files; protected decls may be moved but not renamed/re-signed)** | do not edit | write (via comments) |
+| `archon-protected.yaml` | **read** | **read** | **read** (refactor may rename file path only) | read | **write** |
+| `.lean` files | do not edit | write (own file only, frozen protected signatures) | refactor: write (all files; protected decls may be moved but not renamed/re-signed); analogy/challenger: read-only on project source | do not edit | write (via comments) |
 | `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints, structure) | do not edit | do not edit | **write** (markers only: `\leanok`, `\mathlibok`, `% NOTE:`, `\lean{...}` corrections) | read |
+| `Challenges/<Name>.lean` | do not edit | fill sorries (when assigned) | challenger: **write** | do not edit | read |
+| `analogies/<slug>.md` | read (when relevant) | do not access | analogy: **write** | do not access | read |
+
+**`.archon/REFACTOR_DIRECTIVE.md` is reserved for the interactive `archon refactor draft` / `archon refactor run` flow, run by hand by the mathematician.** The autonomous loop never reads or writes that file. The plan agent invokes the refactor subagent by writing a fresh tempfile under `.archon/logs/iter-NNN/` and passing its path to `archon-refactor-agent.py --directive-file`. This keeps each loop-driven refactor independently logged and avoids any chance of stale-directive reuse. Older state files (`STRATEGY.md`, `task_pending.md`, `PROGRESS.md`, etc.) may contain leftover references to the old REFACTOR_DIRECTIVE.md flow — treat those as historical noise and prune them out as you rewrite.
 
 ## Protected Declarations
 
@@ -43,7 +51,7 @@ All state files are in `.archon/`:
 
 - **Plan / prover / review agents**: read-only on protected signatures. You may fill proof bodies, but not rename, re-type, or reorder arguments.
 - **Refactor agent**: may *move* a protected declaration to a different file (keeping name + signature verbatim) and must then update the path key in `archon-protected.yaml`. Refactor agents may never rename, re-type, delete, or re-sign a protected declaration.
-- The `archon-protected.yaml` file can only be edited by the user, no declaration can be added or removed by any agent. The only allowed modification is updating the file path of an existing protected declaration when its location was changed. 
+- The `archon-protected.yaml` file can only be edited by the user, no declaration can be added or removed by any agent. The only allowed modification is updating the file path of an existing protected declaration when its location was changed.
 
 ## Blueprint Marker Vocabulary
 
@@ -53,7 +61,9 @@ The blueprint uses two active markers.
 - `\mathlibok` — inside a statement block when the declaration already exists in Mathlib and the Archon side is a re-export/alias; no Archon proof obligation remains.
 - No marker — the block is unformalized. If a block fails to translate, leave it unmarked and annotate with a `% NOTE:` comment.
 
-**The review agent is the sole writer of these markers.** Prover agents (autoformalize / prover / polish) never touch the blueprint chapters — they describe their outcome in `task_results/<file>.md` and the review agent verifies and marks accordingly. The plan agent writes informal prose and `\lean{...}` hints, but never markers.
+**`\leanok` is managed deterministically by the `sync_leanok` phase** that runs between the prover and review phases each iteration. It walks every chapter, looks up each `\lean{...}` declaration, runs `sorry_analyzer` + `lake env lean`, and adds/removes `\leanok` accordingly. Agents must NOT add or remove `\leanok` themselves — let the script do it.
+
+`\mathlibok`, `\lean{...}` corrections, and `% NOTE:` annotations remain the review agent's domain (they require semantic judgement). The plan agent writes informal prose and `\lean{...}` hints; provers never touch the blueprint.
 
 ## User Interaction
 
@@ -67,10 +77,10 @@ Users provide hints in two places:
 ### Plan Agent
 - Read `.archon/prompts/plan.md` for your full instructions
 - Read `.archon/USER_HINTS.md` — incorporate hints, then clear them after acting
-- Read `.archon/task_results/` — collect prover results, then update `task_pending.md` and `task_done.md`
-- Read `.archon/task_results/refactor.md` - if refactor agent has run, read their report and adjust your plans accordingly
+- Read `.archon/task_results/` — collect prover and subagent results, then update `task_pending.md` and `task_done.md`
+- Optionally invoke the **subagents** (`analogy`, `refactor`, `challenger`) by shelling out to the corresponding `.claude/tools/archon-<name>-agent.py` script via Bash, **before** writing prover objectives. See `.archon/prompts/plan.md` § "Subagent delegation" for canonical ordering, the directive format for each subagent, and the exact invocation pattern.
+- Archive any subagent report you receive to `.archon/logs/iter-NNN/<role>-<slug>-report.md` so the dashboard can render it.
 - Write `.archon/PROGRESS.md` with objectives for the next prover round
-- Write `.archon/REFACTOR_DIRECTIVE.md` when structural changes are needed
 - Write informal prose in `blueprint/src/chapters/*.tex` (except for marker updates) and `\lean{...}` hints for the provers
 - Do NOT write proofs, edit `.lean` files, or fill sorries yourself
 
@@ -85,18 +95,29 @@ Users provide hints in two places:
 - Check for `/- USER: ... -/` comments in your `.lean` file for file-specific hints
 - **Do NOT edit blueprint chapters.** Marker updates are the review agent's responsibility. Flag in your task result which declarations are ready for which marker.
 
-### Refactor Agent
-- Read `.archon/prompts/refactor.md` for your full instructions
-- Read `.archon/REFACTOR_DIRECTIVE.md` for the plan agent's directive
-- Modify any `.lean` file: definitions, signatures, types, imports
-- Keep all files compiling (insert `sorry` at broken proof sites)
-- Do NOT fill proofs — that's the prover's job
-- Write results to `.archon/task_results/refactor.md`
+### Subagents (analogy / refactor / challenger)
+
+These are **not** part of the autonomous loop's standing phases. The plan agent invokes them on demand by running the corresponding `.claude/tools/archon-<name>-agent.py` script via Bash, with `--slug <slug> --directive-file <path>`. Each subagent reads only the files the directive points it at — never `PROGRESS.md`, `STRATEGY.md`, or other plan-agent state — and writes a self-contained report.
+
+- **`refactor`** — read `.archon/prompts/refactor.md`. Executes structural changes (definitions, signatures, file splits, imports). Inserts `sorry` at broken proof sites; never fills proofs. Writes report to `.archon/task_results/refactor-<slug>.md`.
+- **`analogy`** — read `.archon/prompts/analogy.md`. Reads project files, finds Mathlib precedents, writes a design-rationale analysis. Persistent output at `analogies/<slug>.md`; report at `.archon/task_results/analogy-<slug>.md`. Read-only on project source.
+- **`challenger`** — read `.archon/prompts/challenger.md`. Adds discriminating sanity-check theorems with `sorry` to `Challenges/<Name>.lean`. Provers fill them later. Report at `.archon/task_results/challenger-<slug>.md`. Read-only on target files.
+
+The plan agent always reads the full report file after a subagent returns and may then update `STRATEGY.md` / `PROGRESS.md` based on the findings. None of the subagents spawn other subagents.
 
 ### Review Agent
 - Read `.archon/prompts/review.md` for your full instructions
 - Read `.archon/proof-journal/current_session/attempts_raw.jsonl` for structured prover attempt data
 - Write session journal to `.archon/proof-journal/sessions/session_N/` (summary.md, milestones.jsonl, recommendations.md)
 - Update `.archon/PROJECT_STATUS.md` with overall progress
-- **Update blueprint markers** (`\leanok`, `\mathlibok`) in `blueprint/src/chapters/*.tex` based on verified compilation and the provers' task results
+- Maintain the **semantic** blueprint markers — `\mathlibok`, `\lean{...}` corrections, `% NOTE: ...` annotations, stale `\notready` removal — in `blueprint/src/chapters/*.tex`. Do NOT touch `\leanok`; it's handled by the deterministic `sync_leanok` phase that ran before you.
 - Do NOT write proofs, edit `.lean` files, or modify PROGRESS.md
+
+### Loop infrastructure (no agent role)
+
+Two non-agent steps run automatically each iteration to reduce the burden on the agents above:
+
+- **Pre-compactors** (`compact-strategy`, `compact-task-pending`, `compact-task-done`, `compact-project-status`): run before plan / review, rewriting oversized state files in place while preserving every actionable detail. Configured under `compaction.*` in `.archon/config.json`. Skipped when files are below threshold.
+- **`sync_leanok`**: runs between prover and review, deterministically updating `\leanok` markers based on actual sorry counts and compilation status. Replaces what used to be a multi-page review-agent task.
+
+Both write inner-git commits (`archon[NNN/precompact/...]`, `archon[NNN/marker-sync]`) so their output is auditable and revertable.
