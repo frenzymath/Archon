@@ -71,13 +71,51 @@ def _blueprint_chapter_hint(project_path: Path, rel_lean_path: str) -> str:
           and note in your task_results that the plan agent should flesh it out.""")
 
 
+def debug_feedback_block(enabled: bool, state_dir: Path, role: str, iter_num: int) -> str:
+    """Inject the optional developer-feedback channel instructions.
+
+    Agents append free-form notes via `>>` to a path they are told never
+    to read. When the flag is off, returns empty string and nothing is
+    injected — zero token cost on normal runs.
+    """
+    if not enabled:
+        return ""
+    feedback_path = state_dir / ".debug-feedback" / "debug_feedback.md"
+    return dedent(f"""
+
+        ## Developer feedback channel (optional)
+
+        If during this iteration you notice something that would make Archon
+        better — a missing capability, redundant functionality, a
+        prompt instruction that contradicts itself, a tool you wish existed,
+        new ideas for better efficiency, etc — you may leave a short note
+        for the developer by appending to this file with a bash heredoc:
+
+            mkdir -p {feedback_path.parent}
+            cat >> {feedback_path} <<'EOF'
+
+            ## iter-{iter_num:03d} · {role}
+
+            <your note here, one concrete observation, under ~200 words>
+            EOF
+
+        Rules:
+        - This file is WRITE-ONLY from your perspective. Do NOT read it,
+          cat it, grep it, or open it in any tool. It is for the developer.
+        - Only leave a note if you have something concrete to say. Empty or
+          generic feedback ("everything went fine") is noise — skip it.
+        - One concrete observation per note. Keep it under ~200 words.
+        - This is optional and does not affect your task. Skip it if nothing
+          comes to mind.
+        """)
+
 # ── prompt builders ───────────────────────────────────────────────────
 
 
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int,
-    *, ignore_multilane: bool = False,
+    *, ignore_multilane: bool = False, debug_feedback: bool = False,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
     refs_block = ""
@@ -133,12 +171,12 @@ def build_plan_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
-    iter_num: int,
+    iter_num: int, debug_feedback: bool = False
 ) -> str:
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
@@ -146,12 +184,12 @@ def build_prover_prompt(
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage}.md and {state_dir}/PROGRESS.md.
-        All state files are in {state_dir}/. The .lean files are in {project_path}/.""")
+        All state files are in {state_dir}/. The .lean files are in {project_path}/.""") + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
-    iter_num: int,
+    iter_num: int, debug_feedback: bool = False,
     assigned_rel_lean_path: str | None = None,
 ) -> str:
     """Build the prover prompt, optionally tailored to a specific assigned file.
@@ -178,12 +216,12 @@ def build_parallel_prover_prompt(
         - Write your results to {state_dir}/task_results/<your_file>.md when done.
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
-        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") + bp_hint
+        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") + bp_hint + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(
     project_name: str, project_path: Path, state_dir: Path, directive: str,
-    iter_num: int, slug: str,
+    iter_num: int, slug: str, debug_feedback: bool = False
 ) -> str:
     """Build the refactor agent's prompt.
 
@@ -205,13 +243,13 @@ def build_refactor_prompt(
 
         Execute this directive. Keep all files compiling (insert sorry at broken proof sites).
         Document every change in {state_dir}/task_results/refactor-{slug}.md
-        (include the slug as the `## Slug` field at the top of the report).""")
+        (include the slug as the `## Slug` field at the top of the report).""") + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
 
 
 def build_review_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     session_num: int, session_dir: Path, attempts_file: Path,
-    combined_prover_log: Path, iter_num: int,
+    combined_prover_log: Path, iter_num: int, debug_feedback: bool = False
 ) -> str:
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
@@ -227,4 +265,4 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""")
+          {state_dir}/PROJECT_STATUS.md""") + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)

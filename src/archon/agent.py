@@ -11,10 +11,18 @@ Quick reference:
     agent = ClaudeAgent(model="opus")
     agent.run(prompt, cwd=project, log_base=phase_log)   # headless `-p`
     agent.run_interactive(prompt, cwd=project)           # foreground TUI
+
+    # Auto-restart on a hung provider (e.g. overnight Kimi run):
+    agent.run(
+        prompt, cwd=project, log_base=phase_log,
+        idle_timeout_s=900,   # 15 min of zero JSONL activity
+        max_attempts=3,       # then re-run the same prompt up to 3x
+    )
 """
 
 from __future__ import annotations
 
+import enum
 import json
 import os
 import signal
@@ -22,7 +30,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,23 +58,69 @@ PROVIDER_ALIASES: dict[str, str] = {
 }
 
 
+class RunOutcome(enum.Enum):
+    """Result of a single ``_run_with_logging`` attempt.
+
+    Distinguishing IDLE_TIMEOUT from FAILED matters: the retry loop in
+    :meth:`ClaudeAgent.run` only restarts on idle timeouts. Restarting
+    on real failures (bad prompt, auth error, etc.) would double the
+    token bill without fixing anything.
+    """
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    IDLE_TIMEOUT = "idle_timeout"
+    CANCELLED = "cancelled"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _emit_session_start(jsonl_path: str, *, model: str, role: str | None) -> None:
+def _emit_session_start(
+    jsonl_path: str,
+    *,
+    model: str,
+    role: str | None,
+    attempt: int | None = None,
+) -> None:
     """Stamp the model used into the very first line of a phase JSONL.
 
     Lets the dashboard and any downstream tooling read the model directly
     from the log instead of re-deriving it from CLI flags. ``role`` is the
-    phase name (plan/refactor/prover/review) when known.
+    phase name (plan/refactor/prover/review) when known. ``attempt`` is
+    stamped on retries so a single phase log can contain multiple
+    session_start lines and the dashboard can tell them apart.
     """
     Path(jsonl_path).parent.mkdir(parents=True, exist_ok=True)
     row: dict[str, object] = {"ts": _now_iso(), "event": "session_start", "model": model}
     if role:
         row["role"] = role
+    if attempt is not None:
+        row["attempt"] = attempt
     with open(jsonl_path, "a") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def _emit_idle_timeout(jsonl_path: str, idle_s: float, attempt: int) -> None:
+    """Record an idle-timeout kill in the JSONL.
+
+    Surfaces in the dashboard as a distinct event so a hung-provider
+    restart is visible instead of looking like a silent failure.
+    """
+    row = {
+        "ts": _now_iso(),
+        "event": "idle_timeout",
+        "idle_threshold_s": idle_s,
+        "attempt": attempt,
+    }
+    try:
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        # Best-effort; never let a logging failure mask the real
+        # control-flow signal (the IDLE_TIMEOUT return).
+        pass
 
 
 # ── stream parser ─────────────────────────────────────────────────────
@@ -272,11 +326,14 @@ class ClaudeAgent:
         extra_args: list[str] | None = None,
         env_overrides: dict[str, str] | None = None,
         cancel_event: 'threading.Event | None' = None,
+        idle_timeout_s: float | None = 900,
+        max_attempts: int = 3,
     ) -> bool:
         """Headless ``claude -p`` run.
 
-        Returns True iff claude exited zero. When ``log_base`` is given,
-        writes ``{log_base}.jsonl`` (parsed events) and optionally
+        Returns True iff claude exited zero (or zero-with-valid-
+        session_end). When ``log_base`` is given, writes
+        ``{log_base}.jsonl`` (parsed events) and optionally
         ``{log_base}.raw.jsonl`` (verbose stream).
 
         ``env_overrides`` is forwarded to the spawned subprocess so lane
@@ -291,6 +348,20 @@ class ClaudeAgent:
         process, lets it tear down for up to 5 seconds, then SIGKILLs.
         Used by multilane to stop slow lanes once another lane has won
         the same file. Returns False on cancellation.
+
+        ``idle_timeout_s`` enables a watchdog: if no JSONL event is
+        written for this many seconds, claude is killed and (when
+        ``max_attempts`` > 1) the same prompt is re-run. This catches
+        third-party providers (Kimi, DeepSeek) whose connections
+        sometimes hang silently — a 15-minute idle threshold turns an
+        overnight stall into a 15-minute hiccup. Only the watchdog path
+        retries; real failures (auth errors, bad prompts) return False
+        immediately so we don't double-bill on something a retry can't
+        fix. Requires ``log_base`` (the watchdog reads the JSONL's
+        mtime); ignored without it.
+
+        ``max_attempts`` caps the retry count. Default 1 preserves
+        legacy behaviour — no auto-restart unless the caller opts in.
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
         cmd = ["claude", "-p", prompt, *self._build_flags(real_model)]
@@ -305,11 +376,53 @@ class ClaudeAgent:
         self._announce_model(real_model=real_model, provider=provider)
 
         if log_base is None:
+            # Without a log file the watchdog has nothing to read; fall
+            # back to the simple blocking invocation.
             return subprocess.run(cmd, cwd=cwd, env=env).returncode == 0
-        return self._run_with_logging(
-            cmd, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
-            env=env, cancel_event=cancel_event, jsonl_model=real_model,
-        )
+
+        if max_attempts < 1:
+            max_attempts = 1
+
+        last_outcome: RunOutcome = RunOutcome.FAILED
+        for attempt in range(1, max_attempts + 1):
+            outcome = self._run_with_logging(
+                cmd,
+                cwd=cwd,
+                log_base=log_base,
+                verbose_logs=verbose_logs,
+                env=env,
+                cancel_event=cancel_event,
+                jsonl_model=real_model,
+                idle_timeout_s=idle_timeout_s,
+                attempt=attempt,
+            )
+            last_outcome = outcome
+
+            if outcome is RunOutcome.SUCCESS:
+                return True
+            if outcome is RunOutcome.CANCELLED:
+                return False
+            if outcome is RunOutcome.FAILED:
+                # A real failure — retrying won't fix it and would just
+                # burn tokens. Stop here.
+                return False
+
+            # outcome is IDLE_TIMEOUT: provider went silent. Retry the
+            # same prompt unless the caller asked us to stop or we've
+            # hit the attempt cap.
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            if attempt < max_attempts:
+                log.warning(
+                    f"Run idle for {idle_timeout_s}s on attempt "
+                    f"{attempt}/{max_attempts}; restarting same prompt."
+                )
+            else:
+                log.error(
+                    f"Run still idle after {max_attempts} attempts; giving up."
+                )
+
+        return last_outcome is RunOutcome.SUCCESS
 
     def run_interactive(
         self,
@@ -324,6 +437,9 @@ class ClaudeAgent:
         bootstrap flow in ``archon init`` — anywhere claude takes over
         the terminal and expects user input. Returns the subprocess exit
         code so the caller can decide how to react to non-zero.
+
+        No idle watchdog here: a human is sitting at the terminal and
+        long pauses are normal (they're reading, thinking, typing).
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
         cmd = ["claude", *self._build_flags(real_model)]
@@ -369,17 +485,32 @@ class ClaudeAgent:
         env: dict[str, str] | None = None,
         cancel_event: 'threading.Event | None' = None,
         jsonl_model: str | None = None,
-    ) -> bool:
+        idle_timeout_s: float | None = 900,
+        attempt: int = 3,
+    ) -> RunOutcome:
+        """Run claude once with logging + watchdog.
+
+        Returns a :class:`RunOutcome` so the caller can decide whether
+        to retry. SUCCESS/FAILED come from the exit code (with a
+        session_end fallback); IDLE_TIMEOUT means the watchdog killed
+        the process; CANCELLED means ``cancel_event`` fired.
+        """
         log_base.parent.mkdir(parents=True, exist_ok=True)
         jsonl = f"{log_base}.jsonl"
         raw_log = f"{log_base}.raw.jsonl"
+        jsonl_path = Path(jsonl)
 
         # Stamp the model BEFORE claude starts streaming, so the
         # dashboard/postprocessors can read which model produced every
-        # subsequent event. Use the resolved real model (post
-        # provider-alias mapping) so non-Anthropic runs log the actual
-        # name that ran, not the local alias.
-        _emit_session_start(jsonl, model=jsonl_model or self.model, role=self.role)
+        # subsequent event. On retries this fires again with an
+        # ``attempt`` field, so a single phase log can contain multiple
+        # session_starts and downstream tooling can tell them apart.
+        _emit_session_start(
+            jsonl,
+            model=jsonl_model or self.model,
+            role=self.role,
+            attempt=attempt if attempt > 1 else None,
+        )
 
         cmd = cmd + ["--verbose", "--output-format", "stream-json"]
         parser_script = _STREAM_PARSER.format(
@@ -389,6 +520,7 @@ class ClaudeAgent:
         )
 
         cancelled = False
+        idle_timeout_hit = False
         stderr_dest = raw_log if verbose_logs else os.devnull
         with open(stderr_dest, "a") as stderr_file:
             claude_proc = subprocess.Popen(
@@ -406,19 +538,48 @@ class ClaudeAgent:
             assert claude_proc.stdout is not None
             claude_proc.stdout.close()
 
+            # Idle-watchdog state. We use the JSONL file's mtime as the
+            # liveness signal because the parser flushes on every event
+            # — cheap, no extra IPC, and survives even if claude's
+            # stdout is buffered upstream.
+            last_activity = time.monotonic()
+            try:
+                last_mtime = jsonl_path.stat().st_mtime
+            except OSError:
+                last_mtime = 0.0
+
             # Poll the parser instead of blocking on .wait() so we can
             # honour cancel_event from another thread (multilane uses
-            # this to kill slow lanes after another lane wins). Tick
-            # every 200 ms — fine-grained enough to feel responsive,
-            # coarse enough to be cheap.
+            # this to kill slow lanes after another lane wins) and the
+            # idle watchdog. Tick every 200 ms — fine-grained enough to
+            # feel responsive, coarse enough to be cheap.
             while parser_proc.poll() is None:
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     _terminate_process(claude_proc, sig=signal.SIGTERM)
                     break
+
+                if idle_timeout_s is not None:
+                    try:
+                        mtime = jsonl_path.stat().st_mtime
+                    except OSError:
+                        mtime = last_mtime
+                    if mtime > last_mtime:
+                        last_mtime = mtime
+                        last_activity = time.monotonic()
+                    elif time.monotonic() - last_activity > idle_timeout_s:
+                        idle_timeout_hit = True
+                        log.warning(
+                            f"No JSONL activity for {idle_timeout_s}s on "
+                            f"attempt {attempt}; terminating claude."
+                        )
+                        _emit_idle_timeout(jsonl, idle_timeout_s, attempt)
+                        _terminate_process(claude_proc, sig=signal.SIGTERM)
+                        break
+
                 time.sleep(0.2)
 
-            if cancelled:
+            if cancelled or idle_timeout_hit:
                 # Give claude a moment to tear down on its own, then
                 # escalate to SIGKILL. The parser will exit on its own
                 # once claude's stdout closes.
@@ -447,7 +608,9 @@ class ClaudeAgent:
                         claude_proc.wait()
 
         if cancelled:
-            return False
+            return RunOutcome.CANCELLED
+        if idle_timeout_hit:
+            return RunOutcome.IDLE_TIMEOUT
 
         # Some lanes legitimately end with a non-zero return even though
         # the assistant produced a valid session_end — check the JSONL
@@ -458,9 +621,11 @@ class ClaudeAgent:
         )
 
         if claude_proc.returncode == 0:
-            return True
+            return RunOutcome.SUCCESS
         session_end = read_last_session_end(jsonl)
-        return session_end_indicates_success(session_end)
+        if session_end_indicates_success(session_end):
+            return RunOutcome.SUCCESS
+        return RunOutcome.FAILED
 
 
 def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> None:
@@ -475,4 +640,4 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
-__all__ = ["ClaudeAgent", "DEFAULT_MODEL"]
+__all__ = ["ClaudeAgent", "DEFAULT_MODEL", "RunOutcome"]

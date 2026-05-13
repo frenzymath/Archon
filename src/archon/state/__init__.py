@@ -21,7 +21,7 @@ from .iteration import (
     utcnow_iso,
     write_meta,
 )
-from .progress import is_complete, parse_objective_files, read_stage
+from .progress import is_complete, parse_objective_files, read_stage, write_stage
 
 __all__ = [
     "CostData",
@@ -38,4 +38,5 @@ __all__ = [
     "is_complete",
     "parse_objective_files",
     "read_stage",
+    "write_stage",
 ]

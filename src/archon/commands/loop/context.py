@@ -42,6 +42,8 @@ class LoopOptions:
     multilane_preview: bool
     multilane_cfg: dict[str, Any]
 
+    debug_feedback: bool = False
+
     @property
     def do_git(self) -> bool:
         return not self.no_finalize and not self.no_git_commit

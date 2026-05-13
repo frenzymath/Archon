@@ -13,6 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+from archon.commands.tooling.project_config import load_project_config
+from archon.prompts import debug_feedback_block
+
 from .base import Subagent
 
 
@@ -28,6 +31,8 @@ class AnalogySubagent(Subagent):
         # consistency with the other subagents and so it can refer back
         # to it if it loses track in a long run.
         state_dir = self.project_path / ".archon"
+        cfg = load_project_config(self.project_path)
+        debug_feedback = bool(cfg.loop_section().get("debug_feedback"))
         return dedent(f"""\
             You are the analogy subagent for project '{self.project_path.name}'.
             Archon iteration: {iter_num:03d}.
@@ -50,7 +55,9 @@ class AnalogySubagent(Subagent):
 
             Do not write to PROGRESS.md, STRATEGY.md, task_pending.md,
             task_done.md, USER_HINTS.md, or any project .lean file.
-            """)
+            """) + debug_feedback_block(
+                debug_feedback, state_dir, f"analogy ({slug})", iter_num,
+            )
 
     def report_path(self, slug: str) -> Path:
         return (

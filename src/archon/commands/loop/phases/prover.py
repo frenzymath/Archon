@@ -138,6 +138,7 @@ class ProverPhase(Phase):
             model=ctx.model,
             dashboard_url=ctx.dashboard_url,
             blueprint_url=ctx.blueprint_url,
+            debug_feedback=ctx.options.debug_feedback,
         )
         runner.run(dry_run=ctx.dry_run)
 
@@ -152,5 +153,6 @@ class ProverPhase(Phase):
             iter_num=ctx.iter_num,
             verbose_logs=ctx.verbose_logs,
             model=ctx.model,
+            debug_feedback=ctx.options.debug_feedback,
         )
         runner.run(dry_run=ctx.dry_run, progress_file=ctx.progress_file)

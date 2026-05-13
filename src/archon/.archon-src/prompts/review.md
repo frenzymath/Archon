@@ -105,6 +105,8 @@ Write concrete recommendations for the next plan agent iteration:
 - Which targets are blocked and why (the plan agent should NOT assign these)
 - Any reusable proof patterns discovered
 
+If your analysis shows the prover has hit the exact same blocker for several consecutive iterations on the same target, you should explicitly instruct the Plan Agent to avoid retrying the same approach without putting more effort into understanding the underlying issue.
+
 ## Step 5: Update PROJECT_STATUS.md
 
 Update (or create) `.archon/PROJECT_STATUS.md`:
@@ -114,6 +116,7 @@ Update (or create) `.archon/PROJECT_STATUS.md`:
 
 ## Overall Progress
 - **Total sorry**: <N>
+- **Branches / Sub-goals closed this session**: <count> (Track real structural progress even if raw sorry count didn't drop)
 - **Solved this session**: <list with file + theorem>
 - **Partial**: <list with progress summary>
 - **Blocked**: <list with reasons>

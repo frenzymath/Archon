@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Archon pre-commit secret-scrub hook.
+
+Inspects every file staged for commit and replaces anything that looks
+like an API key or provider secret with the canonical redaction marker
+``ARCHON_REDACTED_SECRET``. Both the working-tree file and the staged
+index entry are rewritten in place, so the commit proceeds with the
+scrubbed content (no manual re-staging required).
+
+Same pattern set as the pre-push hook — Anthropic ``sk-ant-`` keys,
+OpenAI ``sk-proj-``, Google ``AIza``, generic provider ``sk-`` long
+opaque bodies, and ``<PROVIDER>_API_KEY=…`` env-style assignments.
+
+Hook contract: ``git commit`` aborts if this script exits non-zero.
+Exiting zero (after possibly rewriting files) lets the commit proceed.
+
+Stdlib-only — runs before the Python env has loaded anything.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REDACTION = "ARCHON_REDACTED_SECRET"
+
+# These mirror the pre-push hook patterns. Order matters: more specific
+# patterns first so generic ``sk-`` doesn't eat ``sk-ant-`` / ``sk-proj-``.
+SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Anthropic sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("OpenAI sk-proj-",   re.compile(r"sk-proj-[A-Za-z0-9_\-]{30,}")),
+    ("Google AIza",       re.compile(r"AIza[A-Za-z0-9_\-]{30,}")),
+    ("Provider sk- key",  re.compile(r"sk-[A-Za-z0-9]{40,}")),
+]
+
+ENV_KEY_NAMES = (
+    "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+    "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+    "AWS_SECRET_ACCESS_KEY", "HUGGINGFACE_TOKEN",
+)
+# Capture the value half so we can replace only the secret, preserving
+# the key name and surrounding quoting/whitespace. Negative lookahead
+# skips already-redacted assignments so re-runs are no-ops.
+ENV_ASSIGN = re.compile(
+    r"(?P<prefix>(?:" + "|".join(ENV_KEY_NAMES) + r")\s*[=:]\s*['\"]?)"
+    r"(?!ARCHON_REDACTED_SECRET)"
+    r"(?P<val>[A-Za-z0-9_\-]{16,})"
+)
+
+
+def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          errors="replace", **kw)
+
+
+def _staged_files() -> list[str]:
+    """Paths of files staged for commit (Added/Copied/Modified/Renamed).
+
+    Excludes deletions (``D``) — no point scrubbing a file that's
+    leaving the tree. ``--diff-filter`` is on the destination side so
+    renamed files appear under their new name.
+    """
+    r = _run(["git", "diff", "--cached", "--name-only",
+              "--diff-filter=ACMR"])
+    return [p for p in r.stdout.splitlines() if p]
+
+
+def _scrub_text(text: str) -> tuple[str, int]:
+    """Return (scrubbed_text, num_replacements)."""
+    total = 0
+    for _label, pat in SECRET_PATTERNS:
+        text, n = pat.subn(REDACTION, text)
+        total += n
+    # Env-var assignments: replace the value half only, keep the
+    # ``KEY="`` prefix intact so JSON / dotenv files stay parseable.
+    def _env_sub(m: re.Match) -> str:
+        return m.group("prefix") + REDACTION
+    text, n = ENV_ASSIGN.subn(_env_sub, text)
+    total += n
+    return text, total
+
+
+def _is_probably_binary(path: Path) -> bool:
+    """Cheap binary sniff so we don't try to scrub e.g. PDFs or images.
+    Reads first 8 KiB and looks for NUL byte — the standard `git diff`
+    heuristic."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(8192)
+    except OSError:
+        return True
+    return b"\x00" in head
+
+
+def _scrub_one(path_str: str) -> int:
+    """Rewrite ``path_str`` in worktree + index if it carries a secret.
+
+    Returns the number of replacements made (0 if clean or unreadable).
+    """
+    p = Path(path_str)
+    if not p.is_file():
+        return 0
+    if _is_probably_binary(p):
+        return 0
+    try:
+        original = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+    scrubbed, n = _scrub_text(original)
+    if n == 0:
+        return 0
+
+    p.write_text(scrubbed, encoding="utf-8")
+    # Re-stage the cleaned content so the in-progress commit picks it up.
+    # ``--`` guards against pathological filenames that look like flags.
+    _run(["git", "add", "--", path_str])
+    return n
+
+
+def main() -> int:
+    files = _staged_files()
+    if not files:
+        return 0
+
+    total_files = 0
+    total_subs = 0
+    for f in files:
+        n = _scrub_one(f)
+        if n:
+            total_files += 1
+            total_subs += n
+            print(f"  scrubbed {n} secret(s) in {f}", file=sys.stderr)
+
+    if total_files:
+        yellow = "\033[1;33m"
+        rst = "\033[0m"
+        print(f"{yellow}⚠ Archon pre-commit: replaced {total_subs} "
+              f"secret-shaped string(s) across {total_files} file(s) "
+              f"with '{REDACTION}'.{rst}", file=sys.stderr)
+        print("  Files were rewritten in place and re-staged. "
+              "Review the diff before pushing.", file=sys.stderr)
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(1)

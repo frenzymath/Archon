@@ -92,6 +92,13 @@ def loop(
              "skips plan, and starts the first iteration at the prover phase. "
              "Subsequent iterations run the full sequence as usual.",
     ),
+    debug_feedback: Optional[bool] = typer.Option(
+        None, "--debug-feedback/--no-debug-feedback",
+        help="Open a write-only feedback channel: agents and subagents may "
+             "append short notes to .archon/.debug-feedback/debug_feedback.md "
+             "when they notice something the developer should fix. "
+             "(default from config or off)",
+    ),
 ) -> None:
     """Start the automated plan → prove → review loop.
 
@@ -129,6 +136,9 @@ def loop(
     verbose_logs = _resolve(verbose_logs, section=loop_cfg, key='verbose_logs', default=False)
     no_review = _resolve(no_review, section=loop_cfg, key='no_review', default=False)
     model = _resolve(model, section=loop_cfg, key='model', default=DEFAULT_MODEL)
+    debug_feedback = _resolve(
+        debug_feedback, section=loop_cfg, key='debug_feedback', default=False,
+    )
 
     # Multi-lane execution fires automatically when config.json has it
     # enabled with at least one lane defined. The old --multilane-execute
@@ -158,6 +168,7 @@ def loop(
         multilane_execute=multilane_execute,
         multilane_preview=False,  # legacy; kept False so existing dispatch falls through
         multilane_cfg=multilane_cfg,
+        debug_feedback=debug_feedback,
     )
 
     LoopCommand(options).run()

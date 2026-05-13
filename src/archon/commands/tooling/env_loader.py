@@ -54,7 +54,7 @@ INFORMAL_AGENT_KEYS: list[str] = [
 # Default values written into the template when a variable isn't yet
 # in the shell. Empty string means "leave the user to fill it in".
 TEMPLATE_DEFAULTS: dict[str, str] = {
-    'MOONSHOT_BASE_URL': 'https://api.moonshot.ai/anthropic',
+    'MOONSHOT_BASE_URL': 'https://api.kimi.com/coding/',
     'MOONSHOT_MODEL': 'kimi-k2.6',
     'DEEPSEEK_BASE_URL': 'https://api.deepseek.com/anthropic',
     'DEEPSEEK_MODEL': 'deepseek-coder',

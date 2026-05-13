@@ -302,6 +302,11 @@ class InnerGit:
         for entry in sorted(archon_dir.iterdir()):
             if entry.name == "git-dir":
                 continue
+            if entry.name == ".debug-feedback":
+                # Developer-only feedback channel. Notes are for the
+                # human reading them between iterations — they have no
+                # bearing on `archon branch` time-travel state.
+                continue
             if _is_env_secret(entry.name):
                 # Force-adding (-f) would override info/exclude and put
                 # secret env files into the commit. Skip them here so

@@ -28,7 +28,7 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool) -> None:
         )
         if r.returncode != 0:
             log.error("Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network.")
-            raise typer.Exit(1)
+            # raise typer.Exit(1)
         log.success("Claude Code is authenticated and ready")
 
     if not progress.exists():

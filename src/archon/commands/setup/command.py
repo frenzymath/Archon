@@ -98,6 +98,4 @@ class SetupCommand:
     def _summarize(self) -> None:
         log.rule("Setup complete")
         rc = shell_rc()
-        if rc and rc.exists():
-            log.warn(f"To pick up PATH changes in new terminals: source {rc}")
         log.success("All dependencies checked. You can now run: archon init")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from archon import log
+
 
 # The plan agent writes objectives in three shapes — a per-objective
 # ``###`` heading whose title contains the file, an unordered bullet
@@ -62,24 +64,50 @@ def _has_stop_marker(line: str) -> bool:
     low = line.lower()
     return any(marker in low for marker in _STOP_MARKERS)
 
+def write_stage(progress_file: Path, new_stage: str) -> None:
+    """Reconstruct the Current Stage section to ensure exact \n \n {stage} \n \n spacing."""
+    if not progress_file.exists():
+        return
+
+    content = progress_file.read_text()
+    pattern = r"## Current Stage.*?(?=## Stages)"
+    replacement = f"## Current Stage\n\n{new_stage}\n\n"
+    
+    new_content = re.sub(
+        pattern, 
+        replacement, 
+        content, 
+        count=1, 
+        flags=re.DOTALL
+    )
+
+    if new_content != content:
+        progress_file.write_text(new_content)
+        log.info(f"Updated PROGRESS.md stage to: {new_stage}")
+    else:
+        log.error("Failed to find '## Current Stage' or '## Stages' headers in PROGRESS.md. Stage not updated.")
 
 def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
-    """Read the current stage from PROGRESS.md (or return forced override)."""
+    """Read the current stage from PROGRESS.md using regex."""
     if force_stage:
         return force_stage
     if not progress_file.exists():
         raise FileNotFoundError(f"PROGRESS.md not found at {progress_file}")
-    lines = progress_file.read_text().splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("## Current Stage"):
-            if i + 1 < len(lines):
-                return lines[i + 1].strip()
+
+    content = progress_file.read_text()
+
+    pattern = r"## Current Stage\s+([^\n#]+)"
+    
+    match = re.search(pattern, content)
+    if match:
+        return match.group(1).strip()
+    
     raise ValueError("Could not read current stage from PROGRESS.md")
 
 
 def is_complete(progress_file: Path, force_stage: str | None = None) -> bool:
     try:
-        return read_stage(progress_file, force_stage) == "COMPLETE"
+        return "COMPLETE" in read_stage(progress_file, force_stage)
     except (FileNotFoundError, ValueError):
         return False
 
@@ -143,15 +171,87 @@ def _extract_list_candidates(section_lines: list[str]) -> list[str]:
 
 
 def _resolve_candidate_paths(project_path: Path, candidates: list[str]) -> list[Path]:
+    """Resolve PROGRESS.md candidate strings to filesystem paths.
+
+    A candidate is either a bare basename (``Foo.lean``) or a project-relative
+    path (``Sub/Dir/Foo.lean``). For each:
+
+    1. Search the worktree via ``rglob`` for files matching the candidate,
+       skipping ``_SKIP_PARTS`` (lane copies, build dirs, ...). Pick a
+       deterministic winner among matches: longest suffix-match against the
+       candidate, then shortest path, then lexicographic.
+    2. If no existing file matches AND the candidate contains a slash, treat
+       it as a project-relative path-to-create — the plan agent marked it as
+       a new-file objective and the prover is expected to scaffold it.
+       Without this branch, "new file" objectives were silently dropped.
+    3. Otherwise warn and skip. The visible log line guarantees a future
+       silent-drop can be diagnosed instead of vanishing.
+
+    Output is sorted by path for stable iteration order across dispatch modes.
+    """
     results: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
-        for match in project_path.rglob(f"*{candidate}"):
-            if any(part in _SKIP_PARTS for part in match.parts):
+        candidate_norm = candidate.replace("\\", "/").strip("/")
+        chosen = _best_existing_match(project_path, candidate_norm)
+        if chosen is None:
+            if "/" in candidate_norm:
+                # The slash makes this an intentional path; treat as new file.
+                chosen = (project_path / candidate_norm).resolve()
+                log.info(
+                    f"objective {candidate_norm!r}: no existing file — "
+                    f"dispatching as a new-file objective"
+                )
+            else:
+                log.warn(
+                    f"objective {candidate_norm!r}: no file matches under "
+                    f"{project_path}; skipping. Use a project-relative path "
+                    f"(e.g. 'Dir/{candidate_norm}') for files that don't "
+                    f"exist yet."
+                )
                 continue
-            resolved = str(match.resolve())
-            if resolved not in seen:
-                seen.add(resolved)
-                results.append(match)
-                break
+        resolved = str(chosen)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        results.append(chosen)
     return sorted(results)
+
+
+def _best_existing_match(project_path: Path, candidate: str) -> Path | None:
+    """Pick the most-specific existing file matching ``candidate``.
+
+    Returns ``None`` when no file matches (the caller decides whether to
+    treat the candidate as a new-file objective or to drop it).
+    """
+    basename = candidate.rsplit("/", 1)[-1]
+    matches: list[Path] = []
+    for match in project_path.rglob(f"*{basename}"):
+        if any(part in _SKIP_PARTS for part in match.parts):
+            continue
+        if not match.is_file():
+            # rglob can yield directories on dir-suffix candidates; filter.
+            continue
+        try:
+            rel = match.resolve().relative_to(project_path.resolve())
+        except ValueError:
+            # Symlinks pointing outside the worktree; ignore.
+            continue
+        # Ensure the candidate is a path *suffix* of the match, not just
+        # a basename-substring hit. ``rglob("*Foo.lean")`` would match
+        # ``MyFoo.lean``; that's a false positive we don't want.
+        rel_str = str(rel).replace("\\", "/")
+        if not (rel_str == candidate or rel_str.endswith("/" + candidate)):
+            continue
+        matches.append(match)
+    if not matches:
+        return None
+    # Deterministic tie-break: longer rel-path-suffix match first (favors a
+    # match like ``A/B/Foo.lean`` over ``Foo.lean`` when candidate is
+    # ``B/Foo.lean``), then shortest absolute path, then lexicographic.
+    def _rank(p: Path) -> tuple[int, int, str]:
+        rel_str = str(p.resolve().relative_to(project_path.resolve())).replace("\\", "/")
+        suffix_len = len(candidate) if rel_str.endswith(candidate) else 0
+        return (-suffix_len, len(rel_str), rel_str)
+    matches.sort(key=_rank)
+    return matches[0]

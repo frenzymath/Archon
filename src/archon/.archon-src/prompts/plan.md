@@ -44,6 +44,11 @@ Concretely:
 - **You MAY use `lean_leansearch` / `lean_loogle`** to check whether a piece of Mathlib infrastructure *exists* — answering questions like "does Mathlib have a localization theorem for basic opens?" This informs your informal proof sketch and tells you whether to flag a potential gap. Keep in mind that the Prover will also use these tools. 
 - **You MUST NOT use `lean_run_code`** to validate candidate proof bodies, search for working tactic sequences, or confirm that a specific Lean expression type-checks. If you find yourself writing or testing Lean tactic code, stop — that is the prover's job.
 
+When your plan recipe suggests specific Mathlib lemmas, you MUST tag them to communicate your confidence to the prover:
+- [verified] — You confirmed it exists using lean_leansearch or lean_loogle.
+- [expected] — You are guessing the name based on Mathlib naming conventions, but haven't verified it. 
+- [gap] — You verified the infrastructure does not exist in Mathlib.
+
 ## Protected declarations
 
 Read `archon-protected.yaml` at the project root. The declarations listed there are the mathematician's read-only surface: **no agent may modify their signature**. As plan agent:
@@ -121,7 +126,7 @@ The prover will read the chapter file mentioned here.
 
 Read it early in every iteration, before deciding which sorries to assign or whether to invoke a subagent, so the next iteration is grounded in the bigger picture.
 
-Update it after processing prover/review results and before writing `PROGRESS.md` or the blueprint. Describe the *current* plan only: the remaining steps from today's state to the end-state, in roughly the order they need to happen, with a rough effort estimate (iterations, LOC) per step. Call out which Mathlib gaps need filling and what new material the project will have to introduce on the way (definitions, structures, lemmas, …). Do not narrate past iterations — the Revision log captures history.
+Update it after processing prover/review results and before writing `PROGRESS.md` or the blueprint. Describe the *current* plan for the future only: the remaining steps from today's state to the end-state, in roughly the order they need to happen, with a rough effort estimate (iterations, LOC) per step, and remove mentions to what is already completed. Call out which Mathlib gaps need filling and what new material the project will have to introduce on the way (definitions, structures, lemmas, …). Do not narrate past iterations — the Revision log captures history.
 
 Aim for the big picture, not the details. Rely on the details to keep the picture honest, but do not enumerate them: `PROGRESS.md` and the blueprint hold the specifics. The mathematician should be able to read the strategy.
 
@@ -129,7 +134,7 @@ If nothing strategically changed this iteration, leave the body alone and add no
 
 Indicate clearly in the beginning the current estimation of iterations and LOC remaining (e.g., in a tabular).
 
-Because the file is cumulative, if it becomes too long, for readability and context management, you can remove, reduce or merge old iteration notes in the Revision log; you can also remove old strategy steps that have been completed.
+Keep the file organized, updated to the current plan, and relevant for the next iteration. 
 
 ## Feasibility Gate
 
@@ -351,6 +356,10 @@ The prover stops and reports "done" when the remaining sorry requires significan
 The prover introduces new axioms or definitions that aren't in the blueprint to fill sorries, then reports completion. You should also never propose such tricks as a plan agent.
 
 **Your response:** Reject the report. Such tricks should not be accepted; they should be documented and then removed. You should then try to understand why this route was chosen and ensure that it will not be reproduced.
+
+### Repeated Blockers
+
+If task_results/ or review logs indicate that a prover has hit the exact same blocker for several consecutive iterations, you MUST escalate. Do not re-dispatch the lane with a slightly varied inline recipe. You might need to call a refactor subagent or rewrite the blueprint chapter.
 
 ## Assessing Prover Progress
 

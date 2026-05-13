@@ -74,6 +74,7 @@ class SerialProverRunner:
         iter_num: int,
         verbose_logs: bool,
         model: str,
+        debug_feedback: bool = False,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -83,11 +84,12 @@ class SerialProverRunner:
         self.iter_num = iter_num
         self.verbose_logs = verbose_logs
         self.model = model
+        self.debug_feedback = debug_feedback
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
         prompt = build_prover_prompt(
             self.project_name, self.project_path, self.state_dir, self.stage,
-            self.iter_num,
+            self.iter_num, debug_feedback=self.debug_feedback,
         )
         if dry_run:
             log.step("[dry-run] Prover prompt:")
@@ -136,6 +138,7 @@ class ParallelProverRunner:
         model: str,
         dashboard_url: str | None = None,
         blueprint_url: str | None = None,
+        debug_feedback: bool = False,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -149,6 +152,7 @@ class ParallelProverRunner:
         self.model = model
         self.dashboard_url = dashboard_url
         self.blueprint_url = blueprint_url
+        self.debug_feedback = debug_feedback
 
     def run(self, *, dry_run: bool) -> None:
         progress = self.state_dir / "PROGRESS.md"
@@ -192,6 +196,7 @@ class ParallelProverRunner:
             self.project_name, self.project_path, self.state_dir, self.stage,
             self.iter_num,
             assigned_rel_lean_path=rel,
+            debug_feedback=self.debug_feedback,
         )
         prompt = f"{base_prompt}\nYour assigned file: {rel}"
         with ProverEnvironment(
@@ -238,6 +243,7 @@ class ParallelProverRunner:
                     self.project_name, self.project_path, self.state_dir, self.stage,
                     self.iter_num,
                     assigned_rel_lean_path=rel,
+                    debug_feedback=self.debug_feedback,
                 )
                 prompt = f"{base_prompt}\nYour assigned file: {rel}"
 

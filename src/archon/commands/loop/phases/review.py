@@ -106,6 +106,7 @@ class ReviewPhase(Phase):
             ctx.project_name, ctx.project_path, ctx.state_dir, ctx.current_stage,
             session_num, session_dir, attempts_file, combined,
             ctx.iter_num,
+            debug_feedback=ctx.options.debug_feedback,
         )
         review_log = ctx.iter_dir / "review"
         ClaudeAgent(model=ctx.model, role="review").run(

@@ -33,6 +33,7 @@ class PlanPhase(Phase):
             ignore_multilane=(
                 ctx.options.multilane_preview or ctx.options.multilane_execute
             ),
+            debug_feedback=ctx.options.debug_feedback,
         )
 
         if ctx.dry_run:

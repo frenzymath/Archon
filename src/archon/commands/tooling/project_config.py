@@ -49,6 +49,17 @@ def default_config() -> dict[str, Any]:
             'model': 'opus',
             'verbose_logs': False,
             'no_review': False,
+            '_debug_feedback_help': (
+                "Open a write-only feedback channel: each agent and "
+                "subagent is told (in its prompt) that it may append "
+                "short observations to "
+                ".archon/.debug-feedback/debug_feedback.md when it notices "
+                "a missing capability, a contradictory instruction, or "
+                "anything else the developer should fix. Agents are told "
+                "never to read the file. Off by default; flip to true "
+                "while you are iterating on Archon itself."
+            ),
+            'debug_feedback': False,
         },
         'subagents': {
             '_help': (

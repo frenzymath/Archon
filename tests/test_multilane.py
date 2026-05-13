@@ -358,6 +358,91 @@ class MultiLaneDispatchTests(unittest.TestCase):
             rels = [str(path.relative_to(project)) for path in files]
             self.assertEqual(rels, ['Bar/Baz.lean', 'Foo.lean'])
 
+    def test_parse_objective_files_accepts_new_file_objective(self):
+        """A new-file objective (path with a slash, file does not yet exist
+        on disk) must still be dispatched — the prover is expected to
+        scaffold the file. Iter-063 silently dropped Differentials.lean
+        because rglob found no match; the resolver now treats a slashed
+        candidate with no rglob hit as a path-to-create."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            state_dir = project / '.archon'
+            project.mkdir()
+            state_dir.mkdir(parents=True)
+            (project / 'AlgebraicJacobian' / 'Cohomology').mkdir(parents=True)
+            (project / 'AlgebraicJacobian' / 'Cohomology' /
+             'BasicOpenCech.lean').write_text('-- existing\n')
+
+            progress = state_dir / 'PROGRESS.md'
+            progress.write_text(
+                '# Project Progress\n\n'
+                '## Current Stage\nprover\n\n'
+                '## Current Objectives\n'
+                '### 1. **`AlgebraicJacobian/Cohomology/BasicOpenCech.lean`** — continue\n'
+                '### 2. **`AlgebraicJacobian/Differentials.lean`** *(new file)* — scaffold\n'
+            )
+
+            files = parse_objective_files(progress, project)
+            rels = sorted(str(p.resolve().relative_to(project.resolve()))
+                          for p in files)
+            self.assertEqual(rels, [
+                'AlgebraicJacobian/Cohomology/BasicOpenCech.lean',
+                'AlgebraicJacobian/Differentials.lean',
+            ])
+
+    def test_parse_objective_files_drops_bare_basename_with_no_match(self):
+        """A bare basename objective with no rglob match must be dropped
+        (we can't invent a target path), but the drop is not silent: a
+        warn-level log line is emitted so the operator can spot a typo
+        in PROGRESS.md instead of a vanished prover."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            state_dir = project / '.archon'
+            project.mkdir()
+            state_dir.mkdir(parents=True)
+            (project / 'Foo.lean').write_text('-- foo\n')
+            progress = state_dir / 'PROGRESS.md'
+            progress.write_text(
+                '# Project Progress\n\n'
+                '## Current Stage\nprover\n\n'
+                '## Current Objectives\n'
+                '### 1. **`Foo.lean`** — keep this\n'
+                '### 2. **`Nonexistent.lean`** — typo, no match\n'
+            )
+
+            files = parse_objective_files(progress, project)
+            rels = [str(p.resolve().relative_to(project.resolve()))
+                    for p in files]
+            self.assertEqual(rels, ['Foo.lean'])
+
+    def test_parse_objective_files_picks_most_specific_match(self):
+        """When the same basename exists in multiple subdirs, a slashed
+        candidate must pick the file whose project-relative path ends
+        with that candidate — not any random rglob hit. Without this
+        tie-break, the first rglob match would be filesystem-order-
+        dependent and could route the prover to the wrong file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            state_dir = project / '.archon'
+            project.mkdir()
+            state_dir.mkdir(parents=True)
+            (project / 'A').mkdir()
+            (project / 'A' / 'Shared.lean').write_text('-- A copy\n')
+            (project / 'B').mkdir()
+            (project / 'B' / 'Shared.lean').write_text('-- B copy\n')
+            progress = state_dir / 'PROGRESS.md'
+            progress.write_text(
+                '# Project Progress\n\n'
+                '## Current Stage\nprover\n\n'
+                '## Current Objectives\n'
+                '### 1. **`B/Shared.lean`** — the B copy\n'
+            )
+
+            files = parse_objective_files(progress, project)
+            rels = [str(p.resolve().relative_to(project.resolve()))
+                    for p in files]
+            self.assertEqual(rels, ['B/Shared.lean'])
+
     def test_parse_objective_files_skips_do_not_touch_headings(self):
         """Plan agents sometimes list off-limits files in `## Current Objectives`.
         Without filtering, the dispatcher fans out provers that immediately

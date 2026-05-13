@@ -20,6 +20,7 @@ from archon.state import (
     is_complete,
     next_iter_num,
     read_stage,
+    write_stage,
     utcnow_iso,
     write_meta,
 )
@@ -61,16 +62,22 @@ class LoopCommand:
         self._start_services()
 
         ctx = self.ctx  # bound after _bootstrap_context
+        ctx.initial_sorry = count_sorries(ctx.project_path) if not ctx.dry_run else None
+
         if is_complete(ctx.progress_file, ctx.force_stage()):
-            log.success(f"Project '{ctx.project_name}' is COMPLETE. Nothing to do.")
-            if ctx.dashboard_url:
-                log.step(f"Review results in the dashboard: {ctx.dashboard_url}")
-            return
+            if ctx.initial_sorry > 0:
+                log.warn(f"Project is marked COMPLETE, but {ctx.initial_sorry} sorries were found.")
+                write_stage(ctx.progress_file, "prover")  
+                log.warn(f"The stage has been reset to 'prover' to address the sorries. The loop will run one iteration to attempt to resolve them.")
+            else:
+                log.success(f"Project '{ctx.project_name}' is COMPLETE. Nothing to do.")
+                if ctx.dashboard_url:
+                    log.step(f"Review results in the dashboard: {ctx.dashboard_url}")
+                return
 
         if not ctx.dry_run:
             check_informal_agent_keys()
 
-        ctx.initial_sorry = count_sorries(ctx.project_path) if not ctx.dry_run else None
         if ctx.initial_sorry is not None:
             log.info(f"Starting sorry count: {ctx.initial_sorry}")
 
@@ -149,6 +156,7 @@ class LoopCommand:
             "Blueprint server": "enabled" if opts.blueprint_server_flag else "disabled",
             "Logs": str(ctx.log_dir),
             "User hints": str(ctx.state_dir / "USER_HINTS.md"),
+            "Debug feedback": "enabled" if opts.debug_feedback else "disabled",
             "Multi-lane": (
                 f"enabled ({len(multilane_lanes)} lane{'s' if len(multilane_lanes) != 1 else ''}: "
                 f"{', '.join(str(l.get('lane_id', l.get('provider', '?'))) for l in multilane_lanes)})"

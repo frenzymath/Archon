@@ -62,6 +62,13 @@ Do NOT just report "Mathlib lacks X" and stop. Before giving up on a sorry, you 
 - **Intermediate helper lemmas you introduced** may be modified if they turn out to be incorrect or need adjustment.
 - Add concise, informative comments above helper lemmas to make later reuse easy
 
+## Interpreting Mathlib Tags in PROGRESS.md
+
+The Plan Agent will tag suggested Mathlib lemmas to indicate its confidence. Adjust your effort accordingly:
+- [verified] — The Plan Agent confirmed this exists. 
+- [expected] — The Plan Agent is guessing this name based on conventions. Do not assume it exists; do a quick `lean_local_search` and pivot immediately if it doesn't.
+- [gap] — The Plan Agent verified this does NOT exist in Mathlib. Do not waste time searching for it; formalize a workaround or helper lemma.
+
 ## Search Protocol
 
 Follow the search tool priority and query guidance in the lean4 skill reference (`references/lean-lsp-tools-api.md`). Key points:
@@ -76,6 +83,11 @@ Follow the search tool priority and query guidance in the lean4 skill reference 
 Follow the lean4 skill reference (`references/sorry-filling.md`) for:
 - **When Mathlib lacks a theorem**: bypass or implement yourself. Web Search for published papers. Never leave a `sorry` just because Mathlib doesn't have it.
 - **Distinguish impossibility from difficulty**: technical difficulty → keep trying. Mathematical impossibility → immediately backtrack and document why.
+
+## Tooling Traps & Verification
+
+- Trust `goals_after`, not just empty diagnostics: When using `lean_multi_attempt`, do not assume a snippet worked just because `diagnostics: []` is empty. Line-scoping quirks mean errors sometimes attach to the enclosing by block. You MUST check that goals_after is empty (or has advanced) to confirm success.
+- Beware `lean_run_code` with imports: Standalone `lean_run_code` snippets can sometimes silently swallow elaboration errors if they contain import statements. Rely on the actual file's `lean_diagnostic_messages` for authoritative verification.
 
 ## Logging
 
@@ -99,9 +111,9 @@ Write your results to `task_results/<your_file>.md`. Use the file name from your
 
 ## helper_bijective (line 78)
 ### Attempt 1
-- **Approach:** Function.Bijective.comp
-- **Result:** IN PROGRESS — stuck on surjectivity
-- **Next step:** Try PrimeSpectrum.range_comap_of_surjective
+- **Approach:** Split conjunction into injectivity and surjectivity. Prove injectivity.
+- **Result:** PARTIAL (Branch Closed) — Injectivity closed. Sorry count unchanged because surjectivity remains.
+- **Next step:** Try PrimeSpectrum.range_comap_of_surjective for the right branch.
 - **Relevant lemmas found:** PrimeSpectrum.comap_surjective
 ```
 

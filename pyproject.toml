@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "typer",
     "pydantic",
+    "PyYAML",
 ]
 
 [project.scripts]

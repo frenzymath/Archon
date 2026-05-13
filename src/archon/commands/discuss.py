@@ -323,7 +323,6 @@ This format is compatible with `archon hint show` and `archon hint clear`.
                 "These will be picked up by the plan agent at the next "
                 "`archon loop` iteration",
             )
-            log.step("Manage hints: archon hint show / archon hint clear <spec>")
         else:
             log.info("No new hints recorded during this session")
 
