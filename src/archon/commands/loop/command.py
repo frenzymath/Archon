@@ -40,6 +40,7 @@ from .preflight import (
     check_informal_agent_keys,
     preflight,
     warn_if_inner_dirty,
+    warn_if_lake_unbuilt,
 )
 from .services import BlueprintServerProcess, DashboardProcess
 from .sorry_count import count_sorries
@@ -181,6 +182,10 @@ class LoopCommand:
         # Warn (but do not block) if the inner git has leftover agent
         # work — the user may have Ctrl-C'd a previous loop mid-phase.
         warn_if_inner_dirty(opts.project_path)
+
+        # Heads-up if the project looks unbuilt — see preflight docstring
+        # for why the cold-LSP path is worth flagging.
+        warn_if_lake_unbuilt(opts.project_path)
 
     def _start_services(self) -> None:
         ctx = self.ctx

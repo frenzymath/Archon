@@ -41,6 +41,37 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool) -> None:
         raise typer.Exit(1)
 
 
+def warn_if_lake_unbuilt(project_path: Path) -> None:
+    """Warn (don't fail) when the project looks unbuilt.
+
+    A cold ``.lake/build`` is the most common cause of the LSP MCP
+    server returning ``success: false`` on the prover's first query —
+    which the model historically misread as "the tool doesn't exist"
+    and fell back to running ``lean_goal`` as a shell command (which
+    obviously fails). Surfacing this up front gives the user a chance
+    to ``lake build`` before burning a prover round on a cold cache.
+
+    Skipped silently when there's no ``lakefile.lean`` / ``lakefile.toml``
+    (not a Lake project, nothing to warn about).
+    """
+    has_lake = (
+        (project_path / "lakefile.lean").exists()
+        or (project_path / "lakefile.toml").exists()
+    )
+    if not has_lake:
+        return
+    build_dir = project_path / ".lake" / "build"
+    if build_dir.is_dir() and any(build_dir.iterdir()):
+        return
+
+    log.warn(
+        "No .lake/build artifacts found. The Lean LSP MCP server "
+        "may return success: false on its first call and the prover "
+        "could waste effort interpreting that as a missing tool. "
+        "Consider running `lake build` once before starting the loop."
+    )
+
+
 def warn_if_inner_dirty(project_path: Path) -> None:
     """If the inner git has leftover state, tell the user; do not block."""
     inner = InnerGit(project_path)

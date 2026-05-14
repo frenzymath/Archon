@@ -69,6 +69,14 @@ The Plan Agent will tag suggested Mathlib lemmas to indicate its confidence. Adj
 - [expected] — The Plan Agent is guessing this name based on conventions. Do not assume it exists; do a quick `lean_local_search` and pivot immediately if it doesn't.
 - [gap] — The Plan Agent verified this does NOT exist in Mathlib. Do not waste time searching for it; formalize a workaround or helper lemma.
 
+## LSP MCP Tools: Invocation Rules
+
+The `archon-lean-lsp` server exposes Lean LSP operations as **MCP tool calls**, not shell commands. Their full names start with `mcp__archon-lean-lsp__` (e.g. `mcp__archon-lean-lsp__lean_goal`, `mcp__archon-lean-lsp__lean_diagnostic_messages`, `mcp__archon-lean-lsp__lean_local_search`). The lean4 skill reference uses the short names (`lean_goal`, `lean_local_search`, …) for readability — those are the **same tools**, never standalone shell binaries.
+
+- **Always invoke them through your tool-call interface**, the same way you call `Read` or `Grep`.
+- **Never** call `Bash` with `lean_goal …` / `lean_diagnostic_messages …` — there is no such shell command and it will fail with `command not found`.
+- As your **first LSP action**, call `mcp__archon-lean-lsp__lean_diagnostic_messages` on your assigned file. If it returns `success: false` the server is cold; retry once or run `lake build` once via Bash, then retry.
+
 ## Search Protocol
 
 Follow the search tool priority and query guidance in the lean4 skill reference (`references/lean-lsp-tools-api.md`). Key points:

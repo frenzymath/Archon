@@ -33,6 +33,14 @@ What you should do instead:
 - Record any renames or signature-compatible adjustments you made, so the review agent can keep `\lean{...}` macros accurate.
 - If you notice a stale marker in the blueprint (e.g. `\leanok` on a theorem whose Lean name has drifted), flag it in your task result — the review agent will fix it, not you.
 
+## LSP MCP Tools: Invocation Rules
+
+The `archon-lean-lsp` server exposes Lean LSP operations as **MCP tool calls**, not shell commands. Their full names start with `mcp__archon-lean-lsp__` (e.g. `mcp__archon-lean-lsp__lean_diagnostic_messages`). The lean4 skill reference uses the short names (`lean_goal`, `lean_local_search`, …) for readability — those are the **same tools**, never standalone shell binaries.
+
+- **Always invoke them through your tool-call interface.**
+- **Never** call `Bash` with `lean_goal …` / `lean_diagnostic_messages …` — there is no such shell command and it will fail with `command not found`.
+- As your **first LSP action**, call `mcp__archon-lean-lsp__lean_diagnostic_messages` on your assigned file. If it returns `success: false` the server is cold; retry once or run `lake build` via Bash, then retry.
+
 ## Constraints
 
 - Do NOT introduce new `sorry` or axioms

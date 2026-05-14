@@ -31,6 +31,14 @@ Do not edit `blueprint/src/chapters/<your_slug>.tex`. The review agent is respon
 
 Your only interaction with the blueprint is to **Read** the chapter to understand what you are formalizing.
 
+## LSP MCP Tools: Invocation Rules
+
+The `archon-lean-lsp` server exposes Lean LSP operations as **MCP tool calls**, not shell commands. Their full names start with `mcp__archon-lean-lsp__` (e.g. `mcp__archon-lean-lsp__lean_diagnostic_messages`). The lean4 skill reference uses the short names (`lean_goal`, `lean_local_search`, …) for readability — those are the **same tools**, never standalone shell binaries.
+
+- **Always invoke them through your tool-call interface.**
+- **Never** call `Bash` with `lean_goal …` / `lean_diagnostic_messages …` — there is no such shell command and it will fail with `command not found`.
+- As your **first LSP action**, call `mcp__archon-lean-lsp__lean_diagnostic_messages` on your assigned file. If it returns `success: false` the server is cold; retry once or run `lake build` via Bash, then retry.
+
 ## Naming and Mathlib
 
 - Prefer using existing Mathlib lemmas/definitions
