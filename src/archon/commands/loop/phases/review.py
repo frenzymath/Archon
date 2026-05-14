@@ -113,10 +113,7 @@ class ReviewPhase(Phase):
         review_log = ctx.iter_dir / "review"
         resume_sid = pick_resume_session(
             ctx.iter_meta, "review.sessionId",
-            enabled=(
-                ctx.iter_index == 0
-                and ctx.options.resume_phase == self.skip_token
-            ),
+            enabled=(ctx.resume_phase == self.skip_token),
             label="review",
         )
         ClaudeAgent(model=ctx.model, role="review").run(

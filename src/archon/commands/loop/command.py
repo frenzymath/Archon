@@ -328,6 +328,12 @@ class LoopCommand:
         if opts.parallel:
             (ctx.iter_dir / "provers").mkdir(exist_ok=True)
 
+        # Resolve --resume's target phase from the prior meta.json
+        # BEFORE the plan.status="running" write below clobbers prior
+        # status fields. Adjusts ctx.skip_now so phases before the
+        # resumed one get marked "skipped" as usual.
+        self._resolve_resume_target(i)
+
         # Don't clobber the existing meta.json on a resume — only write
         # the bootstrap fields if the file didn't already exist (or is
         # empty).
@@ -343,6 +349,41 @@ class LoopCommand:
             "plan.status": "running" if "plan" not in ctx.skip_now else "skipped",
         })
         log.step(f"Log dir: {ctx.iter_dir}")
+
+    def _resolve_resume_target(self, i: int) -> None:
+        """Pick the phase whose session should be resumed and adjust
+        ``ctx.skip_now`` so earlier phases are marked skipped.
+
+        Runs on iter 0 only. Three cases:
+          * ``--from <phase> --resume``: target is ``opts.from_phase``.
+          * ``--resume`` alone: target is detected from prior meta.json
+            by :func:`detect_last_interrupted_phase`; falls back to
+            ``"plan"`` when every phase is already ``"done"`` (the
+            iteration finished cleanly and the user re-issued --resume).
+          * ``--from <phase>`` without ``--resume``: no resume; this is
+            the legacy fresh-restart-at-phase behavior, unchanged.
+        """
+        ctx = self.ctx
+        opts = self.options
+        if i != 0 or not opts.resume:
+            return
+
+        if opts.from_phase is not None:
+            target = opts.from_phase
+        else:
+            from .resume import detect_last_interrupted_phase
+            target = detect_last_interrupted_phase(ctx.iter_meta)
+            if target is None:
+                log.info(
+                    "--resume: prior iter has every phase marked 'done'; "
+                    "nothing to continue, running plan fresh."
+                )
+                target = "plan"
+            else:
+                log.info(f"--resume: auto-detected interrupted phase = {target}")
+
+        ctx.resolved_resume_phase = target
+        ctx.skip_now = parse_from_phase(target)
 
     def _post_phases_sorry_count(self) -> None:
         ctx = self.ctx

@@ -133,11 +133,7 @@ class ProverPhase(Phase):
             })
 
     def _resume_enabled(self) -> bool:
-        ctx = self.ctx
-        return (
-            ctx.iter_index == 0
-            and ctx.options.resume_phase == self.skip_token
-        )
+        return self.ctx.resume_phase == self.skip_token
 
     def _run_parallel(self) -> None:
         ctx = self.ctx

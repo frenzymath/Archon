@@ -97,14 +97,17 @@ def loop(
     ),
     resume: bool = typer.Option(
         False, "--resume",
-        help="Resume the previous iteration's Claude session for the phase "
-             "selected by --from (defaults to plan when --from is omitted). "
-             "Reuses the prior iter-NNN dir, looks up the stored session id "
-             "from meta.json, and invokes claude with --resume <id> plus a "
-             "short 'continue from where you left off' prompt instead of "
-             "re-priming with the full phase prompt. Falls back to a fresh "
-             "run when no session id is stored. Only affects the FIRST "
-             "iteration; subsequent iterations run plan/prover/review fresh.",
+        help="Resume the previous iteration's Claude session. Without "
+             "--from, auto-detects which phase to resume by scanning the "
+             "prior iter's meta.json for the first plan/prover/review whose "
+             "status isn't 'done' (i.e. the one that crashed). With "
+             "--from <phase>, resumes that specific phase. Reuses the prior "
+             "iter-NNN dir, looks up the stored session id, and invokes "
+             "claude with --resume <id> plus a short 'continue from where "
+             "you left off' prompt instead of re-priming with the full "
+             "phase prompt. Falls back to a fresh run when no session id is "
+             "stored. Only affects the FIRST iteration; subsequent "
+             "iterations run plan/prover/review fresh.",
     ),
     debug_feedback: Optional[bool] = typer.Option(
         None, "--debug-feedback/--no-debug-feedback",
@@ -161,13 +164,10 @@ def loop(
     multilane_lanes = multilane_cfg.get('lanes') or []
     multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
 
-    # --resume without an explicit --from targets the plan phase. Keeps
-    # the common case ("the loop crashed; just continue") to a single
-    # flag while letting --from <phase> --resume select a later phase.
-    effective_from_phase = from_phase
-    if resume and effective_from_phase is None:
-        effective_from_phase = "plan"
-
+    # --resume without an explicit --from auto-detects which phase to
+    # resume by inspecting the prior iter's meta.json — done inside
+    # LoopCommand once the iter dir is known. Leave from_phase=None
+    # here so the resolved target stays a context concern.
     options = LoopOptions(
         project_path=resolved,
         max_iterations=max_iterations,
@@ -185,8 +185,8 @@ def loop(
         open_browser=open_browser,
         model=model,
         force_stage=stage.value if stage else None,
-        skip_first_iter=parse_from_phase(effective_from_phase),
-        from_phase=effective_from_phase,
+        skip_first_iter=parse_from_phase(from_phase),
+        from_phase=from_phase,
         multilane_execute=multilane_execute,
         multilane_preview=False,  # legacy; kept False so existing dispatch falls through
         multilane_cfg=multilane_cfg,

@@ -62,17 +62,6 @@ class LoopOptions:
     def has_finalize(self) -> bool:
         return self.do_git or self.do_lake or self.do_bp_web
 
-    @property
-    def resume_phase(self) -> str | None:
-        """Phase whose stored session id should be resumed on iter 0.
-
-        Returns ``from_phase`` when ``--resume`` is on (entry.py defaults
-        from_phase to ``"plan"`` for ``--resume`` without ``--from``), or
-        ``None`` when resume is off. Phases compare this against their
-        own ``skip_token`` to decide whether to pass ``--resume <id>``.
-        """
-        return self.from_phase if self.resume else None
-
 
 @dataclass
 class LoopContext:
@@ -97,6 +86,12 @@ class LoopContext:
     iter_meta: Path | None = None
     current_stage: str = ""
     skip_now: set[str] = field(default_factory=set)
+    # Resolved AFTER iter-dir reuse: either copied from
+    # options.from_phase (when --from was passed) or auto-detected from
+    # the prior iter's meta.json (when --resume was passed without
+    # --from). Stays None on iters >= 1. Phases consult
+    # :pyattr:`resume_phase` rather than reading this directly.
+    resolved_resume_phase: str | None = None
 
     dashboard_url: str | None = None
     blueprint_url: str | None = None
@@ -120,3 +115,21 @@ class LoopContext:
 
     def force_stage(self) -> str | None:
         return self.options.force_stage
+
+    @property
+    def resume_phase(self) -> str | None:
+        """Phase whose stored session id should be resumed this iter.
+
+        Returns ``None`` when ``--resume`` is off or when the current
+        iteration isn't iter 0. Otherwise returns the resolved target —
+        either the explicit ``--from <phase>`` value or the phase
+        auto-detected from the prior iter's meta.json by
+        :func:`commands.loop.resume.detect_last_interrupted_phase`.
+        Phases compare this against their own ``skip_token`` to decide
+        whether to pass ``--resume <id>``.
+        """
+        if not self.options.resume:
+            return None
+        if self.iter_index != 0:
+            return None
+        return self.resolved_resume_phase

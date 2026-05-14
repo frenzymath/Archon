@@ -6,6 +6,11 @@ priming prompt with a short continuation. After the agent returns, the
 phase calls :func:`persist_session_id` to record the new (or continued)
 session id in ``meta.json`` so a future ``--resume`` can find it.
 
+When ``--resume`` is passed without ``--from``,
+:func:`detect_last_interrupted_phase` picks the target by inspecting
+the prior iter's ``meta.json`` — the first of plan / prover / review
+whose status isn't ``"done"`` is the one that crashed.
+
 The continuation prompts deliberately stay short: Claude Code's
 ``--resume`` replays the prior conversation into the model's context,
 so re-priming with the full plan/prover/review prompt would just
@@ -15,10 +20,14 @@ state files that may have changed since the crash.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from archon import log
 from archon.state import extract_session_id, read_meta, write_meta
+
+
+_PHASE_ORDER = ("plan", "prover", "review")
 
 
 PLAN_CONTINUE = (
@@ -54,7 +63,8 @@ def pick_resume_session(
     """Return the stored session id for this phase, or None.
 
     ``enabled`` is the gate the caller computes (typically
-    ``ctx.iter_index == 0 and ctx.options.resume_phase == self.skip_token``).
+    ``ctx.resume_phase == self.skip_token``; ``ctx.resume_phase`` is
+    None on iter >= 1, so the gate naturally falls open for those).
     When disabled the function short-circuits to None so the caller does
     a fresh run. When enabled but no id is stored, logs a warning and
     falls back to fresh — matching the user's request that --resume
@@ -88,3 +98,34 @@ def persist_session_id(
     sid = extract_session_id(jsonl_path)
     if sid:
         write_meta(iter_meta, **{meta_key: sid})
+
+
+def detect_last_interrupted_phase(iter_meta: Path | None) -> str | None:
+    """Pick the phase to resume by inspecting the prior iter's meta.json.
+
+    Walks plan → prover → review and returns the first phase whose
+    ``<phase>.status`` is not ``"done"`` — that's the one that crashed
+    or was interrupted. Returns ``None`` when every phase is marked
+    ``"done"`` (the iteration completed cleanly; the caller should
+    decide whether to redo from the start or skip the iteration).
+
+    Falls back to ``"plan"`` when the meta.json is missing or unreadable
+    — typical for a brand-new project where ``--resume`` was passed
+    speculatively; running plan fresh is the safe default.
+    """
+    if iter_meta is None or not iter_meta.exists():
+        return "plan"
+    try:
+        data = json.loads(iter_meta.read_text())
+    except Exception:
+        return "plan"
+    if not isinstance(data, dict):
+        return "plan"
+    for phase in _PHASE_ORDER:
+        section = data.get(phase)
+        if not isinstance(section, dict):
+            # No status block yet → this phase never started → resume here.
+            return phase
+        if section.get("status") != "done":
+            return phase
+    return None
