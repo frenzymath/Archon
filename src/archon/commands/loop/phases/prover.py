@@ -62,6 +62,15 @@ class ProverPhase(Phase):
         if ctx.options.multilane_preview:
             self._run_multilane_preview()
         elif ctx.options.multilane_execute:
+            # Multilane has its own lane-round executor with bespoke
+            # state; piping --resume through it is a larger change and
+            # not in scope here. Surface the gap so the user isn't
+            # silently surprised by a fresh run.
+            if self._resume_enabled():
+                log.warn(
+                    "--resume is not yet supported in multilane mode; "
+                    "running prover fresh."
+                )
             self._run_multilane_execute()
         elif ctx.options.parallel:
             self._run_parallel()
@@ -123,6 +132,13 @@ class ProverPhase(Phase):
                 "prover.promotionCommit": execution_info.get("promotion_commit"),
             })
 
+    def _resume_enabled(self) -> bool:
+        ctx = self.ctx
+        return (
+            ctx.iter_index == 0
+            and ctx.options.resume_phase == self.skip_token
+        )
+
     def _run_parallel(self) -> None:
         ctx = self.ctx
         runner = ParallelProverRunner(
@@ -139,6 +155,7 @@ class ProverPhase(Phase):
             dashboard_url=ctx.dashboard_url,
             blueprint_url=ctx.blueprint_url,
             debug_feedback=ctx.options.debug_feedback,
+            resume_enabled=self._resume_enabled(),
         )
         runner.run(dry_run=ctx.dry_run)
 
@@ -154,5 +171,7 @@ class ProverPhase(Phase):
             verbose_logs=ctx.verbose_logs,
             model=ctx.model,
             debug_feedback=ctx.options.debug_feedback,
+            iter_meta=ctx.iter_meta,
+            resume_enabled=self._resume_enabled(),
         )
         runner.run(dry_run=ctx.dry_run, progress_file=ctx.progress_file)

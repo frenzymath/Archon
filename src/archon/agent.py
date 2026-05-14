@@ -328,6 +328,7 @@ class ClaudeAgent:
         cancel_event: 'threading.Event | None' = None,
         idle_timeout_s: float | None = 900,
         max_attempts: int = 3,
+        resume_session_id: str | None = None,
     ) -> bool:
         """Headless ``claude -p`` run.
 
@@ -362,9 +363,20 @@ class ClaudeAgent:
 
         ``max_attempts`` caps the retry count. Default 1 preserves
         legacy behaviour — no auto-restart unless the caller opts in.
+
+        ``resume_session_id`` enables Claude Code's session-resume mode.
+        When set, ``--resume <id>`` is prepended to the command so claude
+        continues the prior conversation instead of starting fresh; the
+        ``prompt`` then acts as the next user turn (callers typically
+        send a short "continue from where you left off" message). The
+        caller is responsible for sourcing the id (e.g. from a prior
+        iter's meta.json via ``state.read_meta``).
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
-        cmd = ["claude", "-p", prompt, *self._build_flags(real_model)]
+        cmd = ["claude"]
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
+        cmd.extend(["-p", prompt, *self._build_flags(real_model)])
         if extra_args:
             cmd.extend(extra_args)
 

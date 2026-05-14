@@ -37,12 +37,14 @@ class LoopOptions:
     model: str
     force_stage: str | None
     skip_first_iter: set[str]
+    from_phase: str | None
 
     multilane_execute: bool
     multilane_preview: bool
     multilane_cfg: dict[str, Any]
 
     debug_feedback: bool = False
+    resume: bool = False
 
     @property
     def do_git(self) -> bool:
@@ -59,6 +61,17 @@ class LoopOptions:
     @property
     def has_finalize(self) -> bool:
         return self.do_git or self.do_lake or self.do_bp_web
+
+    @property
+    def resume_phase(self) -> str | None:
+        """Phase whose stored session id should be resumed on iter 0.
+
+        Returns ``from_phase`` when ``--resume`` is on (entry.py defaults
+        from_phase to ``"plan"`` for ``--resume`` without ``--from``), or
+        ``None`` when resume is off. Phases compare this against their
+        own ``skip_token`` to decide whether to pass ``--resume <id>``.
+        """
+        return self.from_phase if self.resume else None
 
 
 @dataclass

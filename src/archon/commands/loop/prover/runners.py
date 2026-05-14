@@ -27,6 +27,7 @@ from archon.state import (
     write_meta,
 )
 
+from ..resume import PROVER_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import file_slug, relpath
 from .environment import ProverEnvironment, snapshot_baseline
 
@@ -39,6 +40,7 @@ def _run_single_prover(
     model: str,
     snap_dir: Path | None = None,
     project_path: Path | None = None,
+    resume_session_id: str | None = None,
 ) -> bool:
     """Top-level for `ProcessPoolExecutor` — must be importable by the worker."""
     if snap_dir is not None and project_path is not None:
@@ -49,9 +51,11 @@ def _run_single_prover(
         ):
             return ClaudeAgent(model=model, role="prover").run(
                 prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
+                resume_session_id=resume_session_id,
             )
     return ClaudeAgent(model=model, role="prover").run(
         prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
+        resume_session_id=resume_session_id,
     )
 
 
@@ -75,6 +79,8 @@ class SerialProverRunner:
         verbose_logs: bool,
         model: str,
         debug_feedback: bool = False,
+        iter_meta: Path | None = None,
+        resume_enabled: bool = False,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -85,6 +91,8 @@ class SerialProverRunner:
         self.verbose_logs = verbose_logs
         self.model = model
         self.debug_feedback = debug_feedback
+        self.iter_meta = iter_meta
+        self.resume_enabled = resume_enabled
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
         prompt = build_prover_prompt(
@@ -104,6 +112,10 @@ class SerialProverRunner:
             sslug = file_slug(srel)
             snapshot_baseline(sf, self.iter_dir / "snapshots" / sslug)
 
+        resume_sid = pick_resume_session(
+            self.iter_meta, "prover.sessionId",
+            enabled=self.resume_enabled, label="prover",
+        )
         with ProverEnvironment(
             snap_dir=self.iter_dir / "snapshots",
             prover_jsonl=Path(str(prover_log) + ".jsonl"),
@@ -111,9 +123,15 @@ class SerialProverRunner:
             serial_mode=True,
         ):
             ClaudeAgent(model=self.model, role="prover").run(
-                prompt, cwd=self.project_path,
+                PROVER_CONTINUE if resume_sid else prompt,
+                cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
+                resume_session_id=resume_sid,
             )
+        persist_session_id(
+            self.iter_meta, Path(str(prover_log) + ".jsonl"),
+            "prover.sessionId",
+        )
 
 
 class ParallelProverRunner:
@@ -139,6 +157,7 @@ class ParallelProverRunner:
         dashboard_url: str | None = None,
         blueprint_url: str | None = None,
         debug_feedback: bool = False,
+        resume_enabled: bool = False,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -153,6 +172,7 @@ class ParallelProverRunner:
         self.dashboard_url = dashboard_url
         self.blueprint_url = blueprint_url
         self.debug_feedback = debug_feedback
+        self.resume_enabled = resume_enabled
 
     def run(self, *, dry_run: bool) -> None:
         progress = self.state_dir / "PROGRESS.md"
@@ -199,16 +219,26 @@ class ParallelProverRunner:
             debug_feedback=self.debug_feedback,
         )
         prompt = f"{base_prompt}\nYour assigned file: {rel}"
+        resume_sid = pick_resume_session(
+            self.iter_meta, f"provers.{slug}.sessionId",
+            enabled=self.resume_enabled, label=f"prover[{slug}]",
+        )
         with ProverEnvironment(
             snap_dir=snap_dir,
             prover_jsonl=Path(str(prover_log) + ".jsonl"),
             project_path=self.project_path,
         ):
             ok = ClaudeAgent(model=self.model, role="prover").run(
-                prompt, cwd=self.project_path,
+                PROVER_CONTINUE if resume_sid else prompt,
+                cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
+                resume_session_id=resume_sid,
             )
 
+        persist_session_id(
+            self.iter_meta, Path(str(prover_log) + ".jsonl"),
+            f"provers.{slug}.sessionId",
+        )
         write_meta(
             self.iter_meta,
             **{f"provers.{slug}.status": "done" if ok else "error"},
@@ -231,6 +261,7 @@ class ParallelProverRunner:
         log.step(f"watch -n10 'ls -lt {self.state_dir}/task_results/'")
 
         futures = {}
+        prover_logs: dict[str, Path] = {}
         with ProcessPoolExecutor(
             max_workers=min(self.max_parallel, file_count),
         ) as pool:
@@ -238,6 +269,7 @@ class ParallelProverRunner:
                 rel = relpath(f, self.project_path)
                 slug = file_slug(rel)
                 prover_log = self.iter_dir / "provers" / slug
+                prover_logs[slug] = prover_log
 
                 base_prompt = build_parallel_prover_prompt(
                     self.project_name, self.project_path, self.state_dir, self.stage,
@@ -250,6 +282,19 @@ class ParallelProverRunner:
                 snap_dir = self.iter_dir / "snapshots" / slug
                 snapshot_baseline(f, snap_dir)
 
+                # Per-slug resume: each parallel prover keeps its own
+                # session id under provers.<slug>.sessionId. Files added
+                # in this round that weren't part of the prior run have
+                # no stored id; pick_resume_session degrades to fresh.
+                resume_sid = pick_resume_session(
+                    self.iter_meta, f"provers.{slug}.sessionId",
+                    enabled=self.resume_enabled, label=f"prover[{slug}]",
+                )
+                if resume_sid:
+                    submit_prompt = PROVER_CONTINUE
+                else:
+                    submit_prompt = prompt
+
                 log.step(f"Starting prover for {rel}")
                 write_meta(self.iter_meta, **{
                     f"provers.{slug}.file": rel,
@@ -258,8 +303,9 @@ class ParallelProverRunner:
 
                 future = pool.submit(
                     _run_single_prover,
-                    prompt, self.project_path, prover_log, self.verbose_logs, self.model,
-                    snap_dir, self.project_path,
+                    submit_prompt, self.project_path, prover_log,
+                    self.verbose_logs, self.model,
+                    snap_dir, self.project_path, resume_sid,
                 )
                 futures[future] = (rel, slug)
 
@@ -270,6 +316,15 @@ class ParallelProverRunner:
                     ok = future.result()
                 except Exception:
                     ok = False
+                # Stamp the session id from the prover's JSONL — works
+                # whether this was a fresh run or a --resume continuation
+                # (Claude reports the same session id back on resume, so
+                # the next --resume keeps targeting the same conversation).
+                persist_session_id(
+                    self.iter_meta,
+                    Path(str(prover_logs[slug]) + ".jsonl"),
+                    f"provers.{slug}.sessionId",
+                )
                 status = "done" if ok else "error"
                 write_meta(self.iter_meta, **{f"provers.{slug}.status": status})
                 if ok:

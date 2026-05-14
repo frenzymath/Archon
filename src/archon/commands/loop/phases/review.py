@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from archon import log
 from archon.agent import ClaudeAgent
@@ -12,6 +13,7 @@ from archon.commands.tooling.iteration import commit_phase
 from archon.prompts import build_review_prompt
 from archon.state import write_meta
 
+from ..resume import REVIEW_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import data_path
 from .base import Phase, PhaseResult
 
@@ -109,9 +111,23 @@ class ReviewPhase(Phase):
             debug_feedback=ctx.options.debug_feedback,
         )
         review_log = ctx.iter_dir / "review"
+        resume_sid = pick_resume_session(
+            ctx.iter_meta, "review.sessionId",
+            enabled=(
+                ctx.iter_index == 0
+                and ctx.options.resume_phase == self.skip_token
+            ),
+            label="review",
+        )
         ClaudeAgent(model=ctx.model, role="review").run(
-            prompt, cwd=ctx.project_path,
+            REVIEW_CONTINUE if resume_sid else prompt,
+            cwd=ctx.project_path,
             log_base=review_log, verbose_logs=ctx.verbose_logs,
+            resume_session_id=resume_sid,
+        )
+        persist_session_id(
+            ctx.iter_meta, Path(str(review_log) + ".jsonl"),
+            "review.sessionId",
         )
 
         validate_script = data_path("scripts/validate-review.py")

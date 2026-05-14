@@ -295,6 +295,54 @@ def write_meta(meta_file: Path, **kwargs: object) -> None:
     meta_file.write_text(json.dumps(data, indent=2))
 
 
+def read_meta(meta_file: Path, key: str) -> object | None:
+    """Look up a dotted key in an iteration meta.json. Returns None if
+    the file is missing, unreadable, or the key path doesn't resolve to
+    a value. Used by --resume to fetch stored session ids.
+    """
+    if not meta_file.exists():
+        return None
+    try:
+        data: object = json.loads(meta_file.read_text())
+    except Exception:
+        return None
+    for part in key.split("."):
+        if not isinstance(data, dict):
+            return None
+        if part not in data:
+            return None
+        data = data[part]
+    return data
+
+
+def extract_session_id(jsonl_path: Path) -> str | None:
+    """Return the most recent ``session_end.session_id`` in a phase JSONL.
+
+    Walks the file from the end so a phase that crashed-and-restarted
+    (two session_end events) yields the latest session — that's the one
+    the next ``--resume`` invocation should continue.
+    """
+    if not jsonl_path.exists():
+        return None
+    try:
+        text = jsonl_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("event") == "session_end":
+            sid = obj.get("session_id") or ""
+            if sid:
+                return sid
+    return None
+
+
 def archive_task_results(state_dir: Path, dest_dir: Path) -> None:
     """Move existing task_results/*.md to an archive directory.
 

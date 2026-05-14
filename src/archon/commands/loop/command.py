@@ -284,12 +284,23 @@ class LoopCommand:
         if opts.dry_run:
             return
 
-        # When --from <phase> is used on the FIRST iteration, the user
-        # wants to RESUME the previous run, not start fresh. Reuse the
-        # most recent iter-NNN dir so logs / snapshots / phase-stamped
-        # meta entries land alongside whatever the earlier run produced.
-        # Subsequent iterations always create new dirs as usual.
-        reuse_last = i == 0 and bool(ctx.skip_now) and ctx.log_dir.exists()
+        # When --from <phase> or --resume is used on the FIRST iteration
+        # the user wants to RESUME the previous run, not start fresh.
+        # Reuse the most recent iter-NNN dir so logs / snapshots / phase-
+        # stamped meta entries land alongside whatever the earlier run
+        # produced. Subsequent iterations always create new dirs as
+        # usual. ``skip_now`` is empty for ``--from plan`` (nothing to
+        # skip), so the trigger here is ``opts.from_phase`` / opts.resume
+        # — both indicate user intent to retry-in-place.
+        reuse_last = (
+            i == 0
+            and (
+                bool(ctx.skip_now)
+                or opts.from_phase is not None
+                or opts.resume
+            )
+            and ctx.log_dir.exists()
+        )
         last_iter = None
         if reuse_last:
             existing = sorted(
@@ -303,9 +314,10 @@ class LoopCommand:
         if last_iter is not None:
             ctx.iter_num = last_iter
             ctx.iter_dir = ctx.log_dir / f"iter-{ctx.iter_num:03d}"
+            trigger = "--resume" if opts.resume else "--from"
             log.info(
-                f"--from: resuming iter-{ctx.iter_num:03d} "
-                f"(use existing log dir, no new iteration created)"
+                f"{trigger}: reusing iter-{ctx.iter_num:03d} "
+                f"(existing log dir, no new iteration created)"
             )
         else:
             ctx.iter_num = next_iter_num(ctx.log_dir)

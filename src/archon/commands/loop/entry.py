@@ -90,7 +90,21 @@ def loop(
              "after stopping mid-iteration. Choices: plan, prover, "
              "review. E.g. '--from prover' keeps the existing PROGRESS.md, "
              "skips plan, and starts the first iteration at the prover phase. "
-             "Subsequent iterations run the full sequence as usual.",
+             "Subsequent iterations run the full sequence as usual. "
+             "'--from plan' reuses the previous iter-NNN log dir instead of "
+             "bumping to a new iteration number — useful for retrying a "
+             "crashed iteration in place.",
+    ),
+    resume: bool = typer.Option(
+        False, "--resume",
+        help="Resume the previous iteration's Claude session for the phase "
+             "selected by --from (defaults to plan when --from is omitted). "
+             "Reuses the prior iter-NNN dir, looks up the stored session id "
+             "from meta.json, and invokes claude with --resume <id> plus a "
+             "short 'continue from where you left off' prompt instead of "
+             "re-priming with the full phase prompt. Falls back to a fresh "
+             "run when no session id is stored. Only affects the FIRST "
+             "iteration; subsequent iterations run plan/prover/review fresh.",
     ),
     debug_feedback: Optional[bool] = typer.Option(
         None, "--debug-feedback/--no-debug-feedback",
@@ -147,6 +161,13 @@ def loop(
     multilane_lanes = multilane_cfg.get('lanes') or []
     multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
 
+    # --resume without an explicit --from targets the plan phase. Keeps
+    # the common case ("the loop crashed; just continue") to a single
+    # flag while letting --from <phase> --resume select a later phase.
+    effective_from_phase = from_phase
+    if resume and effective_from_phase is None:
+        effective_from_phase = "plan"
+
     options = LoopOptions(
         project_path=resolved,
         max_iterations=max_iterations,
@@ -164,11 +185,13 @@ def loop(
         open_browser=open_browser,
         model=model,
         force_stage=stage.value if stage else None,
-        skip_first_iter=parse_from_phase(from_phase),
+        skip_first_iter=parse_from_phase(effective_from_phase),
+        from_phase=effective_from_phase,
         multilane_execute=multilane_execute,
         multilane_preview=False,  # legacy; kept False so existing dispatch falls through
         multilane_cfg=multilane_cfg,
         debug_feedback=debug_feedback,
+        resume=resume,
     )
 
     LoopCommand(options).run()

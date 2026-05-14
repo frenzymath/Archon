@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from archon import log
 from archon.agent import ClaudeAgent
@@ -10,6 +11,7 @@ from archon.commands.tooling.iteration import commit_phase
 from archon.prompts import build_plan_prompt
 from archon.state import is_complete, read_stage, write_meta
 
+from ..resume import PLAN_CONTINUE, persist_session_id, pick_resume_session
 from .base import Phase, PhaseResult
 
 
@@ -41,10 +43,24 @@ class PlanPhase(Phase):
             print(plan_prompt)
         else:
             plan_log = ctx.iter_dir / "plan"
+            resume_sid = pick_resume_session(
+                ctx.iter_meta, "plan.sessionId",
+                enabled=(
+                    ctx.iter_index == 0
+                    and ctx.options.resume_phase == self.skip_token
+                ),
+                label="plan",
+            )
             ClaudeAgent(model=ctx.model, role="plan").run(
-                plan_prompt, cwd=ctx.project_path,
+                PLAN_CONTINUE if resume_sid else plan_prompt,
+                cwd=ctx.project_path,
                 log_base=plan_log, verbose_logs=ctx.verbose_logs,
                 env_overrides={"ARCHON_ITER_NUM": f"{ctx.iter_num:03d}"},
+                resume_session_id=resume_sid,
+            )
+            persist_session_id(
+                ctx.iter_meta, Path(str(plan_log) + ".jsonl"),
+                "plan.sessionId",
             )
 
         plan_secs = int(time.monotonic() - plan_start)
