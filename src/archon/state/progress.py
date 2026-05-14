@@ -65,27 +65,36 @@ def _has_stop_marker(line: str) -> bool:
     return any(marker in low for marker in _STOP_MARKERS)
 
 def write_stage(progress_file: Path, new_stage: str) -> None:
-    """Reconstruct the Current Stage section to ensure exact \n \n {stage} \n \n spacing."""
+    """Reconstruct the Current Stage section with `\\n\\n{stage}\\n\\n` spacing.
+
+    Raises ValueError if the `## Current Stage` ... `## Stages` section cannot
+    be located, so a corrupted PROGRESS.md surfaces loudly instead of silently
+    leaving the stage unchanged.
+    """
     if not progress_file.exists():
         return
 
     content = progress_file.read_text()
     pattern = r"## Current Stage.*?(?=## Stages)"
     replacement = f"## Current Stage\n\n{new_stage}\n\n"
-    
-    new_content = re.sub(
-        pattern, 
-        replacement, 
-        content, 
-        count=1, 
-        flags=re.DOTALL
+
+    new_content, n = re.subn(
+        pattern,
+        replacement,
+        content,
+        count=1,
+        flags=re.DOTALL,
     )
+
+    if n == 0:
+        raise ValueError(
+            f"Could not locate '## Current Stage' ... '## Stages' section in "
+            f"{progress_file}; stage not updated."
+        )
 
     if new_content != content:
         progress_file.write_text(new_content)
-        log.info(f"Updated PROGRESS.md stage to: {new_stage}")
-    else:
-        log.error("Failed to find '## Current Stage' or '## Stages' headers in PROGRESS.md. Stage not updated.")
+    log.info(f"PROGRESS.md stage set to: {new_stage}")
 
 def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
     """Read the current stage from PROGRESS.md using regex."""

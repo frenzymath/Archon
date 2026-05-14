@@ -65,10 +65,16 @@ class LoopCommand:
         ctx.initial_sorry = count_sorries(ctx.project_path) if not ctx.dry_run else None
 
         if is_complete(ctx.progress_file, ctx.force_stage()):
-            if ctx.initial_sorry > 0:
-                log.warn(f"Project is marked COMPLETE, but {ctx.initial_sorry} sorries were found.")
-                write_stage(ctx.progress_file, "prover")  
-                log.warn(f"The stage has been reset to 'prover' to address the sorries. The loop will run one iteration to attempt to resolve them.")
+            if ctx.initial_sorry is not None and ctx.initial_sorry > 0:
+                log.warn(
+                    f"Project is marked COMPLETE, but {ctx.initial_sorry} "
+                    f"sorries were found."
+                )
+                write_stage(ctx.progress_file, "prover")
+                log.warn(
+                    "Stage reset to 'prover' to address the sorries; the loop "
+                    "will run to attempt to resolve them."
+                )
             else:
                 log.success(f"Project '{ctx.project_name}' is COMPLETE. Nothing to do.")
                 if ctx.dashboard_url:
