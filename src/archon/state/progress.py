@@ -60,6 +60,28 @@ _STOP_MARKERS = (
 )
 
 
+# Headings the plan agent has been observed to use *instead of* the
+# canonical "## Current Objectives" — the prover dispatcher's parser
+# looks for that exact heading, so a drift here silently empties prover
+# dispatch. ``auto_fix_objectives`` renames the first of these that
+# happens to contain parseable .lean entries back to the canonical name.
+#
+# Order matters: more-specific headings first, ambiguous ones (like
+# "## Strategy", which is a legitimate non-objectives section in many
+# projects) last so they only win when nothing better is available.
+_FALLBACK_OBJECTIVES_HEADINGS = (
+    "## Objectives",
+    "## Next Objectives",
+    "## Plan Objectives",
+    "## Current objectives",
+    "## current objectives",
+    "## CURRENT OBJECTIVES",
+    "## Strategy",
+    "## Targets",
+    "## Plan",
+)
+
+
 def _has_stop_marker(line: str) -> bool:
     low = line.lower()
     return any(marker in low for marker in _STOP_MARKERS)
@@ -136,6 +158,68 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
         candidates = _extract_list_candidates(section_lines)
 
     return _resolve_candidate_paths(project_path, candidates)
+
+
+def auto_fix_objectives(
+    progress_file: Path, project_path: Path,
+) -> tuple[list[Path], list[str]]:
+    """Parse objectives; on miss, try deterministic rewrites and re-parse.
+
+    Returns ``(objectives, fixes_applied)``. ``fixes_applied`` is a list
+    of short human-readable strings describing what was rewritten in
+    PROGRESS.md — empty when nothing was changed (either the file
+    already parsed or no fixable mistake was detected).
+
+    Today's rewrite catalogue is small on purpose: the plan agent
+    occasionally writes its objective list under a non-canonical heading
+    (``## Strategy``, ``## Objectives``, lower-case variants, …). When
+    that section contains ``### N. **<file>.lean**`` entries that *would*
+    parse if the heading were right, rename the heading in place. Any
+    case the rewrites can't fix falls through with an empty
+    ``objectives`` list so the caller (``validate_plan_output``) can log
+    a corrective hint for the next plan agent and skip prover dispatch.
+    """
+    objectives = parse_objective_files(progress_file, project_path)
+    if objectives or not progress_file.exists():
+        return objectives, []
+
+    text = progress_file.read_text()
+
+    # If the canonical heading already exists but produced no
+    # objectives, no rename will help — the issue is content, not
+    # heading. Fall through to caller's USER_HINTS feedback path.
+    if "## Current Objectives" in text:
+        return [], []
+
+    for candidate in _FALLBACK_OBJECTIVES_HEADINGS:
+        section = _extract_section(text, candidate)
+        if not section:
+            continue
+        looks_like_objectives = any(
+            _OBJECTIVE_HEADING.search(line)
+            or _OBJECTIVE_BULLET.search(line)
+            or _OBJECTIVE_NUMBERED.search(line)
+            for line in section
+        )
+        if not looks_like_objectives:
+            continue
+
+        # Anchor the rename to a standalone heading line so a code-fence
+        # mention of the same string (e.g. inside a quoted prior plan)
+        # isn't mutated. Match the heading then optional trailing
+        # whitespace, end of line.
+        pattern = re.compile(
+            rf"^{re.escape(candidate)}\s*$",
+            re.MULTILINE,
+        )
+        new_text, n = pattern.subn("## Current Objectives", text, count=1)
+        if n == 0:
+            continue
+        progress_file.write_text(new_text)
+        fixes = [f"renamed '{candidate}' → '## Current Objectives'"]
+        return parse_objective_files(progress_file, project_path), fixes
+
+    return [], []
 
 
 def _extract_section(text: str, heading: str) -> list[str]:

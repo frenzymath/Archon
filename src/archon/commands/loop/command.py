@@ -25,6 +25,7 @@ from archon.state import (
     write_meta,
 )
 
+from . import plan_validate
 from .context import LoopContext, LoopOptions
 from .phases import (
     FinalizePhase,
@@ -236,6 +237,30 @@ class LoopCommand:
         # Phase 1 — Plan
         if PlanPhase(ctx).run().completed:
             return False
+
+        # Phase 1b — Validate the plan's PROGRESS.md output.
+        # Deterministic regex rewrites first (catch heading drift like
+        # ``## Strategy`` → ``## Current Objectives``); if still no
+        # parseable objectives, append a corrective hint to
+        # USER_HINTS.md and skip prover/review for this iteration. This
+        # short-circuits the silent-loop failure where the orchestrator
+        # parser rejects PROGRESS.md, prover dispatches nothing, and
+        # review misdiagnoses the empty round as a mathematical dead
+        # end — burning iterations until the user notices.
+        if not plan_validate.validate_plan_output(ctx):
+            log.warn(
+                f"Iteration {i + 1}: skipping prover/review — plan-validate "
+                f"failed. Next plan agent will see USER_HINTS.md."
+            )
+            iter_secs = int(time.monotonic() - iter_start)
+            if not ctx.dry_run and ctx.iter_meta is not None:
+                write_meta(
+                    ctx.iter_meta,
+                    completedAt=utcnow_iso(),
+                    wallTimeSecs=iter_secs,
+                    status="plan_validate_failed",
+                )
+            return True
 
         # Phase 2 — Prover
         ProverPhase(ctx).run()

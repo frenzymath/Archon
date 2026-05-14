@@ -23,7 +23,13 @@ from .iteration import (
     utcnow_iso,
     write_meta,
 )
-from .progress import is_complete, parse_objective_files, read_stage, write_stage
+from .progress import (
+    auto_fix_objectives,
+    is_complete,
+    parse_objective_files,
+    read_stage,
+    write_stage,
+)
 
 __all__ = [
     "CostData",
@@ -39,6 +45,7 @@ __all__ = [
     "read_meta",
     "utcnow_iso",
     "write_meta",
+    "auto_fix_objectives",
     "is_complete",
     "parse_objective_files",
     "read_stage",
