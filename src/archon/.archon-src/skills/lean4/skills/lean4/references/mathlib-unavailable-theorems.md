@@ -1,5 +1,16 @@
 # Well-known methods and theorems that are hard to implement in Mathlib
 
+> **This file is a hint, not ground truth.** Mathlib evolves; entries below may
+> already be available in your project's Mathlib. Always verify a "not
+> available" claim with `mcp__archon-lean-lsp__lean_local_search` /
+> `lean_leansearch` before using it as a reason to abandon a proof
+> route. The Lean LSP is authoritative; this document is advisory.
+>
+> Last verified against: **Mathlib v4.28.0** (manual review — partial).
+> To refresh against a newer Mathlib, run
+> `python references/_update_against_mathlib.py <path-to-built-lean-project>`
+> from this directory.
+
 The items below are not merely "currently absent from Mathlib". The point is stronger: they are typically poor default choices in autoformalization because invoking them often drags in large missing or immature infrastructure, rather than requiring only a few local lemmas.
 
 For each topic, we first give a short explanation, then list classical "big hammer" dependencies that should generally be avoided as default routes.
