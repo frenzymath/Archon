@@ -10,7 +10,6 @@ to re-read) and a per-call report (``task_results/analogy-<slug>.md``).
 
 from __future__ import annotations
 
-from pathlib import Path
 from textwrap import dedent
 
 from archon.commands.tooling.project_config import load_project_config
@@ -58,9 +57,3 @@ class AnalogySubagent(Subagent):
             """) + debug_feedback_block(
                 debug_feedback, state_dir, f"analogy ({slug})", iter_num,
             )
-
-    def report_path(self, slug: str) -> Path:
-        return (
-            self.project_path / ".archon" / "task_results"
-            / f"analogy-{slug}.md"
-        )

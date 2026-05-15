@@ -23,6 +23,16 @@ from .iteration import (
     utcnow_iso,
     write_meta,
 )
+from .iter_state import (
+    IterSidecarSnapshot,
+    format_recent_iter_sidecars_for_prompt,
+    init_iter_sidecar_dir,
+    iter_sidecar_dir,
+    objectives_sidecar_path,
+    plan_sidecar_path,
+    read_recent_iter_sidecars,
+    review_sidecar_path,
+)
 from .progress import (
     auto_fix_objectives,
     is_complete,
@@ -50,4 +60,12 @@ __all__ = [
     "parse_objective_files",
     "read_stage",
     "write_stage",
+    "IterSidecarSnapshot",
+    "format_recent_iter_sidecars_for_prompt",
+    "init_iter_sidecar_dir",
+    "iter_sidecar_dir",
+    "objectives_sidecar_path",
+    "plan_sidecar_path",
+    "read_recent_iter_sidecars",
+    "review_sidecar_path",
 ]

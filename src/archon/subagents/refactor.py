@@ -7,8 +7,6 @@ report path to ``task_results/refactor-<slug>.md``. The CLI flow uses
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from archon.commands.tooling.project_config import load_project_config
 from archon.prompts import build_refactor_prompt
 
@@ -28,10 +26,4 @@ class RefactorSubagent(Subagent):
             self.project_path.name, self.project_path, state_dir,
             directive, iter_num, slug,
             debug_feedback=debug_feedback,
-        )
-
-    def report_path(self, slug: str) -> Path:
-        return (
-            self.project_path / ".archon" / "task_results"
-            / f"refactor-{slug}.md"
         )

@@ -19,18 +19,11 @@ Replace this comment with the strategy. It should cover:
 
 Big picture, not implementation details. Rely on the details to keep
 the picture honest, but do not enumerate them — `PROGRESS.md` and the
-blueprint hold the specifics. Do not narrate past iterations; the
-Revision log below captures history.
--->
+blueprint hold the specifics. Do NOT narrate past iterations here;
+each iteration's "what changed and why" record lives in
+`iter/iter-NNN/plan.md` (one file per iter, born-bounded).
 
-## Revision log
-
-<!--
-One bullet per iteration where the strategy changed. Format:
-
-- iter NNN — <one-line why it changed>.
-
-Stable iterations add nothing. If the same point reverses three times
-in the log, the strategy is structurally wrong, not tactically wrong —
-flag it in PROGRESS.md so the user notices.
+Edit STRATEGY.md ONLY when the strategy itself changes (route swap,
+decomposition revised, phase added or removed). Stable iterations
+leave it untouched.
 -->

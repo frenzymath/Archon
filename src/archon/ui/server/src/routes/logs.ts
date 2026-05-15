@@ -4,6 +4,11 @@ import path from 'path';
 import type { FastifyInstance } from 'fastify';
 import { parseJsonl, readFileOr } from '../utils.js';
 import { mapIterToPhaseCommits, type InnerCommit, type IterPhaseCommits } from '../utils/innerGit.js';
+import {
+  ROOT_PARENT_SLUG,
+  readDispatchTree,
+  type DispatchNode,
+} from '../utils/dispatchTree.js';
 import type { ProjectPaths } from './project.js';
 
 interface LogFileEntry {
@@ -15,20 +20,38 @@ interface LogFileEntry {
   /** For subagent files (`<role>-<slug>.jsonl|.md`), the bare slug — used
    *  by the dashboard to render `<role> <slug>` distinctly from a phase log. */
   subagentSlug?: string;
+  /** When the subagent was spawned by another subagent (hierarchical
+   *  dispatch from Workstream A), the parent's slug. Absent for
+   *  root-level invocations and phase logs. */
+  parentSlug?: string;
   /** Commit for this specific file's phase (plan/refactor/prover/review). */
   commit?: InnerCommit;
 }
 interface LogGroup { id: string; files: LogFileEntry[]; meta?: Record<string, unknown> }
 
+/** Stat a path, returning null if it doesn't exist or is unreadable.
+ *  Critical for cross-machine project clones, where prover symlinks
+ *  baked on the original host (absolute paths) become dangling — a
+ *  raw `fs.statSync` would throw ENOENT and 500 the whole endpoint. */
+function safeStat(p: string): fs.Stats | null {
+  try { return fs.statSync(p); } catch { return null; }
+}
+
 /** Pattern for autonomous-loop subagent JSONL streams. Matches files
  *  produced by ``archon subagent <role> --slug <slug> ...`` — i.e. the
- *  ``<role>-<slug>.jsonl`` written under ``iter-NNN/``. The plain
- *  ``refactor.jsonl`` (legacy phase log) and ``refactor-cli.jsonl``
- *  (manual ``archon refactor run``) are intentionally NOT matched as
- *  subagents — the legacy phase log has no slug, and the CLI flow uses a
- *  fixed slug we want surfaced as such (still routed via this regex,
- *  but tagged like other subagent runs). */
-const SUBAGENT_JSONL_RE = /^(refactor|analogy|challenger)-(.+)\.jsonl$/;
+ *  ``<role>-<slug>.jsonl`` written under ``iter-NNN/`` (root-level) or
+ *  ``iter-NNN/<parent-slug>/`` (hierarchical, Workstream A). The plain
+ *  ``refactor.jsonl`` (legacy phase log) is intentionally NOT matched
+ *  — the legacy phase log has no slug. ``coordinator`` joined the
+ *  family in Workstream B; the five ``review-<aspect>`` reviewers
+ *  joined in Workstream E. */
+const SUBAGENT_JSONL_RE = /^(refactor|analogy|challenger|coordinator|review-definition-correctness|review-comment-hygiene|review-blueprint-consistency|review-design-choices|review-mathlib-overlap)-(.+)\.jsonl$/;
+
+/** Directories under iter-NNN/ that are NOT subagent-slug subdirectories
+ *  and should be skipped when walking nested subagent JSONLs. ``provers``
+ *  is the parallel-prover sub-tree handled by its own block below; the
+ *  others are bookkeeping. */
+const ITER_RESERVED_SUBDIRS = new Set(['provers', '.slots', '.held', 'snapshots']);
 
 /** Pick the commit that "belongs" to a file, given its role and prover slug. */
 function commitForFile(
@@ -45,12 +68,24 @@ function commitForFile(
   // Subagent reports archived by the plan agent — they live under the
   // plan phase since the plan agent is the one that invoked the subagent.
   if (role === 'analogy-report' || role === 'challenger-report'
-      || role === 'subagent-report') return phaseCommits.plan;
-  // Subagent JSONL streams (refactor/analogy/challenger invocations from
-  // inside the plan agent). Route them to the plan commit — there's no
-  // separate phase commit for an in-loop subagent run.
+      || role === 'coordinator-report' || role === 'subagent-report') return phaseCommits.plan;
+  // Review subagents (Workstream E) typically run from the review
+  // phase, so route their reports + JSONL to the review commit. Fall
+  // back to plan if the review phase didn't commit (e.g. proactive
+  // invocation from plan).
+  if (role.startsWith('review-') && role.endsWith('-report')) {
+    return phaseCommits.review ?? phaseCommits.plan;
+  }
+  if (role.startsWith('subagent-review-')) {
+    return phaseCommits.review ?? phaseCommits.plan;
+  }
+  // Subagent JSONL streams (refactor/analogy/challenger/coordinator
+  // invocations from inside the plan agent). Route them to the plan
+  // commit — there's no separate phase commit for an in-loop subagent
+  // run. Also covers deeper-nested children spawned by a coordinator
+  // (Workstream A hierarchical dispatch).
   if (role === 'subagent-refactor' || role === 'subagent-analogy'
-      || role === 'subagent-challenger') return phaseCommits.plan;
+      || role === 'subagent-challenger' || role === 'subagent-coordinator') return phaseCommits.plan;
   if (role === 'review') return phaseCommits.review;
   if (role === 'finalize') return phaseCommits.finalize;
   if (role === 'prover') {
@@ -101,16 +136,22 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     for (const [iter, ph] of phaseByIter) if (ph.latest) commitByIter.set(iter, ph.latest);
 
     const flat: LogFileEntry[] = fs.readdirSync(logsPath)
-      .filter(f => f.endsWith('.jsonl') && fs.statSync(path.join(logsPath, f)).isFile())
+      .filter(f => f.endsWith('.jsonl'))
       .map(f => {
-        const stat = fs.statSync(path.join(logsPath, f));
+        const stat = safeStat(path.join(logsPath, f));
+        if (!stat || !stat.isFile()) return null;
         return { name: f, path: f, size: stat.size, modified: stat.mtime.toISOString() };
       })
+      .filter((x): x is LogFileEntry => x !== null)
       .sort((a, b) => b.modified.localeCompare(a.modified));
 
     const groups: LogGroup[] = [];
     const iterDirs = fs.readdirSync(logsPath)
-      .filter(d => d.startsWith('iter-') && fs.statSync(path.join(logsPath, d)).isDirectory())
+      .filter(d => {
+        if (!d.startsWith('iter-')) return false;
+        const s = safeStat(path.join(logsPath, d));
+        return !!s && s.isDirectory();
+      })
       .sort();
 
     for (const dir of iterDirs) {
@@ -121,8 +162,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       // Standard JSONL logs at the iteration root.
       for (const f of fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl') && f !== 'provers-combined.jsonl')) {
         const full = path.join(dirPath, f);
-        if (!fs.statSync(full).isFile()) continue;
-        const stat = fs.statSync(full);
+        const stat = safeStat(full);
+        if (!stat || !stat.isFile()) continue;
 
         // Subagent JSONL streams emit `<role>-<slug>.jsonl`. Tag them
         // with role=`subagent-<role>` and surface the bare slug so the
@@ -145,8 +186,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       // pre-subagent refactor phase).
       for (const artifact of ['refactor-directive.md', 'refactor-report.md']) {
         const full = path.join(dirPath, artifact);
-        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
-        const stat = fs.statSync(full);
+        const stat = safeStat(full);
+        if (!stat || !stat.isFile()) continue;
         const role = artifact.replace('.md', '');  // "refactor-directive" | "refactor-report"
         files.push({
           name: artifact,
@@ -161,9 +202,9 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       // Subagent reports archived by the plan agent. The agreed
       // convention (see prompts/plan.md > "After each subagent returns")
       // is `<role>-<slug>-report.md` with role ∈ {analogy, challenger,
-      // refactor}. Surface each as a separate artifact in the iter
-      // sidebar so the dashboard can render the report inline.
-      const subagentReportRe = /^(analogy|challenger|refactor)-(.+)-report\.md$/;
+      // refactor, coordinator}. Surface each as a separate artifact in
+      // the iter sidebar so the dashboard can render the report inline.
+      const subagentReportRe = /^(analogy|challenger|refactor|coordinator|review-definition-correctness|review-comment-hygiene|review-blueprint-consistency|review-design-choices|review-mathlib-overlap)-(.+)-report\.md$/;
       for (const f of fs.readdirSync(dirPath)) {
         const m = f.match(subagentReportRe);
         if (!m) continue;
@@ -171,8 +212,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         // "refactor-" and "-report") — it's already handled above.
         if (f === 'refactor-report.md' || f === 'refactor-directive.md') continue;
         const full = path.join(dirPath, f);
-        if (!fs.statSync(full).isFile()) continue;
-        const stat = fs.statSync(full);
+        const stat = safeStat(full);
+        if (!stat || !stat.isFile()) continue;
         const role = `${m[1]}-report`;  // e.g. "analogy-report"
         files.push({
           name: f,
@@ -185,13 +226,51 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         });
       }
 
+      // Hierarchical subagent JSONL streams (Workstream A): when a
+      // coordinator-style subagent dispatches children, the children's
+      // logs live at `iter-NNN/<parent-slug>/<role>-<slug>.jsonl`.
+      // Walk every subdir of iter-NNN that isn't reserved (provers,
+      // .slots, .held, snapshots) and surface its JSONLs with the
+      // `parentSlug` field set, so the dashboard can group by parent.
+      for (const sub of fs.readdirSync(dirPath)) {
+        if (ITER_RESERVED_SUBDIRS.has(sub)) continue;
+        const subPath = path.join(dirPath, sub);
+        const subStat = safeStat(subPath);
+        if (!subStat || !subStat.isDirectory()) continue;
+        for (const f of fs.readdirSync(subPath)) {
+          if (!f.endsWith('.jsonl') || f.endsWith('.raw.jsonl')) continue;
+          const subagentMatch = f.match(SUBAGENT_JSONL_RE);
+          if (!subagentMatch) continue;
+          const full = path.join(subPath, f);
+          const stat = safeStat(full);
+          if (!stat || !stat.isFile()) continue;
+          const role = `subagent-${subagentMatch[1]}`;
+          const subagentSlug = subagentMatch[2];
+          files.push({
+            name: f,
+            path: `${dir}/${sub}/${f}`,
+            size: stat.size,
+            modified: stat.mtime.toISOString(),
+            role,
+            subagentSlug,
+            parentSlug: sub,
+            commit: commitForFile(phaseCommits, role, f),
+          });
+        }
+      }
+
       // Parallel prover JSONL logs — each gets the commit for its specific file slug.
       const proversDir = path.join(dirPath, 'provers');
       const seenProverNames = new Set<string>();
-      if (fs.existsSync(proversDir) && fs.statSync(proversDir).isDirectory()) {
+      const proversStat = safeStat(proversDir);
+      if (proversStat && proversStat.isDirectory()) {
         for (const f of fs.readdirSync(proversDir).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl')).sort()) {
           const full = path.join(proversDir, f);
-          const stat = fs.statSync(full);
+          const stat = safeStat(full);
+          // Broken symlink (common after cross-machine project clones,
+          // where absolute symlink targets don't resolve). Skip silently
+          // so the lanes-dir fallback below can surface the real file.
+          if (!stat) continue;
           files.push({
             name: f, path: `${dir}/provers/${f}`, size: stat.size, modified: stat.mtime.toISOString(), role: 'prover',
             commit: commitForFile(phaseCommits, 'prover', f),
@@ -348,6 +427,100 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     }
 
     return { flat, groups };
+  });
+
+  // Hierarchical subagent-invocation tree for one iteration. Reads
+  // ``iter-NNN/dispatch.jsonl`` (written by ``Subagent.run``) and
+  // returns the forest rooted at ``_root``. Each node carries enough
+  // info for the dashboard to render an expandable subagent tree:
+  // role, slug, parentSlug, write-domain, status, duration, and the
+  // log/report paths so the client can deep-link.
+  fastify.get('/api/logs/:iter/tree', async (req, reply) => {
+    const iterId = (req.params as Record<string, string>).iter;
+    if (!iterId || !/^iter-\d{3,}$/.test(iterId)) {
+      return reply.status(400).send({ error: 'Invalid iter id' });
+    }
+    const iterDir = path.join(logsPath, iterId);
+    if (!fs.existsSync(iterDir)) {
+      return reply.status(404).send({ error: 'Iteration not found' });
+    }
+    const dispatchPath = path.join(iterDir, 'dispatch.jsonl');
+    const tree: DispatchNode[] = readDispatchTree(dispatchPath);
+
+    // Stamp the log-path field on each node relative to ``logsPath`` so
+    // the client can fetch the JSONL via the existing /api/logs/* route.
+    // Root-level: ``iter-NNN/<role>-<slug>.jsonl``
+    // Nested:     ``iter-NNN/<parent-slug>/<role>-<slug>.jsonl``
+    //
+    // Also normalize reportPath to be relative to ``.archon/task_results/``
+    // so the client can fetch it via the new /api/task-results/* route.
+    const taskResultsRoot = path.join(archonPath, 'task_results');
+    function annotate(nodes: DispatchNode[]): void {
+      for (const node of nodes) {
+        const fname = `${node.role}-${node.slug}.jsonl`;
+        const rel = node.parentSlug === ROOT_PARENT_SLUG
+          ? `${iterId}/${fname}`
+          : `${iterId}/${node.parentSlug}/${fname}`;
+        // Override logBase (a server-local absolute path in the raw
+        // record) with a UI-relative path. Keep the same field name so
+        // the client doesn't need to learn a second one.
+        node.logBase = rel;
+
+        if (node.reportPath) {
+          const abs = path.resolve(node.reportPath);
+          if (abs.startsWith(taskResultsRoot + path.sep) || abs === taskResultsRoot) {
+            node.reportPath = path.relative(taskResultsRoot, abs);
+          }
+          // If the report is under a different root (unexpected) we
+          // leave the absolute path so the dashboard can at least
+          // display it as a hint; the /api/task-results/* route will
+          // refuse to serve it.
+        }
+
+        annotate(node.children);
+      }
+    }
+    annotate(tree);
+
+    return { iter: iterId, dispatch: tree };
+  });
+
+  // Subagent report files. ``task_results/<role>-<slug>.md`` for root
+  // invocations; ``task_results/<parent-slug>/<role>-<slug>.md`` for
+  // children dispatched by a coordinator (Workstream A). Paths returned
+  // by /api/logs/:iter/tree are relative to this root.
+  fastify.get('/api/task-results/*', async (req, reply) => {
+    const subpath = (req.params as Record<string, string>)['*'];
+    if (!subpath) return reply.status(400).send({ error: 'Missing path' });
+
+    const root = path.join(archonPath, 'task_results');
+    const normalized = path.normalize(subpath).replace(/^(\.\.[/\\])+/, '');
+    const full = path.join(root, normalized);
+    // Re-resolve to absolute to catch any remaining traversal attempts.
+    const abs = path.resolve(full);
+    if (!abs.startsWith(root + path.sep) && abs !== root) {
+      return reply.status(400).send({ error: 'Invalid path' });
+    }
+    if (!fs.existsSync(abs)) return reply.status(404).send({ error: 'Not found' });
+
+    const stat = fs.statSync(abs);
+    if (!stat.isFile()) return reply.status(400).send({ error: 'Not a file' });
+
+    if (abs.endsWith('.md')) {
+      const content = readFileOr(abs, '');
+      return [{
+        ts: stat.mtime.toISOString(),
+        event: 'text',
+        content,
+      }];
+    }
+    // Non-markdown task_results files are unusual; serve as raw text.
+    const content = readFileOr(abs, '');
+    return [{
+      ts: stat.mtime.toISOString(),
+      event: 'text',
+      content,
+    }];
   });
 
   // Wildcard log content — supports both .jsonl (parsed) and .md (raw).

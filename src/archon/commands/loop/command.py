@@ -7,16 +7,23 @@ behavior: read state, start services, iterate phases, summarize.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 import typer
 
 from archon import log
+from archon.dispatch import (
+    MAX_PARALLEL_ENV_VAR,
+    SLOTS_ENV_VAR,
+    SlotPool,
+)
 from archon.commands.tooling.version import warn_if_mismatch, warn_if_prompts_drifted
 from archon.state import (
     cleanup_empty_sessions,
     cost_summary,
+    init_iter_sidecar_dir,
     is_complete,
     next_iter_num,
     read_stage,
@@ -30,8 +37,6 @@ from .context import LoopContext, LoopOptions
 from .phases import (
     FinalizePhase,
     PlanPhase,
-    PreCompactPlanPhase,
-    PreCompactReviewPhase,
     ProverPhase,
     ReviewPhase,
     SyncLeanokPhase,
@@ -233,12 +238,6 @@ class LoopCommand:
         iter_start = time.monotonic()
         self._setup_iteration_dir(i)
 
-        # Phase 0a — Pre-compact (plan side)
-        # Shrinks STRATEGY.md / task_pending.md / task_done.md before
-        # the plan agent reads them. Per-target threshold gating means
-        # this is silent on small/early-iteration projects.
-        PreCompactPlanPhase(ctx).run()
-
         # Phase 1 — Plan
         if PlanPhase(ctx).run().completed:
             return False
@@ -274,9 +273,6 @@ class LoopCommand:
         # Replaces the review agent's mechanical marker placement;
         # review still owns \mathlibok and prose.
         SyncLeanokPhase(ctx).run()
-
-        # Phase 3a — Pre-compact (review side)
-        PreCompactReviewPhase(ctx).run()
 
         # Phase 3 — Review
         ReviewPhase(ctx).run()
@@ -357,6 +353,25 @@ class LoopCommand:
         ctx.iter_dir.mkdir(parents=True, exist_ok=True)
         if opts.parallel:
             (ctx.iter_dir / "provers").mkdir(exist_ok=True)
+
+        # Initialize the per-iteration dispatch semaphore. Slot files
+        # live under ``iter-NNN/.slots/`` and are picked up by every
+        # ``archon subagent`` invocation (regardless of depth) so the
+        # total number of concurrent Claude processes spawned by
+        # subagents stays bounded by ``max_parallel``. The env var is
+        # inherited by every child process (plan agent, then any
+        # subagents it spawns via Bash, recursively).
+        slots_dir = ctx.iter_dir / ".slots"
+        SlotPool.init(slots_dir, opts.max_parallel)
+        os.environ[SLOTS_ENV_VAR] = str(slots_dir)
+        os.environ[MAX_PARALLEL_ENV_VAR] = str(opts.max_parallel)
+
+        # Materialize the per-iteration sidecar directory so the plan/
+        # review agents have a stable destination for plan.md /
+        # review.md / objectives.md. Top-level files (STRATEGY.md,
+        # PROJECT_STATUS.md, task_*.md) hold stable / current-state
+        # content only; per-iter narrative lives here.
+        init_iter_sidecar_dir(ctx.state_dir, ctx.iter_num)
 
         # Resolve --resume's target phase from the prior meta.json
         # BEFORE the plan.status="running" write below clobbers prior

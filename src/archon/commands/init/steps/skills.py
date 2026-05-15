@@ -91,7 +91,14 @@ class SkillsStep(InitStep):
     # filename per subagent role; the wrapper itself derives its role
     # from ``sys.argv[0]``. Keeping the list here (instead of in the
     # wrapper) means adding a new subagent is a one-line edit.
-    _SUBAGENT_ROLES = ("refactor", "analogy", "challenger")
+    _SUBAGENT_ROLES = (
+        "refactor", "analogy", "challenger", "coordinator",
+        "review-definition-correctness",
+        "review-comment-hygiene",
+        "review-blueprint-consistency",
+        "review-design-choices",
+        "review-mathlib-overlap",
+    )
     _SUBAGENT_WRAPPER_STEM = "subagent_wrapper"
 
     def _copy_archon_tools(self) -> None:
@@ -100,9 +107,9 @@ class SkillsStep(InitStep):
         Each script in our package's ``data/tools/`` becomes
         ``.claude/tools/archon-<stem-with-dashes>.py`` in the project. The
         sole exception is ``subagent_wrapper.py``: it's installed under
-        three role-specific names (one per subagent) so Claude can keep
-        invoking ``archon-<role>-agent.py`` while the underlying script
-        is single-sourced.
+        one role-specific name per subagent (see ``_SUBAGENT_ROLES``)
+        so Claude can keep invoking ``archon-<role>-agent.py`` while
+        the underlying script is single-sourced.
 
         The plan agent's CLAUDE.md and prompt document the invocation
         patterns; Claude calls them via Bash.

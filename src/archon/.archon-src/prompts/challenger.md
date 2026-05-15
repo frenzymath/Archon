@@ -123,4 +123,5 @@ Your final assistant message must be:
 - **Never edit `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`, or `USER_HINTS.md`.**
 - **Never edit a blueprint chapter.** If the blueprint is wrong, flag it in your report — the plan agent will fix it.
 - **Style must match the target files.** Same universe levels, variable patterns, namespace conventions, indentation.
-- **Do not spawn other subagents.**
+- **Write-domain.** You may write to `Challenges/<Name>.lean`, the lakefile entry that builds it, and your report. You are read-only on every other `.lean` file. Your invocation may have been launched with `--write-domain <glob>...`; you cannot write outside those globs.
+- **Spawning child subagents is allowed but rare.** Most challenger directives envelope a single definition family that one agent handles end-to-end. If the directive asks you to envelope several wholly-independent families in one call, you may dispatch child `challenger` subagents — see refactor.md for the dispatch protocol. Each child's write-domain is its own `Challenges/<SubName>.lean`.

@@ -107,20 +107,12 @@ Write concrete recommendations for the next plan agent iteration:
 
 If your analysis shows the prover has hit the exact same blocker for several consecutive iterations on the same target, you should explicitly instruct the Plan Agent to avoid retrying the same approach without putting more effort into understanding the underlying issue.
 
-## Step 5: Update PROJECT_STATUS.md
+## Step 5: Update PROJECT_STATUS.md (Knowledge Base only)
 
-Update (or create) `.archon/PROJECT_STATUS.md`:
+The per-session narrative (Overall Progress: total sorry, branches closed, solved/partial/blocked/untouched, this session's analysis) goes to `iter/iter-NNN/review.md` — see the next subsection. PROJECT_STATUS.md carries only the cumulative Knowledge Base:
 
 ```markdown
 # Project Status
-
-## Overall Progress
-- **Total sorry**: <N>
-- **Branches / Sub-goals closed this session**: <count> (Track real structural progress even if raw sorry count didn't drop)
-- **Solved this session**: <list with file + theorem>
-- **Partial**: <list with progress summary>
-- **Blocked**: <list with reasons>
-- **Untouched**: <list>
 
 ## Knowledge Base
 ### Proof Patterns (reusable across targets)
@@ -132,6 +124,17 @@ Update (or create) `.archon/PROJECT_STATUS.md`:
 ## Last Updated
 <ISO timestamp>
 ```
+
+If an existing PROJECT_STATUS.md still carries an "Overall Progress" section from a prior project that grew it, leave the old content where it is (do not delete history) but stop appending to it. New session narrative goes to `iter/iter-NNN/review.md`.
+
+### Per-iteration sidecars (split write)
+
+Your invocation prompt contains a `## Per-iteration sidecars` block that names `iter/iter-NNN/review.md` as the destination for THIS session's narrative. Split your writes accordingly:
+
+- **The per-session "Overall Progress" narrative goes to `iter/iter-NNN/review.md`**, NOT to PROJECT_STATUS.md's "Overall Progress" section. PROJECT_STATUS.md no longer carries a session log.
+- **You DO keep updating PROJECT_STATUS.md's "Knowledge Base" section.** Cumulative non-obvious facts (errors not to reproduce, reusable proof patterns, Mathlib idioms that worked) still belong in the Knowledge Base. The Knowledge Base is the only growing-but-curated part of PROJECT_STATUS.md.
+- **Format for `iter/iter-NNN/review.md`**: same fields as the Overall Progress block above (Total sorry, branches closed, solved/partial/blocked/untouched, plus any narrative analysis). Born-bounded — this file contains THIS session only, never a multi-session log.
+- Older `iter/iter-MMM/review.md` files are on disk for you to read on demand, but the recent window is already injected in your prompt.
 
 ## Step 6: Blueprint Markers
 
@@ -172,7 +175,48 @@ While the agents should be autonomous, you might want to inform the user of any 
 - Be extremely concise (1-2 sentences per item, listed in markdown format).
 - If nothing relevant for the user is detected, leave the file completely empty.
 
-## Step 7: Self-Validation
+## Step 7 (optional): Dispatch review subagents
+
+You may dispatch any of five specialized review subagents BEFORE writing your consolidated summary. They are read-only audits whose findings you incorporate into `summary.md` / `recommendations.md`. Each runs as its own fresh-context Claude process; spawning two or more in one assistant message runs them in parallel, subject to the global `max_parallel` cap.
+
+The five reviewers:
+
+- **`review-definition-correctness`** — flags stand-in / mathematically-wrong definitions (the LineBundle failure mode). Use when this session introduced or modified `def` blocks.
+- **`review-comment-hygiene`** — flags iter-history comments in source, stale TODOs, docstring/body drift. Cheapest; useful every session.
+- **`review-blueprint-consistency`** — verifies Lean↔blueprint `\lean{...}` references resolve and signatures match. Use after refactors or when sync_leanok reports unexpected drift.
+- **`review-design-choices`** — flags parallel pipelines, re-derivations of Mathlib API, suboptimal definitional choices. Heaviest reasoning; use when the session added substantial new infrastructure.
+- **`review-mathlib-overlap`** — narrower than design-choices: scans new files for declarations whose signatures mirror existing Mathlib. Cheap when scope is one file.
+
+### How to dispatch
+
+Pattern (Bash tool, parallel-able):
+
+```
+python3 .claude/tools/archon-<role>-agent.py \
+  --slug <kebab-case-slug> \
+  --directive-file .archon/logs/iter-NNN/<role>-<slug>-directive.md \
+  --write-domain 'task_results/**'
+```
+
+Each directive is fully self-contained — the reviewer reads only what the directive points it at. See each reviewer's prompt file under `.archon/prompts/<role>.md` for the exact directive shape.
+
+### When NOT to dispatch
+
+- If this session was a pure proof-filling round with no new definitions or refactors, skip the reviewers. They add latency and cost for no value.
+- If a previous session in the last 3 iters already ran the same audit on the same scope, don't repeat unless that scope changed.
+- The plan agent may also have dispatched reviewers proactively in its own phase — check `task_results/review-*` before doubling up.
+
+### Incorporating findings
+
+After the reviewers return, read every report. Land each finding in your `summary.md` and `recommendations.md`:
+
+- **CRITICAL / HIGH** findings → bullet at the top of `recommendations.md` with the suggested action (typically: invoke refactor next iter).
+- **MEDIUM** findings → bullet in `recommendations.md`'s body.
+- **LOW** findings → one-liner in `summary.md`'s notes section.
+
+Do NOT repeat the full report content in your summary — link to the report file. The plan agent reads your summary, not the raw reports.
+
+## Step 8: Self-Validation
 
 After writing all files, validate your output by checking:
 - [ ] milestones.jsonl has valid JSON on every line

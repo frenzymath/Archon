@@ -9,7 +9,6 @@ agent based on the directive contents.
 
 from __future__ import annotations
 
-from pathlib import Path
 from textwrap import dedent
 
 from archon.commands.tooling.project_config import load_project_config
@@ -57,9 +56,3 @@ class ChallengerSubagent(Subagent):
             """) + debug_feedback_block(
                 debug_feedback, state_dir, f"challenger ({slug})", iter_num,
             )
-
-    def report_path(self, slug: str) -> Path:
-        return (
-            self.project_path / ".archon" / "task_results"
-            / f"challenger-{slug}.md"
-        )

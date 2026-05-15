@@ -25,6 +25,17 @@ def has(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
+def in_virtualenv() -> bool:
+    """True if the current interpreter is running inside a venv / virtualenv.
+
+    Pip rejects `--user` installs in this case, so callers that would
+    otherwise pass `--user` should drop it and install into the active
+    environment instead.
+    """
+    import sys
+    return bool(os.environ.get("VIRTUAL_ENV")) or sys.prefix != sys.base_prefix
+
+
 def version(cmd: list[str]) -> str:
     """Return first line of `cmd --version` output, or 'unknown'."""
     try:

@@ -10,6 +10,10 @@ from pathlib import Path
 from archon import log
 from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
+from archon.commands.tooling.project_config import (
+    load_project_config,
+    resolve_recent_iter_window,
+)
 from archon.prompts import build_review_prompt
 from archon.state import write_meta
 
@@ -104,11 +108,13 @@ class ReviewPhase(Phase):
         to_user_file = ctx.state_dir / "TO_USER.md"
         to_user_file.write_text("", encoding="utf-8")
 
+        cfg = load_project_config(ctx.project_path)
         prompt = build_review_prompt(
             ctx.project_name, ctx.project_path, ctx.state_dir, ctx.current_stage,
             session_num, session_dir, attempts_file, combined,
             ctx.iter_num,
             debug_feedback=ctx.options.debug_feedback,
+            recent_iter_window=resolve_recent_iter_window(cfg),
         )
         review_log = ctx.iter_dir / "review"
         resume_sid = pick_resume_session(

@@ -1,6 +1,6 @@
 """SyncLeanokPhase — deterministic blueprint marker sync.
 
-Runs after the prover phase and before the review-side compactor.
+Runs after the prover phase and before the review phase.
 Walks every ``blueprint/src/chapters/*.tex`` and updates each
 declaration block's ``\\leanok`` markers based on the actual sorry
 count + compilation status of the corresponding Lean source.

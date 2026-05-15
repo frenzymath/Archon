@@ -71,35 +71,21 @@ def default_config() -> dict[str, Any]:
             'analogy': None,
             'challenger': None,
         },
-        'compaction': {
+        'state': {
             '_help': (
-                "Pre-agent compaction of large state files (STRATEGY.md, "
-                "task_pending.md, task_done.md, PROJECT_STATUS.md) before "
-                "the agent that reads them. Compactors shrink each file "
-                "in place via incremental Edit calls, preserving every "
-                "actionable detail (errors, dead ends, recent iterations) "
-                "and trimming only old narrative. Each rewrite gets its "
-                "own inner-git commit so you can audit and revert. "
-                "Disable per-target by setting its block to null or "
-                "{enabled: false}."
+                "Per-iteration sidecar files capture each iter's plan + "
+                "review narrative under .archon/iter/iter-NNN/{plan,review,"
+                "objectives}.md so top-level files (STRATEGY.md, "
+                "PROJECT_STATUS.md, task_*.md) stay bounded across iters. "
+                "Set recent_iter_window to control how many recent "
+                "sidecars get injected into the plan/review prompt."
             ),
-            'enabled': True,
-            # haiku is the right fit: compactors do rule-based pattern
-            # matching (preserve verbatim sections, compress sessions
-            # older than N to one-liners, etc.), not deep reasoning.
-            # Override to 'sonnet' here if you observe the compactor
-            # mis-handling complex section restructures on your project.
-            'model': 'haiku',
-            # Threshold below which compaction is skipped — small files
-            # don't have enough verbosity to compact and the call cost
-            # would outweigh the win.
-            'min_chars_default': 8000,
-            'targets': {
-                'strategy_md': {'enabled': True, 'min_chars': 8000},
-                'task_pending_md': {'enabled': True, 'min_chars': 8000},
-                'task_done_md': {'enabled': True, 'min_chars': 8000},
-                'project_status_md': {'enabled': True, 'min_chars': 5000},
-            },
+            # How many recent iter/iter-NNN/plan.md (and review.md) files
+            # the plan/review prompts surface as context. The full
+            # historical record stays on disk; only the recent K are
+            # injected into the prompt. Keep small to bound the prompt
+            # size; raise if agents need more memory of recent decisions.
+            'recent_iter_window': 3,
         },
         'multilane': {
             # JSON has no real comments; ``_help`` / ``_env`` /
@@ -228,66 +214,14 @@ def resolve_subagent_model(
     return loop_section.get('model') or fallback
 
 
-# ── compaction resolution ─────────────────────────────────────────────
+# ── state resolution ──────────────────────────────────────────────────
 
 
-@dataclass
-class CompactionTargetCfg:
-    """Resolved settings for one compaction target.
-
-    Carries both ``enabled`` (per-target switch) and ``min_chars``
-    (threshold below which the compactor is skipped). The wider
-    ``compaction.enabled`` flag is checked separately by the caller —
-    if it's false, every target is treated as disabled.
-    """
-    enabled: bool
-    min_chars: int
-
-
-def resolve_compaction_enabled(cfg: ProjectConfig) -> bool:
-    """Top-level compaction switch (false → no compactor runs at all)."""
-    section = dict(cfg.raw.get('compaction') or {})
-    val = section.get('enabled')
-    return True if val is None else bool(val)
-
-
-def resolve_compaction_model(
-    cfg: ProjectConfig, *, fallback: str = 'haiku',
-) -> str:
-    """Model for the compactor agents. Defaults to haiku — compactors
-    do rule-based pattern matching (preserve verbatim sections, compress
-    sessions older than N to one-liners, etc.), not deep reasoning,
-    so haiku is fast + cheap and follows the rules just as well.
-
-    Existing projects whose ``config.json`` pins a different model
-    (e.g. ``"model": "sonnet"``) keep that pinning — the fallback only
-    fires for an empty / missing compaction section."""
-    section = dict(cfg.raw.get('compaction') or {})
-    val = section.get('model')
-    if val:
-        return val
-    return fallback
-
-
-def resolve_compaction_target(
-    cfg: ProjectConfig, target_key: str,
-) -> CompactionTargetCfg:
-    """Resolve one target's settings.
-
-    ``target_key`` is the dotted-style key from the config schema:
-    ``strategy_md``, ``task_pending_md``, ``task_done_md``,
-    ``project_status_md``. Unknown keys return a disabled config.
-    """
-    section = dict(cfg.raw.get('compaction') or {})
-    targets = dict(section.get('targets') or {})
-    raw = targets.get(target_key)
-    default_min = int(section.get('min_chars_default') or 8000)
-    if raw is None:
-        return CompactionTargetCfg(enabled=False, min_chars=default_min)
-    if isinstance(raw, bool):
-        return CompactionTargetCfg(enabled=raw, min_chars=default_min)
-    if not isinstance(raw, dict):
-        return CompactionTargetCfg(enabled=False, min_chars=default_min)
-    enabled = bool(raw.get('enabled', True))
-    min_chars = int(raw.get('min_chars', default_min))
-    return CompactionTargetCfg(enabled=enabled, min_chars=min_chars)
+def resolve_recent_iter_window(cfg: ProjectConfig, *, fallback: int = 3) -> int:
+    """How many recent iter sidecars to surface in plan/review prompts."""
+    section = dict(cfg.raw.get('state') or {})
+    val = section.get('recent_iter_window')
+    try:
+        return int(val) if val is not None else fallback
+    except (TypeError, ValueError):
+        return fallback

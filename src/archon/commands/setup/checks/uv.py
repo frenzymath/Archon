@@ -8,7 +8,7 @@ from pathlib import Path
 
 from archon import log
 
-from ..shell import ensure_path_in_rc, has, run, run_shell, version
+from ..shell import ensure_path_in_rc, has, in_virtualenv, run, run_shell, version
 from .base import DependencyCheck
 
 
@@ -24,8 +24,13 @@ class UvCheck(DependencyCheck):
         log.step("Installing uv (to ~/.local/bin, no sudo)...")
         r = run_shell("curl -LsSf https://astral.sh/uv/install.sh | sh")
         if r.returncode != 0:
-            log.warn("Standalone installer failed, trying pip --user...")
-            run([sys.executable, "-m", "pip", "install", "--user", "uv"])
+            pip_cmd = [sys.executable, "-m", "pip", "install"]
+            if not in_virtualenv():
+                # `--user` is rejected by pip inside a venv.
+                pip_cmd.append("--user")
+            pip_cmd.append("uv")
+            log.warn(f"Standalone installer failed, trying {' '.join(pip_cmd[2:])}...")
+            run(pip_cmd)
 
         os.environ["PATH"] = (
             f"{Path.home() / '.local' / 'bin'}{os.pathsep}{os.environ['PATH']}"

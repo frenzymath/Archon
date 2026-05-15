@@ -8,6 +8,10 @@ from pathlib import Path
 from archon import log
 from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
+from archon.commands.tooling.project_config import (
+    load_project_config,
+    resolve_recent_iter_window,
+)
 from archon.prompts import build_plan_prompt
 from archon.state import is_complete, read_stage, write_meta
 
@@ -29,6 +33,7 @@ class PlanPhase(Phase):
 
         log.phase(self.number, self.name)
         plan_start = time.monotonic()
+        cfg = load_project_config(ctx.project_path)
         plan_prompt = build_plan_prompt(
             ctx.project_name, ctx.project_path, ctx.state_dir, ctx.current_stage,
             ctx.iter_num,
@@ -36,6 +41,7 @@ class PlanPhase(Phase):
                 ctx.options.multilane_preview or ctx.options.multilane_execute
             ),
             debug_feedback=ctx.options.debug_feedback,
+            recent_iter_window=resolve_recent_iter_window(cfg),
         )
 
         if ctx.dry_run:

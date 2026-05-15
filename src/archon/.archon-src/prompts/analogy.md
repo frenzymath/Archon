@@ -191,5 +191,5 @@ Your final assistant message must be:
 - **Follow up cited references when they bear on the design choice**, not when they only document the underlying math.
 - **Never invent precedents.** A negative result is itself useful.
 - **Be honest about analogy strength.** Weak precedents poorly flagged cause worse decisions than no precedent at all.
-- **Never modify project source, the blueprint, or Mathlib.**
-- **Do not spawn other subagents.**
+- **Never modify project source, the blueprint, or Mathlib.** You are read-only on every `.lean` file. Your write-domain is your persistent output (`analogies/<slug>.md`) and your report (`.archon/task_results/.../analogy-<slug>.md`).
+- **Spawning child subagents is allowed but rare.** When a single design question has multiple genuinely independent sub-questions (e.g. "compare these two Mathlib subsystems in parallel"), you may dispatch child `analogy` subagents via Bash and the standard wrapper protocol — see refactor.md or coordinator.md for the dispatch shape. Each child's declared write-domain must be a subset of yours (which is read-only on project source). Skip this for most invocations; one analogy = one question handled by you directly.

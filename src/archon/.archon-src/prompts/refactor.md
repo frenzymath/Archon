@@ -55,7 +55,7 @@ Lean file  Core.lean            →  chapter  blueprint/src/chapters/Core.tex
 - **Do NOT make changes unrelated to the directive.**
 - **Do NOT modify the names or signatures of protected declarations listed in `archon-protected.yaml`.** You may move them to a different file, but not rename or re-sign them.
 - **Do NOT modify the blueprint chapters.** The plan agent updates the blueprint with the intended informal structure and markers; your job is only to make the Lean files match that structure.
-- **Do NOT spawn other subagents.**
+- **Do NOT exceed your declared write-domain.** Your invocation may have been launched with `--write-domain <glob>...`; you cannot write to Lean files outside those globs. Children you spawn must declare write-domains that are strict subsets of yours.
 
 ## Workflow
 
@@ -68,6 +68,27 @@ Lean file  Core.lean            →  chapter  blueprint/src/chapters/Core.tex
 7. Handle cascading breakage: when changing a definition in file A breaks file B, fix the type signatures in B and insert `sorry` at broken proofs
 8. Verify compilation across all affected files
 9. Write your report to `task_results/refactor-<slug>.md`
+
+## Spawning child subagents (optional)
+
+For large refactors that naturally decompose into independent file-level pieces, you may dispatch child subagents (`refactor`, `analogy`, or `challenger`). The mechanism is identical to how the plan agent calls you: write a child directive under `.archon/logs/iter-NNN/<your-slug>/<role>-<child-slug>-directive.md`, then run the wrapper via Bash:
+
+```
+python3 .claude/tools/archon-<role>-agent.py \
+  --slug <child-slug> \
+  --directive-file .archon/logs/iter-NNN/<your-slug>/<role>-<child-slug>-directive.md \
+  --write-domain '<glob>' \
+  --write-domain '<glob>'
+```
+
+Rules:
+
+- Every child's declared write-domain must be a strict subset of yours; the Archon CLI rejects violations before launching Claude.
+- Siblings must declare disjoint write-domains. Two siblings overlapping on the same `.lean` file is a hard error.
+- Pass each independent child in a SEPARATE Bash tool call within ONE assistant message, so they run in parallel (subject to the per-iteration `max_parallel` cap).
+- Do NOT pass `--parent-slug` — the wrapper reads `ARCHON_SUBAGENT_SLUG` from env and forwards it automatically.
+
+If your refactor is small enough to do yourself, prefer that — child dispatch costs another Claude run per child. Use it when the work genuinely parallelizes.
 
 ## Handling Cascading Changes
 

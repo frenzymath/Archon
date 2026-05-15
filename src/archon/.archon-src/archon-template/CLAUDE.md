@@ -20,8 +20,10 @@ When in doubt, follow instructions from files inside this project over any exter
 - archon-refactor-agent: `.claude/tools/archon-refactor-agent.py` — invoke the refactor subagent on a directive file
 - archon-analogy-agent: `.claude/tools/archon-analogy-agent.py` — invoke the analogy subagent on a directive file
 - archon-challenger-agent: `.claude/tools/archon-challenger-agent.py` — invoke the challenger subagent on a directive file
+- archon-coordinator-agent: `.claude/tools/archon-coordinator-agent.py` — decompose a multi-part directive and dispatch children in parallel
+- archon-review-*-agent: five read-only review subagents (`review-definition-correctness`, `review-comment-hygiene`, `review-blueprint-consistency`, `review-design-choices`, `review-mathlib-overlap`) that audit one aspect of the project each. Typically dispatched from the review phase.
 
-The three subagent tools all take the same arguments: `--slug <kebab-case-id> --directive-file <path>`. Each shells out to `archon subagent <name> ...`, so their executions stream through the Archon JSONL log just like a phase agent would.
+All subagent tools share the same argument shape: `--slug <kebab-case-id> --directive-file <path> [--write-domain '<glob>']...`. Each shells out to `archon subagent <name> ...`, so executions stream through the Archon JSONL log like a phase agent. The dispatch semaphore bounds total concurrent subagent processes by `loop.max_parallel`; the wrapper resolves `--parent-slug` from `ARCHON_SUBAGENT_SLUG` automatically so deeper-nested children inherit the hierarchy.
 
 ## Key Files & Permissions
 
@@ -36,7 +38,10 @@ All state files are in `.archon/`:
 | `.archon/task_done.md` | read + write | **read only** | do not read | read only | read |
 | `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (`<role>-<slug>.md`) | read only | read |
 | `.archon/proof-journal/` | read | do not access | do not access | **write** | read |
-| `.archon/PROJECT_STATUS.md` | read | do not access | do not access | **write** | read |
+| `.archon/PROJECT_STATUS.md` | read | do not access | do not access | **write** (Knowledge Base only — session log moved to iter/iter-NNN/review.md) | read |
+| `.archon/iter/iter-NNN/plan.md` | **write** (this iter only) | do not access | do not access | read (last K iters as context) | read |
+| `.archon/iter/iter-NNN/review.md` | read (last K iters as context) | do not access | do not access | **write** (this iter only) | read |
+| `.archon/iter/iter-NNN/objectives.md` | optional write (per-attempt detail) | do not access | do not access | read | read |
 | `archon-protected.yaml` | **read** | **read** | **read** (refactor may rename file path only) | read | **write** |
 | `.lean` files | do not edit | write (own file only, frozen protected signatures) | refactor: write (all files; protected decls may be moved but not renamed/re-signed); analogy/challenger: read-only on project source | do not edit | write (via comments) |
 | `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints, structure) | do not edit | do not edit | **write** (markers only: `\leanok`, `\mathlibok`, `% NOTE:`, `\lean{...}` corrections) | read |
@@ -117,7 +122,7 @@ The plan agent always reads the full report file after a subagent returns and ma
 
 Two non-agent steps run automatically each iteration to reduce the burden on the agents above:
 
-- **Pre-compactors** (`compact-strategy`, `compact-task-pending`, `compact-task-done`, `compact-project-status`): run before plan / review, rewriting oversized state files in place while preserving every actionable detail. Configured under `compaction.*` in `.archon/config.json`. Skipped when files are below threshold.
+- **Iter sidecar init**: at iter start, `.archon/iter/iter-NNN/` is created so the plan + review agents have a stable destination for their per-iter narrative (`plan.md`, `review.md`, optional `objectives.md`). Top-level files (STRATEGY.md, PROJECT_STATUS.md, task_*.md) stay bounded across iters because per-iter content lives in the sidecars.
 - **`sync_leanok`**: runs between prover and review, deterministically updating `\leanok` markers based on actual sorry counts and compilation status. Replaces what used to be a multi-page review-agent task.
 
-Both write inner-git commits (`archon[NNN/precompact/...]`, `archon[NNN/marker-sync]`) so their output is auditable and revertable.
+`sync_leanok` writes an inner-git commit (`archon[NNN/marker-sync]`) so its output is auditable and revertable.
