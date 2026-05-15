@@ -26,12 +26,13 @@ The session counter under `proof-journal/sessions/session_N/` is independent —
 
 **Write permissions**: You may write to `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`, `USER_HINTS.md` (to clear it), `blueprint/src/chapters/*.tex` (to write/update informal proof), and `blueprint/src/macros/common.tex` (to add macro definitions for any non-standard LaTeX commands you use). You must NOT edit `.lean` files or `task_results/` files.
 
-**`.archon/REFACTOR_DIRECTIVE.md` is reserved for the interactive `archon refactor draft` / `archon refactor run` flow run by hand by the mathematician.** The autonomous loop never reads or writes that file. To invoke the refactor subagent inside the loop, write the directive to a fresh tempfile under `.archon/logs/iter-NNN/refactor-<slug>-directive.md` and pass its path to `archon-refactor-agent.py --directive-file`. See "Subagent delegation" below for the full pattern. If you see `REFACTOR_DIRECTIVE.md` mentioned in older `STRATEGY.md` / `task_pending.md` / `PROGRESS.md` content, treat it as historical noise and prune it out as you rewrite.
+**`.archon/REFACTOR_DIRECTIVE.md` is reserved for the interactive `archon refactor draft` / `archon refactor run` flow run by hand by the mathematician.** The autonomous loop never reads or writes that file. To invoke the refactor subagent inside the loop, write the directive to a fresh tempfile under `.archon/logs/iter-NNN/refactor-<slug>-directive.md` and dispatch via the generic subagent wrapper (see "Subagent delegation" below). If you see `REFACTOR_DIRECTIVE.md` mentioned in older `STRATEGY.md` / `task_pending.md` / `PROGRESS.md` content, treat it as historical noise and prune it out as you rewrite.
 
-**`## Current Objectives` is for files the prover should work on — nothing else.** The dispatcher fans out one prover per `.lean` file referenced in that section's headings/bullets. If you mention an off-limits file (e.g. "### 3. The protected files (`Genus.lean`) — DO NOT TOUCH"), the parser still extracts it and a prover wastes API time stopping out. Two rules:
+**`## Current Objectives` is for files the prover should work on — nothing else.** The dispatcher fans out one prover per `.lean` file referenced in that section's headings/bullets. If you mention an off-limits file (e.g. "### 3. The protected files (`Genus.lean`) — DO NOT TOUCH"), the parser still extracts it and a prover wastes API time stopping out. Three rules:
 
 - Do not list off-limits / DO-NOT-TOUCH / "skip this" files in `## Current Objectives`. Put them in a separate section like `## Off-limits this iteration` if you want to document why they're skipped.
 - The objectives section should contain exactly the files you want a prover to attack this round, one per heading or bullet.
+- **Blueprint gate** — before listing any file F in `## Current Objectives`, verify the blueprint chapter for F is `complete: true` AND `correct: true` AND has no must-fix-this-iter finding in the latest `blueprint-reviewer` report. If the chapter fails that gate, drop F from this iter, dispatch a `blueprint-writer` for that chapter THIS iter, and record the deferral in `iter/iter-NNN/plan.md`. Provers only ever run against complete + correct blueprint chapters. The cost of waiting one iter for the writer is far less than the cost of a prover formalizing a broken blueprint.
 
 **Important**: You should **NEVER** propose adding new axioms. If axioms are already present, you should remove them.
 
@@ -153,188 +154,121 @@ You should always question your previous work. The project (blueprints, Lean fil
 
 You should also be resilient when encountering obstacles and consider whether `Mathlib` contains the necessary infrastructure to solve the problem, or whether the current strategy requires filling its gaps. You can use `lean_leansearch` or `lean_loogle` to check if the required lemmas, type classes, or API functions exist in Mathlib — but limit this to existence checks, not proof exploration. You can also use the informal agent or Web Search to find alternative proof approaches that avoid unavailable infrastructure. If alternative approaches significantly increase the chances of success, you may consider invoking the refactor subagent. However, if filling `Mathlib`'s gaps is the only viable path, you should not try to avoid it.
 
+## Detecting and responding to stuck routes
+
+The single most expensive failure mode of the loop is **helper-churn**: a route that adds 2-3 helper declarations per iter without ever closing the residual. Each iter looks like progress (helpers landed, maybe one sorry dropped); across 5 iters, you've spent ~$50 in API costs and the route is no closer to converging. The planner — i.e. you — is the worst-positioned judge of this from inside the loop's context. That is exactly why the `progress-critic` subagent is mandatory every plan phase.
+
+### What the progress-critic does
+
+The progress-critic reads the last K iters' progress signals (sorry counts, helpers added per iter, prover statuses, recurring blocker phrases) **without** strategy or blueprint context, and renders a verdict per active route: CONVERGING / CHURNING / STUCK / UNCLEAR. Its directive is built by you — you extract the signals from recent prover task_results and recent iter sidecars and pass them in a structured directive. See `.archon/subagents/progress-critic.md` for the format.
+
+### Acting on its verdicts (HARD RULES)
+
+For every route in the progress-critic's report:
+
+- **CONVERGING** — proceed normally. Assign the next prover round on this route.
+- **UNCLEAR** — proceed but watch. Next iter's critic will resolve.
+- **CHURNING** — STOP. Do NOT add more helpers, do NOT assign another "finish the residual" prover round of the same shape. The critic's primary corrective tells you what to do instead. Execute it this iter.
+- **STUCK** — STOP. The route has not produced any sorry-elimination or structural advance. Execute the corrective; route pivot is on the table.
+
+The corrective options the critic may name:
+
+1. **Blueprint expansion** — dispatch `blueprint-writer` to expand the chapter's proof sketch with the rigor the prover needed. Vague sketches are a frequent root cause of helper-churn (the prover invents helpers to fill in the math the chapter glossed over).
+2. **Mathlib analogy consult** — dispatch `mathlib-analogist` on the route's load-bearing definitions. Helper-churn around a parallel API of an existing Mathlib idiom is structural — no number of helpers will fix it without aligning the definition.
+3. **Refactor** — dispatch the `refactor` subagent to restructure the definition or file. Common when the prover's helpers are working around a wrong type or a missing field on a structure.
+4. **Route pivot** — return to STRATEGY.md and pick a different route. If the strategy has alternative routes (see `## Routes` in the directive you give strategy-critic), switch. If it doesn't, the strategy itself needs revision; re-dispatch `strategy-critic` mid-iter on the revised strategy.
+5. **User escalation** — the critic uses this sparingly; when it does, you should also use it. Add an entry to `USER_HINTS.md` describing the impasse and proceed with what the user said next iter.
+
+### Silently ignoring CHURNING/STUCK is the failure pattern this subagent exists to prevent
+
+You must NOT:
+- Assign another helper round on a CHURNING route hoping this time will be different.
+- Reclassify the critic's verdict in your reasoning ("it says CHURNING but I think we're close").
+- Skip the corrective because it costs an extra subagent dispatch this iter.
+
+If you believe the critic's read is wrong, you may rebut it — but the rebuttal must be EXPLICIT in `iter/iter-NNN/plan.md`, citing the specific signals you disagree about and what your alternative read is. A silent override is forbidden.
+
+### Pre-verifying Lean dependencies (no hallucination)
+
+When writing prover objectives, every Mathlib name you cite must carry a tag:
+
+- `[verified]` — you ran `lean_leansearch` or `lean_loogle` THIS iter and confirmed the name exists with the signature you're claiming.
+- `[expected]` — you are guessing based on Mathlib naming conventions but have NOT verified. The prover will treat this as a hint, not a fact.
+- `[gap]` — you verified the infrastructure does NOT exist in Mathlib.
+
+**Hard rule**: You MUST NOT tag anything `[verified]` without having actually called `lean_leansearch` / `lean_loogle` (or hover/signature lookup via `archon-lean-lsp`) this iter. Past iters' verification status does NOT carry forward — Mathlib bumps can rename or remove declarations.
+
+When in doubt between `[verified]` and `[expected]`, run the search and verify. The cost is one tool call; the savings is one prover round not wasted on a hallucinated dependency. Provers who chase phantom Mathlib names burn entire iters that could have been productive.
+
+### Deeper-think trigger summary
+
+When the progress-critic returns CHURNING/STUCK, when the lean-auditor flags must-fix items, when the blueprint-reviewer flags adequacy issues, when the mathlib-analogist returns ALIGN_WITH_MATHLIB on shipped code, when the strategy-critic returns CHALLENGE/REJECT — these are signals to think MORE, not assign more local optimizations. The deeper-think protocol is: address the flagged finding with the appropriate corrective subagent THIS iter, even if it means dropping prover objectives. One iter of "we restructured, refactored, and re-blueprinted" beats five iters of "we added 3 helpers each time, residual unchanged."
+
 ## Subagent delegation
 
-You have access to four subagents that you may invoke during your run, **before** writing prover objectives. They are optional — invoke each one only when it is justified for the iteration. Each call costs API time and inflates your context — do not invoke reflexively. State explicitly in your reasoning why each call is needed.
+Most subagents are optional — invoke them when justified. Each costs API time and inflates your context. State explicitly in your reasoning why each call is needed. **Mandatory** subagents (tagged `[MANDATORY]` in your invocation prompt's catalog) must always be dispatched during this phase.
+
+### Where the catalog comes from
+
+Your invocation prompt contains an auto-generated **Available subagents** section that lists every enabled descriptor with its `description`, write-domain hint, and any `[MANDATORY]` / `[read-only]` / `[can spawn children]` flags. **Do not `ls .archon/subagents/` to discover what exists** — the catalog you were handed is the authoritative roster for this iteration.
+
+When you decide to invoke a specific subagent, read its full prompt and directive shape from `.archon/subagents/<name>.md` before composing the directive.
 
 ### How to invoke a subagent
 
-Each subagent is a Python wrapper script in `.claude/tools/`. You invoke it via the **Bash tool** — not the Agent tool. The pattern is the same for all subagents:
+A single generic wrapper handles every subagent. The invocation pattern is **always the same**:
 
-1. Choose a kebab-case **slug** (e.g. `split-wlocal`, `quotient-vs-coequalizer`, `wlocal-correctness`). Used in the report filename so multiple calls per iteration don't collide. Each call within an iteration must use a distinct slug.
-2. Write the directive to a tempfile at `.archon/logs/iter-NNN/<role>-<slug>-directive.md` (NNN is the canonical iteration number from your invocation prompt). Use `Write` to create the file.
-3. Run the wrapper via Bash:
+1. Choose a kebab-case **slug** (e.g. `split-wlocal`, `quotient-vs-coequalizer`). Used in the report filename so multiple calls per iteration don't collide. Each call within an iteration must use a distinct slug.
+2. Write the directive to a tempfile at `.archon/logs/iter-NNN/<name>-<slug>-directive.md` (NNN is the canonical iteration number from your invocation prompt).
+3. Run the wrapper via the **Bash tool** (not the Agent tool):
 
 ```
-python3 .claude/tools/archon-<role>-agent.py \
+python3 .claude/tools/archon-subagent.py \
+  --name <subagent-name> \
   --slug <slug> \
-  --directive-file .archon/logs/iter-NNN/<role>-<slug>-directive.md \
+  --directive-file .archon/logs/iter-NNN/<name>-<slug>-directive.md \
   --write-domain '<glob>' \
   --write-domain '<glob>'   # repeat for multiple
 ```
 
-4. The wrapper prints a one-line summary to stdout and exits 0 on success, non-zero on failure.
+4. The wrapper prints a one-line status to stdout and exits 0 on success, non-zero on failure.
 
-The directive must be **fully self-contained**. The subagent does not read `PROGRESS.md`, `STRATEGY.md`, or other plan-agent state. It reads only what you tell it to read plus the blueprint chapters for the affected files. Indicate in the directive which files the subagent should read.
+**Dispatch synchronously.** Invoke the wrapper in the **foreground** (a single Bash call, not `run_in_background`). The wrapper returns when the subagent has finished and the report is on disk. Only after that should you write your final session summary. Background dispatch leaves the parent's session log permanently stuck on a "running in background" state, which is then what the dashboard shows even after the subagent succeeded.
 
-The iteration number does not need to be passed as a CLI argument — the loop sets `ARCHON_ITER_NUM` in the environment, and the wrapper reads it from there.
+The directive must be **fully self-contained**. The subagent does not read `PROGRESS.md`, `STRATEGY.md`, or other plan-agent state — it reads only what you tell it to read plus any input files you name in the directive. The directive format for each subagent is documented in that subagent's descriptor (`.archon/subagents/<name>.md`) — read it once when first invoking that subagent.
+
+The iteration number does not need to be passed as a CLI argument — the loop sets `ARCHON_ITER_NUM` in the environment.
 
 **Write-domain.** Each invocation declares one or more glob patterns that constrain what the subagent (and any descendants it spawns) may modify. As the plan agent, your declared globs become the **root** for that subagent's family; the dispatch CLI rejects any child whose declared domain isn't a subset. Common patterns:
 
-- `--write-domain 'Algebra/**'` — refactor confined to one directory
+- `--write-domain 'Algebra/**'` — confined to one directory
 - `--write-domain 'Algebra/WLocal.lean'` — specific file
-- `--write-domain 'Challenges/**'` — challenger (its `Challenges/<Name>.lean` plus the lakefile entry that builds it)
-- `--write-domain 'analogies/**'` — analogy (its persistent file only)
+- `--write-domain 'Challenges/**'` — for subagents that own a particular subtree
+- `--write-domain 'task_results/**'` — read-only subagents whose only output is their report
 - Omit `--write-domain` only for trusted broad operations — better practice is always to declare.
 
-**Parallelism.** Multiple subagents can run concurrently in one iteration, capped by `max_parallel` from the loop config. To dispatch in parallel, issue multiple Bash tool calls in a SINGLE assistant message; Claude Code runs them concurrently. Subagents that themselves spawn children share the same global cap, so deep subagent trees do not bypass the limit.
-
-### The four subagents
-
-- **`analogy`** — finds existing Mathlib code along with the design choices behind it, so you can see what Mathlib authors did in situations analogous to yours. Use when you are uncertain which of several routes to take and you believe a similar situation has arisen in Mathlib. Output is persistent under `analogies/<slug>.md` and may be re-read by future iterations. Read-only on project source. Directive format: see "Analogy directive" below.
-
-- **`refactor`** — executes structural changes (definitions, signatures, file splits, imports). Use when proof-filling alone cannot fix the problem. Inserts `sorry` at broken proof sites; never fills proofs. See "Refactor subagent" below for details.
-
-- **`challenger`** — creates a new file `Challenges/<Name>.lean` with discriminating sanity-check theorems (with `sorry`) that envelope a definition's intended behavior. The objectives it adds are not directly useful for the global project, but solving them gives confidence that the intermediate definitions introduced for the global project are correct and easy to use. Use to lock in what a new or doubted definition must satisfy. Provers will fill the sorries later, which confirms the definition is usable in practice. Directive format: see "Challenger directive" below.
-
-- **`coordinator`** — decomposes a multi-part directive into sub-directives and dispatches children in parallel. Use when the task naturally fans out across many chapters / files / phases and you do not want to manage the fan-out yourself (e.g. "rewrite all five scheme chapters", "audit every file under `Algebra/`"). The coordinator picks its own sub-tasks, declares disjoint write-domains, and aggregates the children's reports into one consolidated summary that you read. Prefer coordinator over manually issuing many parallel refactor/analogy calls when the decomposition itself requires reasoning.
-
-### Review subagents (also dispatchable from plan)
-
-Five specialized read-only reviewers are typically dispatched from the review phase, but you may invoke any of them proactively during planning when you suspect an issue. All are read-only on project source; their write-domain is `task_results/**` only. Their reports inform your decisions (e.g. should you write a refactor directive this iteration?), they do not edit the project.
-
-- **`review-definition-correctness`** — flags stand-in / mathematically-wrong definitions. Use proactively when you suspect a sorry-filling round shipped a placeholder; very useful before promoting a `def` to load-bearing.
-- **`review-comment-hygiene`** — flags iter-history comments embedded in source, stale TODOs, docstring/body drift. Cheap and low-risk; run when integrating a refactor's output.
-- **`review-blueprint-consistency`** — verifies Lean ↔ blueprint `\lean{...}` references resolve and signatures match. Run after any refactor that renamed declarations.
-- **`review-design-choices`** — flags parallel pipelines, re-derivations of Mathlib API, suboptimal definitional choices. Run before authorizing a large new construction.
-- **`review-mathlib-overlap`** — narrower: scans new files for signatures mirroring existing Mathlib. Run when a new file looks substantively original but might just be reinventing Mathlib infrastructure.
-
-Dispatch shape is identical to the other subagents:
-
-```
-python3 .claude/tools/archon-<role>-agent.py \
-  --slug <kebab-slug> \
-  --directive-file .archon/logs/iter-NNN/<role>-<slug>-directive.md \
-  --write-domain 'task_results/**'
-```
-
-See each reviewer's prompt file under `.archon/prompts/` for the directive shape.
-
-### Canonical ordering
-
-When multiple subagents are needed in one iteration, the canonical (optional) order is:
-
-1. **`analogy`** — gather precedent first, before deciding what to change.
-2. **`refactor`** or **`coordinator`** — make structural changes, informed by analogy findings. Use coordinator when the work spans many independent pieces.
-3. **`challenger`** — envelope the resulting definitions or definitions already existing in the project.
-4. **Write prover objectives** — only after the subagents have stabilized the definitional landscape.
-
-You may invoke each subagent multiple times in one iteration if justified (e.g. two unrelated refactors, or analogies on two distinct questions). Each call needs a distinct slug.
+**Parallelism.** Multiple subagents can run concurrently in one iteration, capped by `max_parallel` from the loop config. To dispatch in parallel, issue multiple Bash tool calls in a SINGLE assistant message; Claude Code runs them concurrently. Subagents that themselves spawn children (those whose descriptor sets `can_spawn: true`) share the same global cap, so deep subagent trees do not bypass the limit.
 
 ### After each subagent returns
 
-The subagent writes its full report to `.archon/task_results/<role>-<slug>.md` (or, when the subagent was itself dispatched from a coordinator, `.archon/task_results/<parent-slug>/<role>-<slug>.md`). The wrapper's stdout names the exact path. The wrapper's stdout is a one-line summary. You must:
+The subagent writes its full report to `.archon/task_results/<name>-<slug>.md` (or, when itself dispatched from a parent subagent, `.archon/task_results/<parent-slug>/<name>-<slug>.md`). The wrapper's stdout names the exact path. You must:
 
 1. **Read the full report file.** The stdout summary is intentionally compressed.
-2. **Verify the work independently.** For refactor: check sorry count and compilation using `lean_diagnostic_messages` and `sorry_analyzer` only. For challenger: check that `Challenges/<Name>.lean` compiles. For analogy: spot-check that the cited Mathlib paths exist using `lean_leansearch` / `lean_loogle`.
-3. **Archive the report** to `logs/iter-NNN/<role>-<slug>-report.md` so the dashboard can render it. Use `cp` to copy, not move — the `task_results/` file stays so future iterations can find it.
-4. **Update `STRATEGY.md`** if the subagent's findings changed the long-arc plan (e.g. analogy revealed Mathlib has the structure already; refactor split a file you'd been treating as monolithic).
-5. **Update `PROGRESS.md`** with whatever new prover objectives the subagent's output enables.
+2. **Verify the work independently** using the appropriate Archon tools (`sorry_analyzer`, `lean_diagnostic_messages`, `leanblueprint checkdecls`, etc.). Trust nothing the report claims; check.
+3. **Archive the report** to `logs/iter-NNN/<name>-<slug>-report.md` so the dashboard can render it. Use `cp` to copy, not move — the `task_results/` file stays so future iterations can find it.
+4. **Update `STRATEGY.md`** if the findings changed the long-arc plan.
+5. **Update `PROGRESS.md`** with whatever new prover objectives the output enables.
 
-### Refactor subagent
+### Canonical ordering
 
-Invoking the refactor subagent should always be **strongly** motivated, both mathematically and practically. Use it when:
+When multiple subagents are needed in one iteration, the rough order is:
 
-- Some Lean files have become too large and could be decomposed into semantically meaningful modules, or some proofs are too long and could be decomposed into smaller parts.
-- The proof strategy requires structural changes to definitions, types, or module structure (modifying signatures, moving definitions, deleting or renaming a statement, etc.) that don't conflict with `archon-protected.yaml`.
+1. Read-only reviewers / analogy-style precedent lookups — gather information first.
+2. Structural / write-capable subagents (refactor-style) — make changes informed by what you learned.
+3. Envelope / verification subagents — lock in the resulting definitions.
+4. **Write prover objectives** — only after the subagents have stabilized the definitional landscape.
 
-**Before invoking:**
-
-1. Update the blueprint to reflect the desired structure. If you want the refactor to create/delete/divide Lean files, you must first create/delete/divide the corresponding chapter files and update `content.tex` accordingly. If you want the refactor to change definitions, signatures, types, or imports, the blueprint should also reflect the desired content.
-2. Use `lean_leansearch` / `lean_loogle` to verify the target definitions are compatible with Mathlib — existence checks only.
-3. If the mathematical justification is non-trivial, use the informal agent or Web Search to develop it first.
-
-The refactor subagent can change definitions, signatures, types, imports, and module structure, and can create/delete Lean files, as long as this doesn't conflict with `archon-protected.yaml`. It cannot fill proofs — broken proofs become `sorry`.
-
-**Refactor directive format** — write this to `.archon/logs/iter-NNN/refactor-<slug>-directive.md`:
-
-```markdown
-# Refactor Directive
-
-## Slug
-<slug>
-
-## Problem
-<what is structurally wrong>
-
-## Mathematical Justification
-<why the change is correct, in enough detail that the refactor agent can fix cascading type mismatches>
-
-## Changes Requested
-- File: <path>
-  - Old: <signature or definition>
-  - New: <signature or definition>
-- File: <path>
-  ...
-
-## Affected Files
-<list of files expected to break>
-
-## Expected Outcome
-<what the sorry landscape should look like after>
-```
-
-### Analogy directive
-
-Write this to `.archon/logs/iter-NNN/analogy-<slug>-directive.md`:
-
-```markdown
-# Analogy Directive
-
-## Slug
-<slug>
-
-## Files to examine
-- <path/to/file.lean>  (and specific declarations if narrower)
-- <path/to/another.lean>
-
-## Question
-<the design decision you want analogized — one or two sentences. May be broad or narrow, but must be a single question.>
-
-## Why now
-<one or two sentences: what you're about to design / refactor and why precedent would inform it>
-
-## Hints (optional)
-<any specific Mathlib namespaces or terms you suspect are relevant; the subagent translates project vocabulary to Mathlib vocabulary itself, but hints save time>
-```
-
-### Challenger directive
-
-Write this to `.archon/logs/iter-NNN/challenger-<slug>-directive.md`:
-
-```markdown
-# Challenger Directive
-
-## Slug
-<slug>
-
-## Name
-<challenge name in PascalCase, e.g. WLocalCorrectness — used as Challenges/<Name>.lean>
-
-## Target files
-- <path/to/file.lean>
-
-## Definitions to challenge
-- <Foo.bar from path/to/file.lean>
-- <Foo.baz from path/to/file.lean>
-
-## Usage context files
-<files that consume the definitions — read by the subagent to understand what the definitions must do>
-- <path/to/consumer.lean>
-
-## Mathematical description
-<what the definitions are supposed to mean, and which competing failure modes the sanity checks should rule out. Be specific: name a wrong definition and the property that would distinguish it.>
-```
+You may invoke each subagent multiple times in one iteration if justified. Each call needs a distinct slug.
 
 ## Providing Informal Content to the Prover
 

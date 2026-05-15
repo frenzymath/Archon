@@ -93,7 +93,7 @@ from archon.commands.discuss import discuss  # noqa: E402
 from archon.commands.refactor import app as refactor_app  # noqa: E402
 from archon.commands.branch import branch, inner_log  # noqa: E402
 from archon.commands.version import version as version_cmd  # noqa: E402
-from archon.commands.subagent import app as subagent_app  # noqa: E402
+from archon.commands.subagent import subagent_command  # noqa: E402
 from archon.commands.migrate import app as migrate_app  # noqa: E402
 
 app.command()(init)
@@ -108,7 +108,7 @@ app.command("branch")(branch)
 app.command("log")(inner_log)
 app.command("version")(version_cmd)
 app.add_typer(refactor_app, name="refactor")
-app.add_typer(subagent_app, name="subagent")
+app.command("subagent")(subagent_command)
 app.add_typer(migrate_app, name="migrate")
 
 if __name__ == "__main__":

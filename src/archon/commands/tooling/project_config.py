@@ -63,13 +63,18 @@ def default_config() -> dict[str, Any]:
         },
         'subagents': {
             '_help': (
-                "Per-subagent model overrides. Set to a model alias "
-                "('opus', 'sonnet', 'haiku', 'kimi', 'deepseek') or a "
-                "full model id. Null falls back to 'loop.model'."
+                "Subagent registry config. Subagents are discovered "
+                "from `.archon/subagents/<name>.md` (project) and the "
+                "shipped built-ins. `enabled` is a positive allowlist "
+                "of subagent names; null/missing falls back to every "
+                "descriptor whose frontmatter has default_enabled: true. "
+                "Each named entry (e.g. `subagents.refactor`) is an "
+                "optional per-subagent settings object; the only field "
+                "consulted today is `model` (a model alias overriding "
+                "`loop.model` for that subagent). For backward compat, "
+                "a bare string value is treated as the model alias."
             ),
-            'refactor': None,
-            'analogy': None,
-            'challenger': None,
+            'enabled': None,
         },
         'state': {
             '_help': (
@@ -205,10 +210,18 @@ def resolve(cli_value: Any, *, section: dict[str, Any], key: str, default: Any) 
 def resolve_subagent_model(
     cfg: ProjectConfig, subagent_name: str, *, fallback: str = 'opus',
 ) -> str:
-    """Pick the model for a subagent: subagents.<name> > loop.model > fallback."""
+    """Pick the model for a subagent.
+
+    Precedence: ``subagents.<name>`` (str → model alias; dict → ``.model``)
+    > ``loop.model`` > ``fallback``.
+    """
     sub_section = dict(cfg.raw.get('subagents') or {})
     val = sub_section.get(subagent_name)
-    if val:
+    if isinstance(val, dict):
+        model = val.get('model')
+        if isinstance(model, str) and model:
+            return model
+    elif isinstance(val, str) and val:
         return val
     loop_section = cfg.loop_section()
     return loop_section.get('model') or fallback
@@ -225,3 +238,28 @@ def resolve_recent_iter_window(cfg: ProjectConfig, *, fallback: int = 3) -> int:
         return int(val) if val is not None else fallback
     except (TypeError, ValueError):
         return fallback
+
+
+# ── subagent registry resolution ──────────────────────────────────────
+
+
+def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | None:
+    """Return the configured subagent allowlist, or ``None`` for "use defaults".
+
+    Schema: ``subagents.enabled`` is a list of subagent names. When
+    missing or null, the registry falls back to every descriptor whose
+    frontmatter has ``default_enabled: true``.
+
+    Returning ``None`` (not ``[]``) is what tells :func:`build_registry`
+    to use the default-enabled fallback. An explicit empty list means
+    "no subagents available" and is honored as such.
+    """
+    section = cfg.raw.get('subagents')
+    if not isinstance(section, dict):
+        return None
+    val = section.get('enabled')
+    if val is None:
+        return None
+    if not isinstance(val, list):
+        return None
+    return [str(x) for x in val if isinstance(x, (str, int, float))]

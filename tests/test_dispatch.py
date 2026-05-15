@@ -27,12 +27,18 @@ from archon.dispatch import (
 from archon.subagents.base import (
     ROOT_PARENT_SLUG,
     Subagent,
+    SubagentDescriptor,
     SubagentResult,
     WriteDomainViolation,
     _append_dispatch_jsonl,
     _domain_covers,
     _glob_covers,
 )
+
+
+def _fake_descriptor(name: str = "fake") -> SubagentDescriptor:
+    """Synthetic descriptor for the validation-only tests below."""
+    return SubagentDescriptor(name=name, description="test fake", prompt_body="")
 
 
 # ── SlotPool ─────────────────────────────────────────────────────────
@@ -190,19 +196,15 @@ class DomainCoverageTest(unittest.TestCase):
 # ── Subagent.run write-domain enforcement ───────────────────────────
 
 
-class _FakeSubagent(Subagent):
-    """Test-only subagent that doesn't actually invoke claude.
+def _make_fake_subagent(project: Path) -> Subagent:
+    """Build a Subagent from a synthetic descriptor.
 
-    Overrides ``run`` to skip the ClaudeAgent call entirely — we only
-    care about the dispatch.jsonl + validation logic upstream of the
-    agent.run() call. Tests that need to exercise the slot-pool path
-    interact with SlotPool directly above.
+    The validation tests below never call ``run`` — they exercise
+    ``_validate_write_domain`` and ``report_path`` directly, so the
+    prompt body / model resolution don't actually matter. We bypass
+    ``load_project_config`` by passing an explicit ``model``.
     """
-
-    name = "fake"
-
-    def build_prompt(self, *, directive, slug, iter_num):
-        return f"fake prompt {slug}"
+    return Subagent(_fake_descriptor("fake"), project, model="test-model")
 
 
 class WriteDomainValidationTest(unittest.TestCase):
@@ -226,7 +228,7 @@ class WriteDomainValidationTest(unittest.TestCase):
         self._td.cleanup()
 
     def test_child_in_domain_passes(self):
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         log_base = self.iter_dir / "fake-child"
         # Triggers validation only (we patch out actual run to avoid claude).
         sub._validate_write_domain(
@@ -234,7 +236,7 @@ class WriteDomainValidationTest(unittest.TestCase):
         )  # no exception
 
     def test_child_out_of_domain_raises(self):
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         with self.assertRaises(WriteDomainViolation):
             sub._validate_write_domain(
                 self.dispatch_log, "parent", ["Picard/Foo.lean"],
@@ -242,14 +244,14 @@ class WriteDomainValidationTest(unittest.TestCase):
 
     def test_root_parent_unrestricted(self):
         """ROOT_PARENT_SLUG bypasses domain enforcement."""
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         # No exception even though there's no parent record matching _root.
         sub._validate_write_domain(
             self.dispatch_log, ROOT_PARENT_SLUG, ["anything/**"],
         )
 
     def test_missing_parent_record_raises(self):
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         with self.assertRaises(WriteDomainViolation):
             sub._validate_write_domain(
                 self.dispatch_log, "nonexistent-parent", ["Anything/**"],
@@ -257,16 +259,16 @@ class WriteDomainValidationTest(unittest.TestCase):
 
     def test_empty_child_domain_skips_check(self):
         """A child that declares no domain is implicitly trusted within parent."""
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         sub._validate_write_domain(self.dispatch_log, "parent", [])
 
     def test_report_path_layout_root(self):
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         p = sub.report_path("mychild", parent_slug=ROOT_PARENT_SLUG)
         self.assertTrue(str(p).endswith("/task_results/fake-mychild.md"))
 
     def test_report_path_layout_nested(self):
-        sub = _FakeSubagent(self.project)
+        sub = _make_fake_subagent(self.project)
         p = sub.report_path("mychild", parent_slug="parent")
         self.assertTrue(str(p).endswith("/task_results/parent/fake-mychild.md"))
 

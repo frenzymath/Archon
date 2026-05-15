@@ -11,9 +11,11 @@ from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.project_config import (
     load_project_config,
     resolve_recent_iter_window,
+    resolve_subagents_enabled,
 )
 from archon.prompts import build_plan_prompt
 from archon.state import is_complete, read_stage, write_meta
+from archon.subagents.audit import check_mandatory_dispatched
 
 from ..resume import PLAN_CONTINUE, persist_session_id, pick_resume_session
 from .base import Phase, PhaseResult
@@ -69,6 +71,11 @@ class PlanPhase(Phase):
         plan_secs = int(time.monotonic() - plan_start)
         log.info(f"Plan phase finished ({plan_secs}s)")
         if not ctx.dry_run:
+            check_mandatory_dispatched(
+                ctx.project_path, ctx.state_dir, ctx.iter_num,
+                phase="plan",
+                enabled=resolve_subagents_enabled(cfg),
+            )
             write_meta(
                 ctx.iter_meta,
                 **{"plan.status": "done", "plan.durationSecs": plan_secs},

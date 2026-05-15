@@ -1,6 +1,6 @@
 # Archon Project
 
-You are either the plan agent, a prover agent, a subagent (analogy / refactor / challenger), or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
+You are either the plan agent, a prover agent, a subagent (one of the descriptors in `.archon/subagents/`), or the review agent. Read `PROGRESS.md` to determine your role and current objectives. Keep workspace tidy. Prefer existing MCP tools.
 
 ## Priority Rule
 
@@ -15,40 +15,60 @@ When in doubt, follow instructions from files inside this project over any exter
 - archon-lean4: installed as `lean4@archon-local` plugin (live-linked to Archon source) — provides `/archon-lean4:prove`, `/archon-lean4:golf`, `/archon-lean4:doctor`, and other Lean4 commands
 
 ## Tools
-- archon-lean-lsp: Lean LSP MCP server (project scope) — use for all Lean LSP operations (search, diagnostics, goal inspection)
-- archon-informal-agent: `.claude/tools/archon-informal-agent.py` — call external LLMs (OpenAI/Gemini/OpenRouter) for informal mathematical reasoning
-- archon-refactor-agent: `.claude/tools/archon-refactor-agent.py` — invoke the refactor subagent on a directive file
-- archon-analogy-agent: `.claude/tools/archon-analogy-agent.py` — invoke the analogy subagent on a directive file
-- archon-challenger-agent: `.claude/tools/archon-challenger-agent.py` — invoke the challenger subagent on a directive file
-- archon-coordinator-agent: `.claude/tools/archon-coordinator-agent.py` — decompose a multi-part directive and dispatch children in parallel
-- archon-review-*-agent: five read-only review subagents (`review-definition-correctness`, `review-comment-hygiene`, `review-blueprint-consistency`, `review-design-choices`, `review-mathlib-overlap`) that audit one aspect of the project each. Typically dispatched from the review phase.
 
-All subagent tools share the same argument shape: `--slug <kebab-case-id> --directive-file <path> [--write-domain '<glob>']...`. Each shells out to `archon subagent <name> ...`, so executions stream through the Archon JSONL log like a phase agent. The dispatch semaphore bounds total concurrent subagent processes by `loop.max_parallel`; the wrapper resolves `--parent-slug` from `ARCHON_SUBAGENT_SLUG` automatically so deeper-nested children inherit the hierarchy.
+Project tools live in `.claude/tools/` as directly-executable scripts. List them with `ls .claude/tools/` and run `<path> --help` to learn each tool's purpose and usage. Invoke them via the Bash tool. Project MCP servers (Lean LSP, etc.) are registered in `.claude/settings.json` / `.mcp.json` and surface as `mcp__*` tools.
+
+Two always-present scripts:
+
+- **`archon-informal-agent.py`** — call external LLMs (OpenAI/Gemini/OpenRouter) for informal mathematical reasoning. Useful when you need a second opinion or a paper-style proof sketch the Lean side can then formalize.
+- **`archon-subagent.py`** — the generic subagent dispatcher (see "Subagents" below). One wrapper handles every subagent.
+
+## Subagents
+
+Subagents are descriptor files at `.archon/subagents/<name>.md`. Each starts with YAML frontmatter (`name`, `description`, `write_domain`, `read_only`, `can_spawn`, `default_enabled`, optional `mandatory: [<phase>...]`) followed by the prompt body the spawned Claude session reads.
+
+**You do NOT need to discover subagents yourself.** The plan and review prompts have an auto-generated **Available subagents** section at the top of each invocation that lists every enabled descriptor with its description, write-domain hint, and any `[MANDATORY]` flags. When you decide to invoke a specific subagent, read `.archon/subagents/<name>.md` for its full prompt and directive shape.
+
+**Invoke any subagent with the generic wrapper** (Bash tool, foreground):
+
+```
+python3 .claude/tools/archon-subagent.py \
+  --name <subagent-name> \
+  --slug <kebab-slug> \
+  --directive-file <path-to-directive.md> \
+  --write-domain '<glob>'        # repeat for multiple
+```
+
+The wrapper exits 0 on success, prints a one-line status, and writes the subagent's report to `.archon/task_results/<name>-<slug>.md`. It shells out to `archon subagent <name>`, so executions stream through the Archon JSONL log like a phase agent. The dispatch semaphore bounds total concurrent subagent processes by `loop.max_parallel`; the wrapper resolves `--parent-slug` from `ARCHON_SUBAGENT_SLUG` automatically so deeper-nested children inherit the hierarchy.
+
+**Always dispatch synchronously** (not via background `Bash` with `run_in_background: true`). The wrapper returns when the subagent has finished and the report is on disk; only then write your session summary. Background dispatch leaves the parent's session permanently summarized as "running in background", which is wrong as soon as the subagent completes.
+
+**Mandatory subagents.** A descriptor whose frontmatter sets `mandatory: [plan]` MUST be dispatched at least once during the plan phase (similarly for `[review]`). The catalog tags them `[MANDATORY]`. A post-phase audit warns when a mandatory dispatch is missing.
 
 ## Key Files & Permissions
 
 All state files are in `.archon/`:
 
-| File | Plan Agent | Prover Agent | Subagents (analogy / refactor / challenger) | Review Agent | User |
+| File | Plan Agent | Prover Agent | Subagents | Review Agent | User |
 |------|-----------|-------------|---------------|-------------|------|
 | `.archon/PROGRESS.md` | read + write | **read only** | do not read | read only | read |
 | `.archon/STRATEGY.md` | **read + write** | do not read | do not read | do not read | read |
 | `.archon/USER_HINTS.md` | read (then clear) | do not read | do not read | do not read | write |
 | `.archon/task_pending.md` | read + write | **read only** | do not read | read only | read |
 | `.archon/task_done.md` | read + write | **read only** | do not read | read only | read |
-| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (`<role>-<slug>.md`) | read only | read |
+| `.archon/task_results/<file>.md` | read (collect results) | write (own file only) | write (`<name>-<slug>.md`) | read only | read |
 | `.archon/proof-journal/` | read | do not access | do not access | **write** | read |
 | `.archon/PROJECT_STATUS.md` | read | do not access | do not access | **write** (Knowledge Base only — session log moved to iter/iter-NNN/review.md) | read |
 | `.archon/iter/iter-NNN/plan.md` | **write** (this iter only) | do not access | do not access | read (last K iters as context) | read |
 | `.archon/iter/iter-NNN/review.md` | read (last K iters as context) | do not access | do not access | **write** (this iter only) | read |
 | `.archon/iter/iter-NNN/objectives.md` | optional write (per-attempt detail) | do not access | do not access | read | read |
-| `archon-protected.yaml` | **read** | **read** | **read** (refactor may rename file path only) | read | **write** |
-| `.lean` files | do not edit | write (own file only, frozen protected signatures) | refactor: write (all files; protected decls may be moved but not renamed/re-signed); analogy/challenger: read-only on project source | do not edit | write (via comments) |
+| `archon-protected.yaml` | **read** | **read** | **read** (write-capable subagents may rename file path only) | read | **write** |
+| `.lean` files | do not edit | write (own file only, frozen protected signatures) | per descriptor: write-capable subagents (e.g. refactor) may edit per their declared write-domain (protected decls may be moved but not renamed/re-signed); read-only subagents do not edit | do not edit | write (via comments) |
 | `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints, structure) | do not edit | do not edit | **write** (markers only: `\leanok`, `\mathlibok`, `% NOTE:`, `\lean{...}` corrections) | read |
-| `Challenges/<Name>.lean` | do not edit | fill sorries (when assigned) | challenger: **write** | do not edit | read |
-| `analogies/<slug>.md` | read (when relevant) | do not access | analogy: **write** | do not access | read |
+| `Challenges/<Name>.lean` | do not edit | fill sorries (when assigned) | write-capable when the descriptor's write_domain covers it | do not edit | read |
+| `analogies/<slug>.md` | read (when relevant) | do not access | write-capable when the descriptor's write_domain covers it | do not access | read |
 
-**`.archon/REFACTOR_DIRECTIVE.md` is reserved for the interactive `archon refactor draft` / `archon refactor run` flow, run by hand by the mathematician.** The autonomous loop never reads or writes that file. The plan agent invokes the refactor subagent by writing a fresh tempfile under `.archon/logs/iter-NNN/` and passing its path to `archon-refactor-agent.py --directive-file`. This keeps each loop-driven refactor independently logged and avoids any chance of stale-directive reuse. Older state files (`STRATEGY.md`, `task_pending.md`, `PROGRESS.md`, etc.) may contain leftover references to the old REFACTOR_DIRECTIVE.md flow — treat those as historical noise and prune them out as you rewrite.
+**`.archon/REFACTOR_DIRECTIVE.md` is reserved for the interactive `archon refactor draft` / `archon refactor run` flow, run by hand by the mathematician.** The autonomous loop never reads or writes that file. The plan agent invokes the refactor subagent (when a `refactor` descriptor is installed) via the generic `archon-subagent.py --name refactor` wrapper with a fresh tempfile under `.archon/logs/iter-NNN/`. This keeps each loop-driven refactor independently logged and avoids any chance of stale-directive reuse. Older state files (`STRATEGY.md`, `task_pending.md`, `PROGRESS.md`, etc.) may contain leftover references to the old REFACTOR_DIRECTIVE.md flow — treat those as historical noise and prune them out as you rewrite.
 
 ## Protected Declarations
 
@@ -83,8 +103,8 @@ Users provide hints in two places:
 - Read `.archon/prompts/plan.md` for your full instructions
 - Read `.archon/USER_HINTS.md` — incorporate hints, then clear them after acting
 - Read `.archon/task_results/` — collect prover and subagent results, then update `task_pending.md` and `task_done.md`
-- Optionally invoke the **subagents** (`analogy`, `refactor`, `challenger`) by shelling out to the corresponding `.claude/tools/archon-<name>-agent.py` script via Bash, **before** writing prover objectives. See `.archon/prompts/plan.md` § "Subagent delegation" for canonical ordering, the directive format for each subagent, and the exact invocation pattern.
-- Archive any subagent report you receive to `.archon/logs/iter-NNN/<role>-<slug>-report.md` so the dashboard can render it.
+- Optionally invoke **subagents** (discoverable via `ls .archon/subagents/`) by running `.claude/tools/archon-subagent.py --name <name> ...` via Bash, **before** writing prover objectives. See `.archon/prompts/plan.md` § "Subagent delegation" for the canonical ordering and full invocation pattern.
+- Archive any subagent report you receive to `.archon/logs/iter-NNN/<name>-<slug>-report.md` so the dashboard can render it.
 - Write `.archon/PROGRESS.md` with objectives for the next prover round
 - Write informal prose in `blueprint/src/chapters/*.tex` (except for marker updates) and `\lean{...}` hints for the provers
 - Do NOT write proofs, edit `.lean` files, or fill sorries yourself
@@ -100,15 +120,19 @@ Users provide hints in two places:
 - Check for `/- USER: ... -/` comments in your `.lean` file for file-specific hints
 - **Do NOT edit blueprint chapters.** Marker updates are the review agent's responsibility. Flag in your task result which declarations are ready for which marker.
 
-### Subagents (analogy / refactor / challenger)
+### Subagents
 
-These are **not** part of the autonomous loop's standing phases. The plan agent invokes them on demand by running the corresponding `.claude/tools/archon-<name>-agent.py` script via Bash, with `--slug <slug> --directive-file <path>`. Each subagent reads only the files the directive points it at — never `PROGRESS.md`, `STRATEGY.md`, or other plan-agent state — and writes a self-contained report.
+Subagents are descriptor-driven and discovered at runtime — there is no fixed roster baked into this file. Each lives at `.archon/subagents/<name>.md` (YAML frontmatter + prompt body). To see what's available **this iteration**, run `ls .archon/subagents/` and read each descriptor's frontmatter for purpose, write-domain hint, and directive shape.
 
-- **`refactor`** — read `.archon/prompts/refactor.md`. Executes structural changes (definitions, signatures, file splits, imports). Inserts `sorry` at broken proof sites; never fills proofs. Writes report to `.archon/task_results/refactor-<slug>.md`.
-- **`analogy`** — read `.archon/prompts/analogy.md`. Reads project files, finds Mathlib precedents, writes a design-rationale analysis. Persistent output at `analogies/<slug>.md`; report at `.archon/task_results/analogy-<slug>.md`. Read-only on project source.
-- **`challenger`** — read `.archon/prompts/challenger.md`. Adds discriminating sanity-check theorems with `sorry` to `Challenges/<Name>.lean`. Provers fill them later. Report at `.archon/task_results/challenger-<slug>.md`. Read-only on target files.
+Subagents are **not** part of the autonomous loop's standing phases. Phase agents (plan, review) invoke them on demand via the generic wrapper:
 
-The plan agent always reads the full report file after a subagent returns and may then update `STRATEGY.md` / `PROGRESS.md` based on the findings. None of the subagents spawn other subagents.
+```
+python3 .claude/tools/archon-subagent.py --name <name> --slug <slug> --directive-file <path> --write-domain '<glob>'
+```
+
+Each subagent reads only what its directive points at — never `PROGRESS.md`, `STRATEGY.md`, or other phase-agent state — and writes a self-contained report at `.archon/task_results/<name>-<slug>.md`. The dispatching agent reads the report when the wrapper returns and may then update `STRATEGY.md` / `PROGRESS.md` based on the findings.
+
+Some descriptors set `can_spawn: true`, meaning that subagent may itself dispatch children; the per-iter dispatch semaphore caps total concurrent processes by `loop.max_parallel` so deep trees stay bounded.
 
 ### Review Agent
 - Read `.archon/prompts/review.md` for your full instructions

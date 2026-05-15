@@ -38,14 +38,35 @@ function safeStat(p: string): fs.Stats | null {
 }
 
 /** Pattern for autonomous-loop subagent JSONL streams. Matches files
- *  produced by ``archon subagent <role> --slug <slug> ...`` — i.e. the
- *  ``<role>-<slug>.jsonl`` written under ``iter-NNN/`` (root-level) or
- *  ``iter-NNN/<parent-slug>/`` (hierarchical, Workstream A). The plain
- *  ``refactor.jsonl`` (legacy phase log) is intentionally NOT matched
- *  — the legacy phase log has no slug. ``coordinator`` joined the
- *  family in Workstream B; the five ``review-<aspect>`` reviewers
- *  joined in Workstream E. */
-const SUBAGENT_JSONL_RE = /^(refactor|analogy|challenger|coordinator|review-definition-correctness|review-comment-hygiene|review-blueprint-consistency|review-design-choices|review-mathlib-overlap)-(.+)\.jsonl$/;
+ *  produced by ``archon subagent <name> --slug <slug> ...`` — i.e.
+ *  ``<name>-<slug>.jsonl`` written under ``iter-NNN/`` (root-level)
+ *  or ``iter-NNN/<parent-slug>/`` (hierarchical). The regex is
+ *  *role-agnostic* on purpose — anyone can drop a new subagent
+ *  descriptor under ``.archon/subagents/`` and its JSONL stream
+ *  surfaces here without UI changes. Phase logs (``plan.jsonl``,
+ *  ``review.jsonl``, …) have no hyphen-separated slug so they don't
+ *  match. Phase logs that *do* contain a hyphen (e.g.
+ *  ``plan-post-refactor``) live in ``PHASE_LOG_STEMS`` below. */
+const SUBAGENT_JSONL_RE = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-(.+)\.jsonl$/;
+
+/** Hyphenated phase-log stems that would otherwise look like
+ *  ``<role>-<slug>``. Any new phase whose stem contains a hyphen must
+ *  be added here so the subagent matcher skips it. Pure-word phase
+ *  stems (``plan``, ``review``, ``finalize``, …) don't need listing —
+ *  they have no hyphen and so don't match the regex. */
+const PHASE_LOG_STEMS = new Set<string>([
+  'plan-post-refactor',
+  'sync-leanok',
+  'marker-sync',
+]);
+
+function matchSubagentJsonl(filename: string): { name: string; slug: string } | null {
+  const m = filename.match(SUBAGENT_JSONL_RE);
+  if (!m) return null;
+  const stem = filename.replace(/\.jsonl$/, '');
+  if (PHASE_LOG_STEMS.has(stem)) return null;
+  return { name: m[1], slug: m[2] };
+}
 
 /** Directories under iter-NNN/ that are NOT subagent-slug subdirectories
  *  and should be skipped when walking nested subagent JSONLs. ``provers``
@@ -61,31 +82,27 @@ function commitForFile(
 ): InnerCommit | undefined {
   if (!phaseCommits) return undefined;
   if (!role) return phaseCommits.latest;
-  // Plan and refactor logs cover both their own jsonl and the archived .md.
+  // Plan-side phase logs.
   if (role === 'plan' || role === 'plan-post-refactor') return phaseCommits.plan;
+  // Manual refactor artifacts (legacy named files from the
+  // interactive `archon refactor` flow).
   if (role === 'refactor' || role === 'refactor-manual'
       || role === 'refactor-directive' || role === 'refactor-report') return phaseCommits.refactor;
-  // Subagent reports archived by the plan agent — they live under the
-  // plan phase since the plan agent is the one that invoked the subagent.
-  if (role === 'analogy-report' || role === 'challenger-report'
-      || role === 'coordinator-report' || role === 'subagent-report') return phaseCommits.plan;
-  // Review subagents (Workstream E) typically run from the review
-  // phase, so route their reports + JSONL to the review commit. Fall
-  // back to plan if the review phase didn't commit (e.g. proactive
-  // invocation from plan).
-  if (role.startsWith('review-') && role.endsWith('-report')) {
+  // Subagent reports + JSONL streams: route by name heuristic.
+  // Anything mentioning "review" goes to the review commit (with plan
+  // fallback) — review-* subagents typically dispatch from review.
+  // Everything else goes to the plan commit, since the plan agent is
+  // the usual dispatcher for in-loop subagents.
+  const looksReview =
+    role.startsWith('review-')
+    || role.startsWith('subagent-review-')
+    || role.includes('-review-');
+  if (looksReview) {
     return phaseCommits.review ?? phaseCommits.plan;
   }
-  if (role.startsWith('subagent-review-')) {
-    return phaseCommits.review ?? phaseCommits.plan;
+  if (role.startsWith('subagent-') || role.endsWith('-report')) {
+    return phaseCommits.plan;
   }
-  // Subagent JSONL streams (refactor/analogy/challenger/coordinator
-  // invocations from inside the plan agent). Route them to the plan
-  // commit — there's no separate phase commit for an in-loop subagent
-  // run. Also covers deeper-nested children spawned by a coordinator
-  // (Workstream A hierarchical dispatch).
-  if (role === 'subagent-refactor' || role === 'subagent-analogy'
-      || role === 'subagent-challenger' || role === 'subagent-coordinator') return phaseCommits.plan;
   if (role === 'review') return phaseCommits.review;
   if (role === 'finalize') return phaseCommits.finalize;
   if (role === 'prover') {
@@ -160,20 +177,25 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       const phaseCommits = phaseByIter.get(dir);
 
       // Standard JSONL logs at the iteration root.
-      for (const f of fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl') && f !== 'provers-combined.jsonl')) {
+      // `dispatch.jsonl` carries dispatch_start/dispatch_end metadata
+      // for the dispatch-tree endpoint; it is NOT a renderable session
+      // log (no shell/thinking/tool_call/text events). Including it
+      // here surfaces an empty sidebar entry the LogViewer can't
+      // render, which is exactly what we want to avoid.
+      for (const f of fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl') && !f.endsWith('.raw.jsonl') && f !== 'provers-combined.jsonl' && f !== 'dispatch.jsonl')) {
         const full = path.join(dirPath, f);
         const stat = safeStat(full);
         if (!stat || !stat.isFile()) continue;
 
-        // Subagent JSONL streams emit `<role>-<slug>.jsonl`. Tag them
-        // with role=`subagent-<role>` and surface the bare slug so the
+        // Subagent JSONL streams emit `<name>-<slug>.jsonl`. Tag them
+        // with role=`subagent-<name>` and surface the bare slug so the
         // dashboard can render them under their role with the slug
         // shown alongside, instead of one anonymous "refactor-foo" tag.
-        const subagentMatch = f.match(SUBAGENT_JSONL_RE);
+        const subagentMatch = matchSubagentJsonl(f);
         const role = subagentMatch
-          ? `subagent-${subagentMatch[1]}`
+          ? `subagent-${subagentMatch.name}`
           : f.replace('.jsonl', '');
-        const subagentSlug = subagentMatch ? subagentMatch[2] : undefined;
+        const subagentSlug = subagentMatch ? subagentMatch.slug : undefined;
 
         files.push({
           name: f, path: `${dir}/${f}`, size: stat.size, modified: stat.mtime.toISOString(), role,
@@ -199,22 +221,20 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         });
       }
 
-      // Subagent reports archived by the plan agent. The agreed
-      // convention (see prompts/plan.md > "After each subagent returns")
-      // is `<role>-<slug>-report.md` with role ∈ {analogy, challenger,
-      // refactor, coordinator}. Surface each as a separate artifact in
-      // the iter sidebar so the dashboard can render the report inline.
-      const subagentReportRe = /^(analogy|challenger|refactor|coordinator|review-definition-correctness|review-comment-hygiene|review-blueprint-consistency|review-design-choices|review-mathlib-overlap)-(.+)-report\.md$/;
+      // Subagent reports archived by the plan agent. Convention:
+      // `<name>-<slug>-report.md`. Role-agnostic match so newly-added
+      // subagents surface without UI changes — only legacy phase
+      // artifacts (refactor-report.md, refactor-directive.md) need
+      // explicit skips.
+      const subagentReportRe = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-(.+)-report\.md$/;
       for (const f of fs.readdirSync(dirPath)) {
         const m = f.match(subagentReportRe);
         if (!m) continue;
-        // Skip the legacy plain refactor-report.md (no slug between
-        // "refactor-" and "-report") — it's already handled above.
         if (f === 'refactor-report.md' || f === 'refactor-directive.md') continue;
         const full = path.join(dirPath, f);
         const stat = safeStat(full);
         if (!stat || !stat.isFile()) continue;
-        const role = `${m[1]}-report`;  // e.g. "analogy-report"
+        const role = `${m[1]}-report`;  // e.g. "analogy-report", "blueprint-writer-report"
         files.push({
           name: f,
           path: `${dir}/${f}`,
@@ -239,13 +259,13 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         if (!subStat || !subStat.isDirectory()) continue;
         for (const f of fs.readdirSync(subPath)) {
           if (!f.endsWith('.jsonl') || f.endsWith('.raw.jsonl')) continue;
-          const subagentMatch = f.match(SUBAGENT_JSONL_RE);
+          const subagentMatch = matchSubagentJsonl(f);
           if (!subagentMatch) continue;
           const full = path.join(subPath, f);
           const stat = safeStat(full);
           if (!stat || !stat.isFile()) continue;
-          const role = `subagent-${subagentMatch[1]}`;
-          const subagentSlug = subagentMatch[2];
+          const role = `subagent-${subagentMatch.name}`;
+          const subagentSlug = subagentMatch.slug;
           files.push({
             name: f,
             path: `${dir}/${sub}/${f}`,

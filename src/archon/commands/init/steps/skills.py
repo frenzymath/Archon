@@ -34,6 +34,7 @@ class SkillsStep(InitStep):
         self._register_marketplace(home, skills_dir)
         self._install_plugin(home)
         self._copy_archon_tools()
+        self._copy_subagent_descriptors()
         self._cleanup_legacy_subagents()
 
     # ── private ────────────────────────────────────────────────────────
@@ -87,32 +88,15 @@ class SkillsStep(InitStep):
             log.error(f"Failed to install lean4@archon-local: {output.strip()}")
             raise typer.Exit(1)
 
-    # The single ``subagent_wrapper.py`` source is installed under one
-    # filename per subagent role; the wrapper itself derives its role
-    # from ``sys.argv[0]``. Keeping the list here (instead of in the
-    # wrapper) means adding a new subagent is a one-line edit.
-    _SUBAGENT_ROLES = (
-        "refactor", "analogy", "challenger", "coordinator",
-        "review-definition-correctness",
-        "review-comment-hygiene",
-        "review-blueprint-consistency",
-        "review-design-choices",
-        "review-mathlib-overlap",
-    )
     _SUBAGENT_WRAPPER_STEM = "subagent_wrapper"
 
     def _copy_archon_tools(self) -> None:
         """Copy every Archon tool script into the project's .claude/tools/.
 
         Each script in our package's ``data/tools/`` becomes
-        ``.claude/tools/archon-<stem-with-dashes>.py`` in the project. The
-        sole exception is ``subagent_wrapper.py``: it's installed under
-        one role-specific name per subagent (see ``_SUBAGENT_ROLES``)
-        so Claude can keep invoking ``archon-<role>-agent.py`` while
-        the underlying script is single-sourced.
-
-        The plan agent's CLAUDE.md and prompt document the invocation
-        patterns; Claude calls them via Bash.
+        ``.claude/tools/archon-<stem-with-dashes>.py`` in the project,
+        with the wrapper installed once as ``archon-subagent.py``
+        (no per-role copies anymore — the wrapper takes ``--name``).
         """
         ctx = self.ctx
         tools_src = data_path("tools")
@@ -125,20 +109,27 @@ class SkillsStep(InitStep):
 
         for src in sorted(tools_src.glob("*.py")):
             if src.stem == self._SUBAGENT_WRAPPER_STEM:
-                self._install_subagent_wrappers(src, tools_dst)
-                continue
-            # informal_agent.py -> archon-informal-agent.py
-            stem = src.stem.replace("_", "-")
-            dst = tools_dst / f"archon-{stem}.py"
+                dst = tools_dst / "archon-subagent.py"
+            else:
+                # informal_agent.py -> archon-informal-agent.py
+                stem = src.stem.replace("_", "-")
+                dst = tools_dst / f"archon-{stem}.py"
             copy_file(src, dst, overwrite=True)
             log.success(f"Copied {dst.name}")
 
-        # Older Archon installs created one file per role; the wrapper
-        # source is now consolidated. Sweep any abandoned per-role file
-        # that doesn't match our installed naming scheme so the project
-        # doesn't carry stale logic. (We only remove files we know we
-        # used to install — never anything else under .claude/tools/.)
+        # Sweep abandoned per-role wrapper files from previous Archon
+        # versions. We only remove files we know we used to install —
+        # never anything else under .claude/tools/.
         for stale in (
+            "archon-refactor-agent.py",
+            "archon-analogy-agent.py",
+            "archon-challenger-agent.py",
+            "archon-coordinator-agent.py",
+            "archon-review-definition-correctness-agent.py",
+            "archon-review-comment-hygiene-agent.py",
+            "archon-review-blueprint-consistency-agent.py",
+            "archon-review-design-choices-agent.py",
+            "archon-review-mathlib-overlap-agent.py",
             "archon-refactor-wrapper.py",
             "archon-analogy-wrapper.py",
             "archon-challenger-wrapper.py",
@@ -147,12 +138,26 @@ class SkillsStep(InitStep):
             if stale_path.is_file():
                 stale_path.unlink()
 
-    def _install_subagent_wrappers(self, src: Path, tools_dst: Path) -> None:
-        """Install ``subagent_wrapper.py`` under one filename per role."""
-        for role in self._SUBAGENT_ROLES:
-            dst = tools_dst / f"archon-{role}-agent.py"
+    def _copy_subagent_descriptors(self) -> None:
+        """Copy every built-in subagent descriptor into ``.archon/subagents/``.
+
+        Each ``.md`` in our package's ``subagents/`` directory becomes a
+        peer of any project-local descriptor under
+        ``.archon/subagents/``. This is what makes agent-side discovery
+        via ``ls .archon/subagents/`` see the built-in defaults
+        — the registry would also resolve them at runtime, but the
+        agent has no way to ``ls`` into our package.
+        """
+        ctx = self.ctx
+        src_dir = data_path("subagents")
+        dst_dir = ctx.project_path / ".archon" / "subagents"
+        if not src_dir.is_dir():
+            return
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for src in sorted(src_dir.glob("*.md")):
+            dst = dst_dir / src.name
             copy_file(src, dst, overwrite=True)
-            log.success(f"Copied {dst.name}")
+            log.success(f"Copied subagent descriptor {dst.name}")
 
     def _cleanup_legacy_subagents(self) -> None:
         """Remove pre-migration ``.claude/agents/{analogy,challenger,refactor}.md``.

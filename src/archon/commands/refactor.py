@@ -216,7 +216,18 @@ class RefactorRunCommand:
     def _invoke_agent(
         self, resolved: Path, state_dir: Path, iter_num: int, directive: str,
     ) -> tuple[bool, int]:
-        from archon.subagents.refactor import RefactorSubagent
+        from archon.subagents.base import Subagent
+        from archon.subagents.registry import build_registry
+
+        registry = build_registry(resolved)
+        descriptor = registry.get("refactor")
+        if descriptor is None:
+            log.error(
+                "No `refactor` subagent descriptor found. Drop a "
+                "`.archon/subagents/refactor.md` file (or list it under "
+                "`subagents.enabled` in config.json) and try again."
+            )
+            raise typer.Exit(1)
 
         iter_log_dir = state_dir / "logs" / f"iter-{iter_num:03d}"
         iter_log_dir.mkdir(parents=True, exist_ok=True)
@@ -227,8 +238,9 @@ class RefactorRunCommand:
         slug = "cli"
         log_base = iter_log_dir / f"refactor-{slug}"
 
-        sub = RefactorSubagent(
-            resolved, model=self.model, verbose_logs=self.verbose_logs,
+        sub = Subagent(
+            descriptor, resolved,
+            model=self.model, verbose_logs=self.verbose_logs,
         )
         result = sub.run(
             directive=directive, slug=slug, iter_num=iter_num, log_base=log_base,

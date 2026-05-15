@@ -1,28 +1,19 @@
-"""Base class for Python-driven Archon subagents.
+"""Descriptor-driven Archon subagents.
 
-Each subagent is a thin wrapper around ``ClaudeAgent`` that bakes in a
-fixed role tag, prompt template, and report path. Both the CLI (e.g.
-``archon refactor run``) and the in-loop tool scripts (e.g.
-``.claude/tools/archon-refactor-agent.py``) instantiate these classes
-and call ``run()``, so the two execution paths share one code path —
-which is the whole point of the migration: the stream parser sees
-every subagent invocation regardless of who triggered it.
+One generic ``Subagent`` class drives every subagent invocation. Role
+differences come from a :class:`SubagentDescriptor` parsed from
+``.archon/subagents/<name>.md`` (YAML frontmatter + prompt body).
 
-Hierarchical dispatch (Workstream A): when ``ARCHON_DISPATCH_SLOTS_DIR``
-is set (the autonomous loop sets it at iter start), ``run()`` also:
+Adding a new subagent = drop a single ``.md`` file in the project's
+subagent directory (or the built-in one). No Python subclass needed.
 
-* Acquires a slot from the per-iteration :class:`~archon.dispatch.SlotPool`
-  so the total number of concurrent Claude subagent processes stays
-  bounded by ``max_parallel`` regardless of how deep the subagent tree
-  is.
-* Validates that the caller-declared ``write_domain`` is a subset of
-  the parent's domain (parent's record comes from ``dispatch.jsonl``).
-* Appends a start/end record to ``logs/iter-NNN/dispatch.jsonl`` so the
-  dashboard can render the subagent tree and downstream tooling can
-  audit who wrote what.
-
-When the env var is absent (the manual CLI flow ``archon refactor run``),
-all of the above is skipped — behaviour matches the pre-dispatch model.
+Hierarchical dispatch (unchanged from the pre-refactor model): when
+``ARCHON_DISPATCH_SLOTS_DIR`` is set (the autonomous loop sets it at
+iter start), ``run()`` acquires a slot from the per-iteration
+:class:`~archon.dispatch.SlotPool`, validates that the caller-declared
+``write_domain`` is a subset of the parent's domain, and appends
+start/end records to ``logs/iter-NNN/dispatch.jsonl``. When the env
+var is absent (manual CLI flows), all of that is skipped.
 """
 
 from __future__ import annotations
@@ -32,10 +23,10 @@ import json
 import os
 import threading
 import time
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from textwrap import dedent
 
 from archon import log
 from archon.agent import ClaudeAgent, DEFAULT_MODEL
@@ -44,19 +35,10 @@ from archon.commands.tooling.project_config import (
     resolve_subagent_model,
 )
 from archon.dispatch import SlotPool
+from archon.prompts import debug_feedback_block
 
 
-# Env var that tells a Claude subprocess what slug its parent subagent
-# was running under. Set by ``Subagent.run`` for each spawned child;
-# the wrapper script reads it and forwards via ``--parent-slug``.
 PARENT_SLUG_ENV_VAR = "ARCHON_SUBAGENT_SLUG"
-
-# Marker used when a subagent has no parent (i.e. it was launched
-# directly by the plan agent, not by another subagent). Reports for
-# root-level invocations keep the legacy flat layout
-# ``task_results/<role>-<slug>.md`` rather than landing under
-# ``task_results/_root/`` — preserves back-compat with the dashboard,
-# existing prompts, and any scripts that grep task_results/.
 ROOT_PARENT_SLUG = "_root"
 
 
@@ -64,22 +46,68 @@ class WriteDomainViolation(RuntimeError):
     """Raised when a subagent's declared write-domain isn't ⊆ its parent's."""
 
 
+@dataclass(frozen=True)
+class SubagentDescriptor:
+    """One subagent's manifest.
+
+    Parsed from a ``.md`` file with YAML frontmatter — the body of
+    that file is :attr:`prompt_body`, which the spawned Claude reads
+    via ``<state_dir>/subagents/<name>.md`` (the wrapper makes sure
+    that file is on disk when the subagent starts).
+
+    Fields:
+
+    * ``name`` — role tag, filename stem, ``subagents.<name>`` config key.
+    * ``description`` — one-line summary surfaced to the dispatching
+      agent through the auto-injected catalog block.
+    * ``write_domain`` — informational hint about what files this
+      subagent typically touches. Actual enforcement uses the
+      *caller-declared* ``--write-domain`` at dispatch time.
+    * ``read_only`` — when true, the runtime prepends a "you are
+      read-only on every project source file" note to the prompt.
+    * ``can_spawn`` — informational; whether this subagent should
+      dispatch child subagents.
+    * ``default_enabled`` — registry filter when ``config.subagents.
+      enabled`` is null/missing.
+    * ``mandatory`` — list of phase names (``"plan"``, ``"review"``)
+      during which this subagent MUST be dispatched at least once.
+      The catalog renderer tags them ``[MANDATORY]``; a post-phase
+      check warns if the dispatch didn't actually happen.
+    * ``dispatcher_notes`` — multi-line text aimed at the *dispatching*
+      agent (planner / reviewer), not the spawned subagent. Surfaced
+      in the catalog's "Workflow guidance" section. Use this to
+      encode rules like "dispatch me before any Lean work" or
+      "do NOT pass STRATEGY.md in my directive". Distinct from
+      ``description`` (one-liner) and ``prompt_body`` (what the
+      spawned Claude reads).
+    * ``source_path`` / ``prompt_body`` — set by the registry loader.
+    """
+    name: str
+    description: str = ""
+    write_domain: str | None = None
+    read_only: bool = False
+    can_spawn: bool = False
+    default_enabled: bool = True
+    mandatory: tuple[str, ...] = ()
+    dispatcher_notes: str = ""
+    prompt_body: str = ""
+    source_path: Path | None = None
+
+    def is_mandatory_for(self, phase: str) -> bool:
+        return phase in self.mandatory
+
+
 @dataclass
 class SubagentResult:
     ok: bool
     duration_s: int
-    report_path: Path | None        # None if the agent didn't write one
-    summary: str                    # one-line summary, "" if none
+    report_path: Path | None
+    summary: str
 
 
 @dataclass
 class DispatchRecord:
-    """One row in ``logs/iter-NNN/dispatch.jsonl``.
-
-    Two rows are emitted per Subagent.run call:
-    * ``event="dispatch_start"`` just before agent.run
-    * ``event="dispatch_end"`` after, with ``ok`` and ``duration_s``
-    """
+    """One row in ``logs/iter-NNN/dispatch.jsonl``."""
     role: str
     slug: str
     parent_slug: str
@@ -91,11 +119,6 @@ def _now_iso() -> str:
 
 
 def _append_dispatch_jsonl(path: Path, row: dict[str, object]) -> None:
-    """Append one JSON object to dispatch.jsonl, creating it if needed.
-
-    Best-effort: an OSError here doesn't abort the run, just degrades
-    the dashboard's subagent-tree view.
-    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
@@ -105,7 +128,6 @@ def _append_dispatch_jsonl(path: Path, row: dict[str, object]) -> None:
 
 
 def _read_dispatch_jsonl(path: Path) -> list[dict[str, object]]:
-    """Read dispatch.jsonl, returning [] if missing or unreadable."""
     if not path.exists():
         return []
     rows: list[dict[str, object]] = []
@@ -126,11 +148,6 @@ def _read_dispatch_jsonl(path: Path) -> list[dict[str, object]]:
 def _find_parent_record(
     rows: list[dict[str, object]], parent_slug: str,
 ) -> dict[str, object] | None:
-    """Return the most recent ``dispatch_start`` row for ``parent_slug``.
-
-    ``_root`` has no record (top-level subagents are fully trusted).
-    Returns the start row so the caller can read its ``write_domain``.
-    """
     if parent_slug == ROOT_PARENT_SLUG:
         return None
     for row in reversed(rows):
@@ -142,24 +159,8 @@ def _find_parent_record(
 
 
 def _domain_covers(parent_globs: list[str], child_globs: list[str]) -> bool:
-    """True iff every glob in ``child_globs`` is covered by ``parent_globs``.
-
-    Coverage is structural: child glob X is covered when some parent
-    glob P matches X *as a string*, OR when fnmatch agrees that any
-    path P matches would also match X. This is best-effort static
-    glob-containment — we don't expand against the filesystem. Two
-    cheap cases handle the realistic uses:
-
-    * Parent ``**`` (or unrestricted): covers any child.
-    * Parent ``Algebra/**`` covers child ``Algebra/Foo.lean`` and
-      ``Algebra/Bar/**`` etc.
-
-    Conservative: when in doubt, we refuse. That's the safer default
-    for a hard error.
-    """
+    """True iff every glob in ``child_globs`` is covered by ``parent_globs``."""
     if not parent_globs:
-        # Parent declared nothing — interpret as "unrestricted"
-        # (only the root parent can do this in practice).
         return True
     for child in child_globs:
         if not any(_glob_covers(p, child) for p in parent_globs):
@@ -168,15 +169,6 @@ def _domain_covers(parent_globs: list[str], child_globs: list[str]) -> bool:
 
 
 def _glob_covers(parent: str, child: str) -> bool:
-    """One parent-glob covers one child-glob?
-
-    Heuristic that handles the common cases for Lean projects:
-    * Equal strings → covered.
-    * Parent ends with ``**`` and child startswith the prefix → covered.
-    * Parent is a directory prefix of child (substring before ``/**``) → covered.
-    * fnmatch agreement on the child as a literal path → covered.
-    Otherwise → not covered.
-    """
     if parent == child:
         return True
     if parent in ("**", "**/*"):
@@ -187,36 +179,32 @@ def _glob_covers(parent: str, child: str) -> bool:
             return True
     if parent.endswith("/*"):
         prefix = parent[:-2]
-        # Parent matches one segment under prefix; child can be that one
-        # segment, or a sub-glob entirely under the same segment.
         if "/" not in child.removeprefix(prefix + "/") and child.startswith(prefix + "/"):
             return True
-    # Fallback: treat child as a literal path candidate.
     if fnmatch.fnmatch(child, parent):
         return True
     return False
 
 
-class Subagent(ABC):
-    """One Python-driven subagent invocation.
+class Subagent:
+    """One descriptor-driven subagent invocation.
 
-    Subclasses set ``name`` (used as the role tag, the report-filename
-    stem, and the config.json key) and override ``build_prompt``. The
-    default ``report_path`` uses
-    ``task_results/<parent_slug>/<name>-<slug>.md`` (or the flat layout
-    when ``parent_slug == _root``); subclasses can override only when
-    their report convention truly differs.
+    Construct with a :class:`SubagentDescriptor`; the CLI / wrapper
+    look this up via :mod:`archon.subagents.registry`. All differences
+    between subagents (name, prompt body, read-only-ness, default
+    write-domain hint) come from the descriptor.
     """
-
-    name: str = ""
 
     def __init__(
         self,
+        descriptor: SubagentDescriptor,
         project_path: Path,
         *,
         model: str | None = None,
         verbose_logs: bool = False,
     ) -> None:
+        self.descriptor = descriptor
+        self.name = descriptor.name
         self.project_path = project_path
         self.verbose_logs = verbose_logs
         if model is not None:
@@ -227,30 +215,61 @@ class Subagent(ABC):
                 cfg, self.name, fallback=DEFAULT_MODEL,
             )
 
-    # ── overrides ────────────────────────────────────────────────────
+    # ── prompt envelope ─────────────────────────────────────────────
 
-    @abstractmethod
     def build_prompt(
         self, *, directive: str, slug: str, iter_num: int,
     ) -> str:
-        ...
+        """Compose the runtime prompt envelope.
+
+        The body the spawned Claude reads sits in
+        ``<state_dir>/subagents/<name>.md`` (shipped from the
+        descriptor's ``source_path`` during ``archon init`` and
+        refreshed by the registry as needed). This envelope just
+        wires up the runtime variables and the directive.
+        """
+        state_dir = self.project_path / ".archon"
+        cfg = load_project_config(self.project_path)
+        debug_feedback = bool(cfg.loop_section().get("debug_feedback"))
+        read_only_note = (
+            "\nYou are READ-ONLY on every project source file. Your "
+            "only writable target is the report path above.\n"
+            if self.descriptor.read_only else ""
+        )
+        return dedent(f"""\
+            You are the {self.name} subagent for project '{self.project_path.name}'.
+            Archon iteration: {iter_num:03d}.
+            Project directory: {self.project_path}
+            Project state directory: {state_dir}
+
+            Slug: {slug}
+
+            Read {state_dir}/subagents/{self.name}.md for your full instructions.
+            Read {state_dir}/CLAUDE.md for project-wide context.
+
+            Your directive (also reproduced below for convenience) is at:
+              {state_dir}/logs/iter-{iter_num:03d}/{self.name}-{slug}-directive.md
+
+            DIRECTIVE:
+            {directive}
+
+            Report: {state_dir}/task_results/{self.name}-{slug}.md
+            (When invoked as a child of another subagent, your report
+            lands at task_results/<parent_slug>/{self.name}-{slug}.md
+            — the Archon CLI handles the path automatically.)
+            {read_only_note}""") + debug_feedback_block(
+                debug_feedback, state_dir, f"{self.name} ({slug})", iter_num,
+            )
 
     def report_path(
         self, slug: str, *, parent_slug: str = ROOT_PARENT_SLUG,
     ) -> Path:
-        """Where the subagent is told to write its report.
-
-        Default: ``task_results/<role>-<slug>.md`` for root invocations
-        (back-compat), ``task_results/<parent>/<role>-<slug>.md``
-        otherwise. Subclasses override only if the location truly
-        differs.
-        """
         base = self.project_path / ".archon" / "task_results"
         if parent_slug == ROOT_PARENT_SLUG:
             return base / f"{self.name}-{slug}.md"
         return base / parent_slug / f"{self.name}-{slug}.md"
 
-    # ── run ──────────────────────────────────────────────────────────
+    # ── run ─────────────────────────────────────────────────────────
 
     def run(
         self,
@@ -263,25 +282,8 @@ class Subagent(ABC):
         write_domain: list[str] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> SubagentResult:
-        """Run the subagent.
-
-        ``parent_slug`` identifies which subagent (if any) spawned this
-        one. ``ROOT_PARENT_SLUG`` indicates a top-level invocation by
-        the plan agent. ``write_domain`` is the caller-declared list of
-        glob patterns this subagent (and any of its descendants) is
-        allowed to write to; validated against the parent's declared
-        domain via ``dispatch.jsonl``.
-
-        ``cancel_event`` is forwarded to ``ClaudeAgent.run``; setting it
-        from another thread tears down the spawned ``claude`` process
-        the same way multilane does for slow lanes. When cancellation
-        wins the race the result has ``ok=False`` and any partial
-        report on disk is still picked up.
-        """
         write_domain = list(write_domain or [])
 
-        # Validate write-domain against the parent's record before
-        # spawning anything — fail-fast saves a useless Claude run.
         dispatch_log = self._dispatch_log_for(log_base, iter_num)
         if dispatch_log is not None:
             self._validate_write_domain(
@@ -293,8 +295,6 @@ class Subagent(ABC):
         )
         agent = ClaudeAgent(model=self.model, role=self.name)
 
-        # Record dispatch_start BEFORE acquiring a slot so the
-        # dashboard sees "waiting for slot" entries promptly.
         start_ts = _now_iso()
         if dispatch_log is not None:
             _append_dispatch_jsonl(dispatch_log, {
@@ -308,8 +308,6 @@ class Subagent(ABC):
                 "pid": os.getpid(),
             })
 
-        # Tell our child Claude what slug to forward as parent on its
-        # own subagent calls. The wrapper script reads this env var.
         env_overrides = {PARENT_SLUG_ENV_VAR: slug}
 
         start = time.monotonic()
@@ -325,7 +323,6 @@ class Subagent(ABC):
                     env_overrides=env_overrides,
                 )
         else:
-            # CLI flow (archon refactor run) — no slot pool exists.
             ok = agent.run(
                 prompt,
                 cwd=self.project_path,
@@ -361,20 +358,11 @@ class Subagent(ABC):
             summary=self._extract_summary(report),
         )
 
-    # ── helpers ──────────────────────────────────────────────────────
+    # ── helpers ─────────────────────────────────────────────────────
 
     def _dispatch_log_for(
         self, log_base: Path, iter_num: int,
     ) -> Path | None:
-        """Locate ``logs/iter-NNN/dispatch.jsonl`` for this run.
-
-        Returns ``None`` when we're not inside an Archon loop iteration
-        (the manual ``archon refactor run`` flow uses a different log
-        layout). Detection: ``log_base`` should sit under an iter dir;
-        if it doesn't, the SlotPool will also be unset and we skip all
-        of the dispatch bookkeeping.
-        """
-        # log_base is typically <state>/logs/iter-NNN/<role>-<slug>
         candidate = log_base.parent
         if not candidate.name.startswith("iter-"):
             return None
@@ -386,16 +374,9 @@ class Subagent(ABC):
         parent_slug: str,
         write_domain: list[str],
     ) -> None:
-        """Raise WriteDomainViolation if write_domain ⊄ parent's domain."""
         if parent_slug == ROOT_PARENT_SLUG:
-            # Top-level invocations are trusted (plan agent is in
-            # charge). Nothing to validate against.
             return
         if not write_domain:
-            # No domain declared; nothing to check. (Children that
-            # don't declare a domain are implicitly trusted within
-            # their parent's domain — the parent's own validation
-            # already constrained the family.)
             return
         rows = _read_dispatch_jsonl(dispatch_log)
         parent = _find_parent_record(rows, parent_slug)

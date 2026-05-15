@@ -211,6 +211,122 @@ def _iter_sidecar_context_block(
     return body
 
 
+def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
+    """Render the available-subagents catalog for a phase agent.
+
+    Auto-injected into ``build_plan_prompt`` / ``build_review_prompt``
+    so the phase agent sees the full enabled roster without having to
+    ``ls .archon/subagents/`` itself. Descriptor frontmatter drives
+    the content — adding/removing a subagent is one file, no template
+    edits.
+
+    For each enabled descriptor we surface: ``name``, the
+    ``description``, the ``write_domain`` hint, whether it's
+    ``read_only``, whether it ``can_spawn`` children, and whether it
+    is ``mandatory`` for the calling phase. Mandatory subagents get
+    an explicit "you MUST dispatch" instruction at the bottom so the
+    agent can't miss it.
+    """
+    from archon.commands.tooling.project_config import (
+        load_project_config,
+        resolve_subagents_enabled,
+    )
+    from archon.subagents.registry import build_registry
+
+    cfg = load_project_config(project_path)
+    enabled = resolve_subagents_enabled(cfg)
+    registry = build_registry(project_path, enabled=enabled)
+
+    if len(registry) == 0:
+        return dedent("""
+
+            ## Available subagents
+
+            None are installed for this project. Drop descriptors at
+            ``.archon/subagents/<name>.md`` (YAML frontmatter + prompt
+            body) to make subagents available — or list desired names
+            under ``subagents.enabled`` in ``config.json`` if some are
+            shipped with ``default_enabled: false``.
+        """)
+
+    descriptors = registry.descriptors()
+    mandatory_for_role = [d for d in descriptors if d.is_mandatory_for(role)]
+
+    lines = ["", "## Available subagents", ""]
+    for d in descriptors:
+        tags: list[str] = []
+        if d.is_mandatory_for(role):
+            tags.append("MANDATORY")
+        if d.read_only:
+            tags.append("read-only")
+        if d.can_spawn:
+            tags.append("can spawn children")
+        tag_str = f" [{' · '.join(tags)}]" if tags else ""
+
+        domain = d.write_domain or "(see directive — caller declares)"
+        # Single-line, truncated description; full body lives in
+        # ``.archon/subagents/<name>.md`` and the agent reads it
+        # when it actually decides to invoke that subagent.
+        desc = (d.description or "").strip().splitlines()
+        short = desc[0] if desc else ""
+        if len(short) > 200:
+            short = short[:197] + "..."
+        lines.append(f"- **{d.name}**{tag_str} — write: `{domain}` — {short}")
+
+    lines.append("")
+    lines.append(
+        "Invoke any subagent via the generic wrapper (Bash, foreground):"
+    )
+    lines.append("")
+    lines.append("```")
+    lines.append("python3 .claude/tools/archon-subagent.py \\")
+    lines.append("  --name <name> \\")
+    lines.append("  --slug <kebab-slug> \\")
+    lines.append("  --directive-file <path-to-directive.md> \\")
+    lines.append("  --write-domain '<glob>'        # repeat for multiple")
+    lines.append("```")
+    lines.append("")
+    lines.append(
+        "When you decide to invoke a subagent, read its full prompt "
+        "and directive shape from `.archon/subagents/<name>.md` "
+        "before composing the directive."
+    )
+
+    if mandatory_for_role:
+        names = ", ".join(f"`{d.name}`" for d in mandatory_for_role)
+        lines.append("")
+        lines.append(
+            f"**You MUST dispatch every [MANDATORY] subagent before "
+            f"completing this phase.** For this phase that means: {names}. "
+            f"A post-phase check warns if any mandatory dispatch is missing."
+        )
+
+    # Workflow guidance section: aggregate dispatcher_notes from
+    # every enabled descriptor that has any. Lets each subagent ship
+    # its own "how to dispatch me / how to use my output" rules
+    # without needing prompt edits.
+    with_notes = [d for d in descriptors if d.dispatcher_notes.strip()]
+    if with_notes:
+        lines.append("")
+        lines.append("## Workflow guidance from active subagents")
+        lines.append("")
+        lines.append(
+            "Each enabled subagent below carries usage instructions for "
+            "you (the dispatching agent). Read these as workflow rules "
+            "that apply this iteration — they encode how to USE the "
+            "subagent and when in your phase to dispatch it."
+        )
+        for d in with_notes:
+            lines.append("")
+            lines.append(f"### {d.name}")
+            lines.append("")
+            # Preserve internal formatting (multi-line frontmatter
+            # strings often start with hyphenated bullets already).
+            lines.append(d.dispatcher_notes.rstrip())
+
+    return "\n".join(lines) + "\n"
+
+
 # ── prompt builders ───────────────────────────────────────────────────
 
 
@@ -273,6 +389,7 @@ def build_plan_prompt(
         state_dir, iter_num,
         role="plan", window=recent_iter_window,
     )
+    catalog_block = _subagent_catalog_block(project_path, role="plan")
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
@@ -281,7 +398,7 @@ def build_plan_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(
@@ -367,6 +484,7 @@ def build_review_prompt(
         state_dir, iter_num,
         role="review", window=recent_iter_window,
     )
+    catalog_block = _subagent_catalog_block(project_path, role="review")
 
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
@@ -382,4 +500,4 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
+          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)

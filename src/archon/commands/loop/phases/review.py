@@ -13,9 +13,11 @@ from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.project_config import (
     load_project_config,
     resolve_recent_iter_window,
+    resolve_subagents_enabled,
 )
 from archon.prompts import build_review_prompt
 from archon.state import write_meta
+from archon.subagents.audit import check_mandatory_dispatched
 
 from ..resume import REVIEW_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import data_path
@@ -47,6 +49,12 @@ class ReviewPhase(Phase):
         log.info(f"Review phase finished ({review_secs}s)")
         if ctx.dashboard_url:
             log.step(f"Journal: {ctx.dashboard_url}/journal")
+        cfg = load_project_config(ctx.project_path)
+        check_mandatory_dispatched(
+            ctx.project_path, ctx.state_dir, ctx.iter_num,
+            phase="review",
+            enabled=resolve_subagents_enabled(cfg),
+        )
         write_meta(ctx.iter_meta, **{
             "review.status": "done",
             "review.durationSecs": review_secs,

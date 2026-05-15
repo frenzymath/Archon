@@ -175,42 +175,41 @@ While the agents should be autonomous, you might want to inform the user of any 
 - Be extremely concise (1-2 sentences per item, listed in markdown format).
 - If nothing relevant for the user is detected, leave the file completely empty.
 
-## Step 7 (optional): Dispatch review subagents
+## Step 7: Dispatch review subagents
 
-You may dispatch any of five specialized review subagents BEFORE writing your consolidated summary. They are read-only audits whose findings you incorporate into `summary.md` / `recommendations.md`. Each runs as its own fresh-context Claude process; spawning two or more in one assistant message runs them in parallel, subject to the global `max_parallel` cap.
+You may dispatch read-only review subagents BEFORE writing your consolidated summary. They are audits whose findings you incorporate into `summary.md` / `recommendations.md`. Each runs as its own fresh-context Claude process; spawning two or more in one assistant message runs them in parallel, subject to the global `max_parallel` cap.
 
-The five reviewers:
+### Where the catalog comes from
 
-- **`review-definition-correctness`** — flags stand-in / mathematically-wrong definitions (the LineBundle failure mode). Use when this session introduced or modified `def` blocks.
-- **`review-comment-hygiene`** — flags iter-history comments in source, stale TODOs, docstring/body drift. Cheapest; useful every session.
-- **`review-blueprint-consistency`** — verifies Lean↔blueprint `\lean{...}` references resolve and signatures match. Use after refactors or when sync_leanok reports unexpected drift.
-- **`review-design-choices`** — flags parallel pipelines, re-derivations of Mathlib API, suboptimal definitional choices. Heaviest reasoning; use when the session added substantial new infrastructure.
-- **`review-mathlib-overlap`** — narrower than design-choices: scans new files for declarations whose signatures mirror existing Mathlib. Cheap when scope is one file.
+Your invocation prompt contains an auto-generated **Available subagents** section listing every enabled descriptor. Reviewers are typically marked `[read-only]`. A descriptor tagged `[MANDATORY]` for this phase MUST be dispatched before the phase completes. Do not `ls .archon/subagents/` — the catalog you were handed is authoritative.
+
+When you decide to invoke a specific reviewer, read its full prompt and directive shape from `.archon/subagents/<name>.md`.
 
 ### How to dispatch
 
-Pattern (Bash tool, parallel-able):
+Pattern (Bash tool, parallel-able, run **in foreground** so the report lands before you write your summary):
 
 ```
-python3 .claude/tools/archon-<role>-agent.py \
+python3 .claude/tools/archon-subagent.py \
+  --name <subagent-name> \
   --slug <kebab-case-slug> \
-  --directive-file .archon/logs/iter-NNN/<role>-<slug>-directive.md \
+  --directive-file .archon/logs/iter-NNN/<name>-<slug>-directive.md \
   --write-domain 'task_results/**'
 ```
 
-Each directive is fully self-contained — the reviewer reads only what the directive points it at. See each reviewer's prompt file under `.archon/prompts/<role>.md` for the exact directive shape.
+Each directive must be **fully self-contained** — the reviewer reads only what the directive points it at. The directive shape for each reviewer is documented in its descriptor under `.archon/subagents/<name>.md`.
 
 ### When NOT to dispatch
 
-- If this session was a pure proof-filling round with no new definitions or refactors, skip the reviewers. They add latency and cost for no value.
+- If this session was a pure proof-filling round with no new definitions or refactors, skip reviewers. They add latency and cost for no value.
 - If a previous session in the last 3 iters already ran the same audit on the same scope, don't repeat unless that scope changed.
-- The plan agent may also have dispatched reviewers proactively in its own phase — check `task_results/review-*` before doubling up.
+- The plan agent may also have dispatched reviewers proactively — check `task_results/` for matching reports before doubling up.
 
 ### Incorporating findings
 
 After the reviewers return, read every report. Land each finding in your `summary.md` and `recommendations.md`:
 
-- **CRITICAL / HIGH** findings → bullet at the top of `recommendations.md` with the suggested action (typically: invoke refactor next iter).
+- **CRITICAL / HIGH** findings → bullet at the top of `recommendations.md` with the suggested action.
 - **MEDIUM** findings → bullet in `recommendations.md`'s body.
 - **LOW** findings → one-liner in `summary.md`'s notes section.
 
