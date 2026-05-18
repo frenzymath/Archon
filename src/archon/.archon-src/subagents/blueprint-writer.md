@@ -4,16 +4,26 @@ description: Update one blueprint chapter to reflect strategy changes, fill miss
 write_domain: "blueprint/src/chapters/*.tex"
 read_only: false
 can_spawn: true
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
-  - Dispatch one writer per chapter that the blueprint-reviewer's
-    checklist flags as incomplete, lacking proof detail, or missing
+  - Dispatch one writer per chapter that the most recent blueprint
+    review (the blueprint-review subagent in your catalog, when
+    present) flagged as incomplete, lacking proof detail, or missing
     multi-route coverage.
   - Each directive must be precise: strategy context (the slice that
     matters for this chapter), required definitions/theorems (with
     enough mathematical detail to formalize), references, and
     explicit out-of-scope items. Writers do NOT speculate beyond
     what the directive lists.
+  - **NEVER instruct the writer to add ``\leanok`` or ``\mathlibok``
+    markers** (no "after writing the block, add `\leanok`"; no
+    "verification: confirm `\leanok` is present"). The writer's
+    descriptor forbids it — ``\leanok`` is managed by the
+    deterministic ``sync_leanok`` phase, ``\mathlibok`` by the review
+    agent. A directive that asks the writer to add markers puts it in
+    a rule conflict; the writer must obey its descriptor, so the
+    "verification" instruction will appear to fail until sync_leanok
+    runs. Leave marker concerns out of the writer's directive entirely.
   - **Authorize the retriever in the writer's --write-domain.** If
     the chapter might need fresh source material, dispatch the
     writer with TWO globs:
@@ -28,9 +38,10 @@ dispatcher_notes: |
     are missing, dispatch a writer per route to bring all routes to
     parity before any prover work begins. Do not push provers onto a
     route whose blueprint coverage is incomplete.
-  - After a significant writer round, re-dispatch blueprint-reviewer
-    in the same iteration to confirm the updated blueprint is now
-    sufficient — do not assume the writer fixed everything.
+  - After a significant writer round, re-run the blueprint review
+    in the same iteration (the relevant entry in your catalog) to
+    confirm the updated blueprint is now sufficient — do not assume
+    the writer fixed everything.
   - If a writer's report contains entries under "Strategy-modifying
     findings", STOP and update STRATEGY.md before any further Lean
     work this iter. The writer is telling you the prose surfaced a
@@ -111,6 +122,7 @@ Use `\definition`, `\lemma`, `\theorem`, `\proposition`, `\corollary` as appropr
 - Expand or revise existing prose / proof sketches in your assigned chapter.
 - Add `\uses{...}` cross-references.
 - Adjust `\lean{...}` hints when the directive names a new Lean target.
+- Read `references/summary.md` and any reference that is in `references/` to ground your writing in the project's sources.
 
 ### What you MUST do
 - **Keep the chapter valid LaTeX.** Don't leave dangling `\begin{...}` without matching `\end{...}`. Compile-checking is the plan agent's responsibility but you must not introduce syntax errors.

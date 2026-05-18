@@ -316,11 +316,17 @@ def read_meta(meta_file: Path, key: str) -> object | None:
 
 
 def extract_session_id(jsonl_path: Path) -> str | None:
-    """Return the most recent ``session_end.session_id`` in a phase JSONL.
+    """Return the most recent session id recorded in a phase JSONL.
 
-    Walks the file from the end so a phase that crashed-and-restarted
-    (two session_end events) yields the latest session — that's the one
-    the next ``--resume`` invocation should continue.
+    Preferred source: ``session_end.session_id`` (final id from a
+    clean exit). Walked from the end so a phase that crashed-and-
+    restarted (two session_end events) yields the latest session —
+    that's the one the next ``--resume`` invocation should continue.
+
+    Fallback source: ``session_meta.session_id`` — emitted by the
+    parser the first time a claude event with a session id is seen,
+    so a session that crashed before reaching its ``result`` event
+    is still resumable.
     """
     if not jsonl_path.exists():
         return None
@@ -328,6 +334,7 @@ def extract_session_id(jsonl_path: Path) -> str | None:
         text = jsonl_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None
+    # Preferred: session_end (final session id from a clean exit).
     for line in reversed(text.splitlines()):
         line = line.strip()
         if not line:
@@ -337,6 +344,20 @@ def extract_session_id(jsonl_path: Path) -> str | None:
         except json.JSONDecodeError:
             continue
         if obj.get("event") == "session_end":
+            sid = obj.get("session_id") or ""
+            if sid:
+                return sid
+    # Fallback: session_meta (captured at session start so crashed
+    # sessions are still resumable).
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("event") == "session_meta":
             sid = obj.get("session_id") or ""
             if sid:
                 return sid

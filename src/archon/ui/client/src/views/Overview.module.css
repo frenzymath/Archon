@@ -1,4 +1,13 @@
-.root { max-width: 960px; display: flex; flex-direction: column; gap: 20px; }
+/* No fixed width cap — the Overview should fill .main-content so the
+   layout looks symmetrical on wider monitors. A generous max-width of
+   1400px still prevents text lines from running edge-to-edge on
+   ultrawide displays without leaving an empty right column on 1280px. */
+.root {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; gap: 20px;
+}
 
 .alertBanner {
   /* Soft red background (using the app's standard red RGB: 203, 36, 49) */

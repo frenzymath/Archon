@@ -28,6 +28,11 @@ export interface LogFile {
   path: string;
   size: number;
   modified: string;
+  /** Server-computed first-event timestamp (first JSONL line's `ts`,
+   *  or mtime for .md artifacts). Used to render the iter file list
+   *  in execution order — server already sorts by this, so the
+   *  client only reads it for tooltips/diagnostics. */
+  startedAt?: string;
   role?: string;
   /** Slug of a subagent run (`<role>-<slug>.jsonl|.md`). Set by the
    *  server when the file is a subagent JSONL stream or report. */

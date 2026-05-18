@@ -14,7 +14,7 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
       fontSize: '13px', textAlign: 'center', fontWeight: 500,
     }}>
       ⚠ Cannot reach server — check that <code style={{ background: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: 3 }}>
-      ui/start.sh</code> is running and you're on the correct port
+      archon dashboard &lt;project&gt;</code> is running and you're on the correct port
     </div>
   );
 }

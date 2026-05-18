@@ -4,7 +4,7 @@ description: Execute structural Lean changes (definitions, signatures, file spli
 write_domain: "**"
 read_only: false
 can_spawn: true
-default_enabled: true
+default_enabled: false
 ---
 
 # Refactor Agent

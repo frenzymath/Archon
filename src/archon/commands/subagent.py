@@ -5,6 +5,12 @@ One generic command — ``archon subagent <name> --slug ... --directive-file ...
 from ``.archon/subagents/<name>.md`` descriptors (with built-in
 fall-back). Unknown names produce a clear error listing what loaded.
 
+After the subagent's run completes and its report lands at
+``task_results/<name>-<slug>.md``, this command also copies the report
+to ``logs/iter-NNN/<name>-<slug>-report.md`` so the dashboard can
+render it within the same iter — the dispatching plan agent does NOT
+need to perform that archival step itself (no agent-side ``cp``).
+
 This is the runtime entry point shared by:
 
 * The autonomous loop's in-session subagent calls (via the
@@ -15,6 +21,7 @@ This is the runtime entry point shared by:
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import typer
@@ -30,6 +37,42 @@ from archon.subagents.base import (
     WriteDomainViolation,
 )
 from archon.subagents.registry import build_registry
+
+
+def _archive_subagent_report(
+    report_path: Path,
+    iter_log_dir: Path,
+    parent_slug: str,
+    name: str,
+    slug: str,
+) -> Path | None:
+    """Copy a finished subagent's report to ``logs/iter-NNN/`` for the dashboard.
+
+    The original report stays under ``task_results/`` so the dispatching
+    agent (and downstream subagents) can still find it. Returns the
+    destination path on success, ``None`` when the source is missing
+    or the copy fails. Failures are non-fatal — the loop still
+    benefits from the source under ``task_results/``.
+
+    The destination mirrors the parent-slug hierarchy so nested
+    dispatches land under their parent's directory in the iter logs.
+    """
+    if not report_path or not report_path.is_file():
+        return None
+    if parent_slug == ROOT_PARENT_SLUG:
+        dest_dir = iter_log_dir
+    else:
+        dest_dir = iter_log_dir / parent_slug
+    dest_path = dest_dir / f"{name}-{slug}-report.md"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(report_path, dest_path)
+    except OSError as e:
+        log.warn(
+            f"could not archive {name}/{slug} report to {dest_path}: {e}"
+        )
+        return None
+    return dest_path
 
 
 def subagent_command(
@@ -109,7 +152,20 @@ def subagent_command(
 
     status = "COMPLETE" if result.ok else "INCOMPLETE"
     if result.report_path:
-        print(f"{slug}: {status} — see {result.report_path}")
+        # Auto-archive to logs/iter-NNN/ so the dashboard can render
+        # the report alongside the JSONL stream. The dispatching plan
+        # agent doesn't need to copy this itself.
+        archived = _archive_subagent_report(
+            result.report_path, iter_log_dir, parent_slug,
+            descriptor.name, slug,
+        )
+        if archived is not None:
+            print(
+                f"{slug}: {status} — see {result.report_path} "
+                f"(archived: {archived})"
+            )
+        else:
+            print(f"{slug}: {status} — see {result.report_path}")
     else:
         print(f"{slug}: {status} (no report written)")
     raise typer.Exit(0 if result.ok else 1)

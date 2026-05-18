@@ -147,6 +147,7 @@ def terminal(s):
     print(s, flush=True)
 
 last_result = ''
+session_id_emitted = False
 
 for line in sys.stdin:
     line = line.strip()
@@ -160,6 +161,16 @@ for line in sys.stdin:
         obj = json.loads(line)
     except json.JSONDecodeError:
         continue
+
+    # Capture the session id from the first event that carries it
+    # (every claude-code event has `session_id` at the top level). Emit
+    # a `session_meta` row so extract_session_id can recover the id
+    # even when the run crashes before reaching the `result` event.
+    if not session_id_emitted:
+        early_sid = obj.get('session_id', '') or ''
+        if early_sid:
+            emit('session_meta', session_id=early_sid)
+            session_id_emitted = True
 
     t = obj.get('type', '')
 
@@ -197,6 +208,7 @@ for line in sys.stdin:
                     emit('tool_result', content='\n'.join(texts))
 
     elif t == 'result':
+        import re as _re_session
         cost = obj.get('total_cost_usd', 0) or obj.get('cost_usd', 0) or 0
         duration = obj.get('duration_ms', 0) or 0
         turns = obj.get('num_turns', 0) or 0
@@ -204,7 +216,25 @@ for line in sys.stdin:
         result = obj.get('result', '')
         usage = obj.get('usage', {{}}) or {{}}
         model_usage = obj.get('modelUsage', {{}}) or {{}}
+        used_fallback = not (isinstance(result, str) and result)
         summary = result if isinstance(result, str) and result else last_result
+
+        # Detect "session ended mid-dispatch": when Claude Code returned
+        # no final result (empty `result` field) AND last_result reads
+        # like dispatch narration. The dashboard renders this as a
+        # distinct state so users don't mistake the launch-message for
+        # the session's conclusion.
+        _DISPATCH_NARRATION = _re_session.compile(
+            r"\b(dispatching|now waiting|waiting for|will continue|in flight|"
+            r"directive prepared|launched|in background)\b",
+            _re_session.IGNORECASE,
+        )
+        ended_early = bool(
+            used_fallback and isinstance(summary, str)
+            and _DISPATCH_NARRATION.search(summary)
+        )
+        if ended_early:
+            summary = "[session ended mid-dispatch] " + summary
 
         emit('session_end',
             session_id=session_id,
@@ -218,6 +248,7 @@ for line in sys.stdin:
             cache_creation_input_tokens=usage.get('cache_creation_input_tokens', 0) or 0,
             model_usage=model_usage,
             summary=summary,
+            ended_early=ended_early,
         )
 
         if summary:
@@ -425,7 +456,7 @@ class ClaudeAgent:
             if cancel_event is not None and cancel_event.is_set():
                 return False
             if attempt < max_attempts:
-                log.warning(
+                log.warn(
                     f"Run idle for {idle_timeout_s}s on attempt "
                     f"{attempt}/{max_attempts}; restarting same prompt."
                 )

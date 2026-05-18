@@ -4,7 +4,7 @@ description: Fetch papers, books, or online mathematical content (arXiv, journal
 write_domain: "references/**"
 read_only: false
 can_spawn: false
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
   - Dispatch me whenever a strategic decision or a chapter you are
     about to write needs material not already in references/. Calling

@@ -10,8 +10,10 @@ from scratch, you don't need this file — follow the
   section 6.
 - **Coming from v0.1.0?** Skip to [section 7](#7-upgrading-from-v010-to-v020) —
   v0.2.0 adds multi-lane proving, the refactor agent, inner-git
-  versioning, and `archon-protected.yaml`, but the v0.1.0 install you have
-  keeps working.
+  versioning, `archon-protected.yaml`, an opt-in subagent system, a
+  `--resume` flag, a blueprint-doctor phase, and a post-plan validation
+  step. Default single-agent behavior is preserved, so the v0.1.0 install
+  you have keeps working.
 
 ## Notes for v0.1.0 readers (kept for reference)
 
@@ -410,6 +412,75 @@ in when you are ready.
 | `archon discuss /path/to/project` | Open Claude Code interactively with full Archon context loaded — for debugging or brainstorming without firing the loop. |
 | `archon branch <name> /path/to/project` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). |
 | `archon version /path/to/project` | Show the Archon CLI version and, in a project, the project version. |
+
+### 7.6 Enabling subagents (optional)
+
+v0.2.0 introduces an opt-in **subagent system** — descriptor-driven
+helpers the plan / review agent can dispatch when it needs a focused,
+fresh-context check. **All ship disabled** so the loop behaves exactly as
+it did in v0.1.0 unless you opt in. To turn one or more on, edit
+`.archon/config.json`:
+
+```json
+"subagents": {
+  "enabled": ["strategy-critic", "blueprint-reviewer", "progress-critic"]
+}
+```
+
+The shipped `config.json` includes an `_available` list naming every
+shipped subagent; copy any of them into `enabled`. Recommended starting
+sets:
+
+- **Plan phase**: `blueprint-reviewer`, `strategy-critic`, `progress-critic`
+- **Review phase**: `lean-auditor`, `lean-vs-blueprint-checker`
+
+Subagents with `mandatory: [<phase>]` in their frontmatter must be
+dispatched at least once when enabled. The plan / review prompts surface
+them with a `[MANDATORY]` tag and a post-phase audit warns (does not
+abort) when one is missed. With every subagent disabled, the catalog is
+empty and no mandatory dispatch is ever required.
+
+To enable every shipped subagent at once, copy the entire `_available`
+list into `enabled`.
+
+### 7.7 `max_parallel` default lowered from 8 to 4
+
+Fresh projects pick up `max_parallel: 4` in `.archon/config.json`.
+**Existing projects keep whatever value they already have** — re-running
+`archon init` with `keep` or `merge` preserves your current setting. To
+restore v0.1.0 behavior on a fresh project, either set:
+
+```json
+"loop": { "max_parallel": 8 }
+```
+
+or pass `--max-parallel 8` on the command line.
+
+### 7.8 `ui/start.sh` removed
+
+If you previously launched the dashboard via `ui/start.sh`, use the CLI
+instead:
+
+```bash
+archon dashboard /path/to/your-lean-project
+```
+
+(`archon loop` already auto-launches it — this only matters if you were
+starting the dashboard standalone.)
+
+### 7.9 New `--resume` flag
+
+| Flag | What it does |
+|------|--------------|
+| `--resume` | When a previous `archon loop` was interrupted mid-iteration, resume the in-flight iteration at its last completed phase. The phase is auto-detected from `.archon/iter/iter-NNN/meta.json`. |
+
+### 7.10 New blueprint-doctor phase
+
+Runs automatically at the top of each iteration. It scans `blueprint/src/`
+for orphan files, broken `\uses{...}` references, and missing
+`\lean{...}` blocks; the plan agent then sees the findings inline under
+`## Blueprint doctor — live structural findings`. No configuration is
+needed — it's silently included in every iteration.
 
 ---
 

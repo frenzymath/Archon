@@ -23,9 +23,14 @@ Hierarchical dispatch:
   wrapper picks it up and forwards.
 
 Iteration number comes from ``ARCHON_ITER_NUM`` (set by the loop's
-plan phase). The script fails loudly if it's missing rather than
-silently defaulting, because a wrong iter_num would route the JSONL
-log to the wrong directory.
+plan phase). When the wrapper is invoked outside the loop (e.g. by a
+review agent whose env doesn't inherit the loop's exports) it falls
+back to deriving the iter number from the highest-numbered
+``.archon/logs/iter-NNN/`` directory and logs a warning. If neither
+mechanism produces a value, the script exits non-zero with a clear
+error rather than silently picking a default — a wrong iter_num
+routes the JSONL log to the wrong directory and the dispatch is
+effectively lost.
 """
 
 import argparse
@@ -33,10 +38,37 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 
 _PARENT_SLUG_ENV_VAR = "ARCHON_SUBAGENT_SLUG"
 _ROOT_PARENT_SLUG = "_root"
+
+
+def _derive_iter_num_from_logs(project_path: Path) -> str | None:
+    """Return the highest-numbered ``iter-NNN`` under ``.archon/logs/`` or None.
+
+    Best-effort fallback for when ``ARCHON_ITER_NUM`` isn't in the
+    environment (e.g. the review agent dispatched a subagent in a shell
+    that didn't inherit the loop's exports). Returns the zero-padded
+    canonical form ``"NNN"`` so the rest of the script can treat it as
+    if the env var had been set.
+    """
+    logs = project_path / ".archon" / "logs"
+    if not logs.is_dir():
+        return None
+    nums: list[int] = []
+    for d in logs.iterdir():
+        if not d.is_dir():
+            continue
+        if not d.name.startswith("iter-"):
+            continue
+        tail = d.name[5:]
+        if tail.isdigit():
+            nums.append(int(tail))
+    if not nums:
+        return None
+    return f"{max(nums):03d}"
 
 
 def main() -> int:
@@ -75,13 +107,28 @@ def main() -> int:
 
     iter_num = os.environ.get("ARCHON_ITER_NUM")
     if not iter_num:
-        print(
-            "ARCHON_ITER_NUM not set in environment. This script is "
-            "meant to be invoked by the Archon loop, which sets it "
-            "before launching Claude.",
-            file=sys.stderr,
-        )
-        return 1
+        derived = _derive_iter_num_from_logs(Path(os.getcwd()))
+        if derived is not None:
+            print(
+                f"ARCHON_ITER_NUM not set in environment; "
+                f"derived iter={derived} from .archon/logs/iter-{derived}/. "
+                f"This is the wrapper's fallback path — normally the Archon "
+                f"loop sets ARCHON_ITER_NUM before launching Claude.",
+                file=sys.stderr,
+            )
+            iter_num = derived
+        else:
+            print(
+                "ARCHON_ITER_NUM not set in environment AND no "
+                "`.archon/logs/iter-NNN/` directories were found under the "
+                "current working directory. This script is meant to be "
+                "invoked by the Archon loop, which sets ARCHON_ITER_NUM "
+                "before launching Claude. Run it inside an initialised "
+                "Archon project (one whose `.archon/logs/` already has an "
+                "iter dir), or set ARCHON_ITER_NUM explicitly.",
+                file=sys.stderr,
+            )
+            return 2
 
     parent_slug = (
         args.parent_slug

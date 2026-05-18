@@ -35,6 +35,7 @@ from archon.state import (
 from . import plan_validate
 from .context import LoopContext, LoopOptions
 from .phases import (
+    BlueprintDoctorPhase,
     FinalizePhase,
     PlanPhase,
     ProverPhase,
@@ -158,6 +159,7 @@ class LoopCommand:
             prover_mode += f" (max {opts.max_parallel})"
 
         multilane_lanes = opts.multilane_cfg.get('lanes') or []
+        subagent_status = _describe_subagent_status(opts.project_path)
         config_panel = {
             "Project": str(opts.project_path),
             "Stage": opts.force_stage or ctx.current_stage,
@@ -170,6 +172,7 @@ class LoopCommand:
             "Logs": str(ctx.log_dir),
             "User hints": str(ctx.state_dir / "USER_HINTS.md"),
             "Debug feedback": "enabled" if opts.debug_feedback else "disabled",
+            "Subagents": subagent_status,
             "Multi-lane": (
                 f"enabled ({len(multilane_lanes)} lane{'s' if len(multilane_lanes) != 1 else ''}: "
                 f"{', '.join(str(l.get('lane_id', l.get('provider', '?'))) for l in multilane_lanes)})"
@@ -273,6 +276,12 @@ class LoopCommand:
         # Replaces the review agent's mechanical marker placement;
         # review still owns \mathlibok and prose.
         SyncLeanokPhase(ctx).run()
+
+        # Phase 2c — Blueprint doctor: structural lints (orphan chapters,
+        # broken \ref/\uses). Catches deterministic structural bugs the
+        # blueprint-reviewer LLM has been observed to miss; writes its
+        # findings to iter-NNN/blueprint-doctor.{md,json}.
+        BlueprintDoctorPhase(ctx).run()
 
         # Phase 3 — Review
         ReviewPhase(ctx).run()
@@ -501,6 +510,43 @@ class LoopCommand:
                 title="Done",
                 style="green",
             )
+
+
+def _describe_subagent_status(project_path: Path) -> str:
+    """Summarize subagent enablement for the startup config panel.
+
+    Reports the enabled count plus a hint to ``.archon/config.json``
+    when nothing is on. Built from the same registry the plan/review
+    prompts will see — so the user sees exactly what the loop sees.
+    """
+    from archon.commands.tooling.project_config import (
+        load_project_config,
+        resolve_subagents_enabled,
+    )
+    from archon.subagents.registry import (
+        _builtin_dir,
+        build_registry,
+        load_descriptors_from_dir,
+    )
+
+    cfg = load_project_config(project_path)
+    enabled_cfg = resolve_subagents_enabled(cfg)
+    registry = build_registry(project_path, enabled=enabled_cfg)
+
+    discoverable: set[str] = set()
+    for d in (_builtin_dir(), project_path / ".archon" / "subagents"):
+        discoverable.update(load_descriptors_from_dir(d).keys())
+    available = len(discoverable)
+
+    if len(registry) == 0:
+        if available == 0:
+            return "none installed"
+        return (
+            f"disabled (0 of {available} enabled — list names under "
+            f"`subagents.enabled` in .archon/config.json to turn on)"
+        )
+    names = ", ".join(registry.names())
+    return f"{len(registry)} of {available} enabled: {names}"
 
 
 def parse_from_phase(from_phase: str | None) -> set[str]:

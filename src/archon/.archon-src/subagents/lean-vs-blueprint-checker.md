@@ -4,7 +4,7 @@ description: Per-file bidirectional verifier. Reads one .lean file and its bluep
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 mandatory: [review]
 dispatcher_notes: |
   - I am mandatory in the review phase. Dispatch one checker per .lean
@@ -12,16 +12,18 @@ dispatcher_notes: |
     exceptions. Skipping any prover-touched file is a review-phase
     failure, not editorial discretion. Each dispatch is independent
     and parallel-able.
-  - Also dispatch on any file the lean-auditor flagged as suspicious,
-    even if it received no prover work this iter.
+  - Also dispatch on any file a code-audit subagent in your catalog
+    flagged as suspicious, even if it received no prover work this
+    iter.
   - The directive must name exactly one Lean file and its blueprint
     chapter — no global context, no strategy snapshot. My value is
     the narrow file-vs-chapter view.
   - I report bidirectionally: Lean → blueprint AND blueprint → Lean.
-    The blueprint can be the failure (too thin to guide formalization,
-    missing the level of detail the Lean code clearly needed), not
-    only the Lean. If I flag a chapter as inadequate, the plan agent
-    should dispatch a blueprint-writer to address it.
+    The blueprint can be the failure (too thin to guide
+    formalization, missing the level of detail the Lean code clearly
+    needed), not only the Lean. If I flag a chapter as inadequate,
+    the plan agent should dispatch the catalog's blueprint-writing
+    subagent to address it.
   - Any must-fix-this-iter finding I report blocks downstream work on
     the affected file/chapter until addressed. Soft enforcement: the
     plan agent reads my report and follows the gate rules in plan.md.
@@ -75,7 +77,7 @@ blueprint/src/chapters/<slug>.tex
 <things the review agent already knows and doesn't want re-reported>
 ```
 
-That's it. No strategy snapshot, no references, no full project context — just the two files and any pre-known issues to skip. Cross-file consistency is the lean-auditor's and blueprint-reviewer's job; you stay focused on this one pair.
+That's it. No strategy snapshot, no references, no full project context — just the two files and any pre-known issues to skip. Cross-file consistency is the job of the code-audit and blueprint-review subagents in the catalog; you stay focused on this one pair.
 
 ## What you do
 
@@ -157,7 +159,7 @@ A bidirectional check: does the blueprint chapter give a prover enough detail to
 - **Proof-sketch depth**: <one of: adequate / under-specified / silent>. If under-specified or silent, list which `\thm:...` blocks need expansion.
 - **Hint precision**: <one of: precise / loose / wrong>. Loose hints (the prose pins one Mathlib predicate but the `\lean{...}` doesn't, leaving the prover to guess) get flagged. Wrong hints (the `\lean{...}` names a declaration whose signature doesn't match the prose) are critical.
 - **Generality**: <one of: matches need / too narrow / too broad>. If too narrow, name the parallel API that the project ended up writing because the blueprint didn't cover the needed level of generality.
-- **Recommended chapter-side actions**: <bullet list of items a blueprint-writer should land if you flagged anything above>
+- **Recommended chapter-side actions**: <bullet list of items a blueprint-writing subagent should land if you flagged anything above>
 
 ## Severity summary
 
@@ -176,7 +178,7 @@ Apply these rules verbatim. Do NOT under-classify to soften the blow — the pla
 Overall verdict: one sentence.
 ```
 
-The plan agent's per-file gate (see plan.md and blueprint-reviewer's dispatcher_notes) treats every must-fix-this-iter finding as blocking. If you classify a wrong signature as "major" to avoid the gate firing, you are working against the project, not for it.
+The plan agent's per-file gate (see plan.md and the blueprint-review subagent's `dispatcher_notes` in the catalog) treats every must-fix-this-iter finding as blocking. If you classify a wrong signature as "major" to avoid the gate firing, you are working against the project, not for it.
 
 ## Return value
 
@@ -187,7 +189,7 @@ Your final assistant message:
 
 ## Reminders
 
-- **One file pair, no global context.** Cross-file consistency belongs to lean-auditor and blueprint-reviewer.
+- **One file pair, no global context.** Cross-file consistency belongs to the catalog's code-audit and blueprint-review subagents.
 - **You are read-only.** No project source, no blueprint, no state files (except your own report).
 - **Excuse-comments are red flags, not workflow.** Treat "we use a wrong def for now" with the suspicion it deserves.
 - **Mathematical content match, not syntactic.** The Lean proof can choose different tactics than the chapter's sketch implies, as long as the mathematical steps are the same.

@@ -2,7 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { FastifyInstance } from 'fastify';
-import { parseJsonl, readFileOr } from '../utils.js';
+import { parseJsonl, readFileOr, readFirstJsonlTs } from '../utils.js';
 import { mapIterToPhaseCommits, type InnerCommit, type IterPhaseCommits } from '../utils/innerGit.js';
 import {
   ROOT_PARENT_SLUG,
@@ -16,6 +16,12 @@ interface LogFileEntry {
   path: string;
   size: number;
   modified: string;
+  /** ISO timestamp of the file's first event — first JSONL line's
+   *  ``ts`` for streams, mtime for .md artifacts. The dashboard sorts
+   *  each iter's file list by this so plan / its subagents / refactor /
+   *  provers / review / its subagents appear in true execution order
+   *  instead of alphabetical (which scrambles phase boundaries). */
+  startedAt?: string;
   role?: string;
   /** For subagent files (`<role>-<slug>.jsonl|.md`), the bare slug — used
    *  by the dashboard to render `<role> <slug>` distinctly from a phase log. */
@@ -444,6 +450,28 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
           }
         }
       }
+    }
+
+    // Stamp each iter file with its true start time and sort the
+    // group chronologically. Without this, alphabetical ordering puts
+    // a subagent dispatched mid-plan ahead of plan.jsonl itself, and
+    // provers land after review.jsonl — both obscure the loop's phase
+    // structure. Using mtime alone is wrong: mtime is end-of-stream
+    // (a long plan finishes after its short subagents), so we read
+    // the first JSONL line's ``ts`` when available and fall back to
+    // mtime only when the read fails (size 0 / not JSONL).
+    for (const g of groups) {
+      for (const f of g.files) {
+        if (f.startedAt) continue;
+        const absPath = path.join(logsPath, f.path);
+        const ts = f.path.endsWith('.jsonl') ? readFirstJsonlTs(absPath) : null;
+        f.startedAt = ts || f.modified;
+      }
+      g.files.sort((a, b) => {
+        const av = a.startedAt || a.modified;
+        const bv = b.startedAt || b.modified;
+        return av.localeCompare(bv);
+      });
     }
 
     return { flat, groups };

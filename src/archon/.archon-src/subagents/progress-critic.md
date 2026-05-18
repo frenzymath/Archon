@@ -4,14 +4,13 @@ description: Fresh-context audit of recent iteration progress per active file/ro
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 mandatory: [plan]
 dispatcher_notes: |
-  - I am mandatory every plan phase. Dispatch me AFTER strategy-critic
-    and blueprint-reviewer have returned, BEFORE deciding the iter's
-    prover objectives. My verdict feeds directly into the planner's
-    stuck-protocol gate (see plan.md § "Detecting and responding to
-    stuck routes").
+  - I am mandatory every plan phase. Dispatch me AFTER any strategy
+    and blueprint reviewers in your catalog have returned, BEFORE
+    deciding the iter's prover objectives. My verdict feeds directly
+    into the planner's stuck-protocol gate.
   - My value is fresh-context detection of "this iter looks like
     progress but the route has actually been churning for K iters."
     The plan agent, in the loop's context, is the worst-positioned
@@ -29,10 +28,10 @@ dispatcher_notes: |
     - K should be 3-5; more iters = better detection.
 
   Your directive MUST NOT include:
-    - STRATEGY.md (my question is convergence, not strategic soundness
-      — that's strategy-critic's territory).
-    - Blueprint chapters (the math correctness is blueprint-reviewer's
-      territory).
+    - STRATEGY.md (my question is convergence, not strategic
+      soundness — that is the strategy critic's territory).
+    - Blueprint chapters (math correctness is the blueprint
+      reviewer's territory).
     - Iter sidecars' full content (just the extracted signals named
       above).
 
@@ -44,16 +43,16 @@ dispatcher_notes: |
   Verdicts are per-route:
 
   - **CONVERGING** — the route is closing. Proceed with the next
-    prover round on this route.
+    prover round.
   - **CHURNING** — each iter adds helpers but the residual hasn't
-    actually shrunk. STOP assigning more helpers. My report names
-    the corrective action: blueprint expansion, mathlib-analogist
-    consult, refactor, or route pivot.
-  - **STUCK** — the route has not produced any sorry-elimination or
-    structural advance in K iters. STOP this route. Address the
-    blocker I named or pivot to an alternative route.
-  - **UNCLEAR** — not enough signal yet (e.g. fresh route, 1-2 iters
-    of data). Proceed but watch — my next-iter verdict will resolve.
+    shrunk. STOP assigning more helpers. My report names the
+    corrective TYPE (blueprint expansion, Mathlib-idiom consult,
+    structural refactor, route pivot); the planner picks the
+    matching subagent from the catalog.
+  - **STUCK** — no sorry-elimination or structural advance in K
+    iters. STOP this route; address the blocker or pivot.
+  - **UNCLEAR** — not enough signal yet (fresh route, 1-2 iters of
+    data). Proceed but watch.
 
   **CHURNING and STUCK are must-fix-this-iter.** The planner must
   respond — either with the action I recommend, or with an explicit
@@ -142,7 +141,10 @@ For each route's block:
 Apply these rules verbatim:
 
 - **CONVERGING**: sorry count strictly decreasing in K-iter window AND no recurring blocker AND planner's proposal looks like "finish what's started."
-- **CHURNING**: helpers added in ≥2 of last K iters AND sorry count net unchanged or down by <1 per 2 iters AND no structural change in approach. OR: PARTIAL prover status ≥3 of last K iters.
+- **CHURNING**: any of the following:
+  - helpers added in ≥2 of last K iters AND sorry count net unchanged or down by <1 per 2 iters AND no structural change in approach;
+  - PARTIAL prover status ≥3 of last K iters;
+  - **plan-phase-only meta-pattern**: ≥3 consecutive iters with **zero prover dispatches** on this route (no `Foo.lean` ever appearing in `## Current Objectives`). Pure planning rounds — re-blueprinting, re-strategizing, re-organizing — without ever firing a prover is the textbook stall. Each such iter individually shows "structural change in approach" (so the first clause fails), but the empirical signature is exactly what CHURNING was designed to flag. Use this clause when the planner is in a "we keep refactoring but never test it" pattern.
 - **STUCK**: sorry count unchanged across K iters AND prover statuses include INCOMPLETE OR recurring blocker phrase across ≥3 iters. OR: helpers added without any sorry-elimination across K iters.
 - **UNCLEAR**: route is fresh (< K iters of data) OR signals are ambiguous.
 
@@ -150,15 +152,15 @@ If multiple rules match a route, pick the worse verdict (CHURNING > CONVERGING; 
 
 ## Recommended actions per verdict
 
-For CHURNING or STUCK, your report names ONE primary corrective:
+For CHURNING or STUCK, your report names ONE primary corrective TYPE. The planner consults the catalog for the matching subagent.
 
-- **Blueprint expansion** — the chapter's proof sketch is likely under-specified; dispatch `blueprint-writer` to expand it before more prover work.
-- **Mathlib analogy consult** — the project may be using a parallel API or wrong predicate; dispatch `mathlib-analogist` on the route's load-bearing definitions.
-- **Refactor** — the definition itself or the file structure may be wrong; dispatch `refactor` to restructure before more prover work.
-- **Route pivot** — the strategic route may be the wrong one entirely; the planner should revise STRATEGY.md and pick a different route. (If you see this, also recommend re-dispatching `strategy-critic` mid-iter to validate the pivot.)
-- **User escalation** — none of the above will work; the planner should pause and request user input. Use sparingly — only when your read is that no automated corrective will resolve the stall.
+- **Blueprint expansion** — the chapter's proof sketch is likely under-specified; the planner should expand it (via the appropriate blueprint-writing subagent in their catalog) before more prover work.
+- **Mathlib analogy consult** — the project may be using a parallel API or wrong predicate; the planner should consult Mathlib-idiom analysis on the route's load-bearing definitions.
+- **Refactor** — the definition or file structure may be wrong; the planner should dispatch a structural subagent to restructure before more prover work.
+- **Route pivot** — the strategic route may be wrong entirely; the planner should revise STRATEGY.md and pick a different route, then re-run any strategy critic in the catalog mid-iter to validate the pivot.
+- **User escalation** — none of the above will work; the planner should pause and request user input. Use sparingly — only when no automated corrective will resolve the stall.
 
-Pick ONE primary corrective per CHURNING/STUCK route. Multiple are allowed when truly necessary, but list them in priority order.
+Pick ONE primary corrective per CHURNING/STUCK route. Multiple are allowed when truly necessary, listed in priority order.
 
 ## Report format
 

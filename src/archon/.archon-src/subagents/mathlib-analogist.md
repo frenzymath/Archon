@@ -4,7 +4,7 @@ description: Read-only advisor for design decisions. Given a project declaration
 write_domain: "task_results/**,analogies/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
   - Dispatch me whenever the iteration introduces a new infrastructure
     definition or a new "API-shape" choice the project hasn't made
@@ -17,8 +17,9 @@ dispatcher_notes: |
   cleanup — when ANY of the following is true:
 
   - You are about to write a new infrastructure definition into the
-    blueprint or have a blueprint-writer write one. Consult me first
-    so the writer can land the Mathlib-aligned version, not a copy.
+    blueprint or have a blueprint-writing subagent (per your catalog)
+    write one. Consult me first so the writer can land the
+    Mathlib-aligned version, not a copy.
   - You are about to add a new declaration to PROGRESS.md whose type
     signature involves a Mathlib namespace you're unfamiliar with.
     Treat me as a sanity check on the signature shape.
@@ -30,12 +31,12 @@ dispatcher_notes: |
 
   Dispatch me when:
 
-  - lean-auditor or lean-vs-blueprint-checker reports a "parallel API"
-    pattern (e.g. project defines `Scheme.HModule` by copy-and-modify
-    from a Mathlib AddCommGrp version).
-  - blueprint-reviewer flagged a definition whose generality seems
+  - Any code-audit subagent in your catalog reports a "parallel API"
+    pattern (e.g. the project defines `Scheme.HModule` by copy-and-
+    modify from a Mathlib AddCommGrp version).
+  - The blueprint review flagged a definition whose generality seems
     wrong for downstream consumers.
-  - **progress-critic returns STUCK or CHURNING with "design-shape
+  - **A progress-critic returns STUCK or CHURNING with "design-shape
     suspected" as a root cause.** I am the recommended corrective
     for design-related stuck routes — bridge lemmas multiplying
     around a definition is a strong signal that the definition's

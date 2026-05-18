@@ -4,7 +4,7 @@ description: Whole-blueprint audit. Per-chapter checklist of completeness + corr
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 mandatory: [plan]
 dispatcher_notes: |
   - Dispatch me BEFORE writing any prover objectives or touching Lean files.
@@ -18,8 +18,9 @@ dispatcher_notes: |
     directive — even when the iteration's focus is narrow, the cross-
     chapter view is the point of running me.
   - Read my per-chapter checklist and use it to decide which chapters
-    need a blueprint-writer dispatch this iter. You do not need to
-    re-read the chapters yourself; the checklist is your view into them.
+    need a follow-up writer dispatch this iter (consult your catalog
+    for the blueprint-writing subagent). You do not need to re-read
+    the chapters yourself; the checklist is your view into them.
 
   ### HARD GATE — per-file prover dispatch
 
@@ -37,8 +38,9 @@ dispatcher_notes: |
     blueprint depends on):
     1. DROP F from this iter's objectives. Defer the prover round on F
        to the next iter.
-    2. Dispatch a `blueprint-writer` for C THIS iter with a directive
-       targeting the specific must-fix items I flagged.
+    2. Dispatch the catalog's blueprint-writing subagent for C THIS
+       iter with a directive targeting the specific must-fix items I
+       flagged.
     3. Record in iter/iter-NNN/plan.md why F was deferred (cite the
        reviewer findings).
   - Re-dispatching me after the writer returns is optional within the
@@ -46,10 +48,11 @@ dispatcher_notes: |
 
   ### Strategy / multi-route handling
 
-  - If the strategy has multiple viable routes and I report that one or
-    more routes have no blueprint coverage, dispatch blueprint-writers
-    to fill those gaps in the same iteration. Do not let provers begin
-    work on a route until its blueprint coverage is in place.
+  - If the strategy has multiple viable routes and I report that one
+    or more routes have no blueprint coverage, dispatch the catalog's
+    blueprint-writing subagent (one call per missing-coverage route)
+    in the same iteration. Do not let provers begin work on a route
+    until its blueprint coverage is in place.
   - If I flag a definition that may require a strategy modification,
     treat that as a STRATEGY.md update task before any further Lean work
     — provers cannot be dispatched until the strategy update is reflected
@@ -80,6 +83,8 @@ The plan agent gives you a directive containing the current strategy snapshot, t
 - **Multi-route coverage** — if the strategy lists multiple viable routes (alternative proof approaches, alternative definitions), is each route represented in the blueprint? Routes the strategy mentions but the blueprint does not cover are red flags.
 
 You audit the blueprint **against the context the plan agent gave you**, not against your own opinions about how the math should be set up. But you are critical of weak prose — under-specified blueprints fail provers and are not safe to merge.
+
+`/references/summary.md` lists the project's reference materials. The planner writes the blueprints, while its knowledge might be enough to write some parts of the blueprint, some parts may be subject to hallucination and require reference material. If you believe a reference is required to write mathematicaly correct and complete blueprint chapters, you should mention it in your report so that the planner can retrieve it for the writer.
 
 ## Always read everything
 
@@ -197,12 +202,12 @@ If you found a definition that, on close reading, conflicts with the strategy in
 
 ## Severity summary
 
-Apply these rules verbatim — they decide whether the plan agent dispatches a blueprint-writer this iter or defers.
+Apply these rules verbatim — they decide whether the plan agent dispatches a blueprint-writing subagent (per the catalog) this iter, or defers.
 
 - **must-fix-this-iter** — every one of the following lands here, no exceptions:
   - The "Strategy-modifying findings" section is non-empty.
   - A route under "Multi-route coverage" is reported as MISSING.
-  - **Any chapter has `complete: partial | false` OR `correct: partial | false`** — even if the strategy "does not require" that chapter this iter. A `partial` chapter cannot be relied on by any prover; a blueprint-writer must be dispatched.
+  - **Any chapter has `complete: partial | false` OR `correct: partial | false`** — even if the strategy "does not require" that chapter this iter. A `partial` chapter cannot be relied on by any prover; the catalog's blueprint-writing subagent must be dispatched.
   - **Any chapter whose `\lean{...}` hint** is marked "Lean difficulty quality: poor" AND the named target is part of an active prover route in PROGRESS.md.
   - **Broken `\uses{}` cross-references** that point at non-existent labels — these silently corrupt the dependency graph and must be fixed before provers downstream of them run.
 - **soon** — cross-cutting items that don't block any specific chapter's prover work yet:

@@ -4,7 +4,7 @@ description: Fresh-context critic of the global strategy. Reads STRATEGY.md + a 
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 mandatory: [plan]
 dispatcher_notes: |
   - I am mandatory every plan phase. Dispatch me AFTER you've finished
@@ -58,7 +58,7 @@ Your directive will NOT include `iter/iter-NNN/plan.md`, `task_pending.md`, `tas
 You may use:
 
 - The references named in the directive (read them if needed for the math).
-- The blueprint chapter summaries (the prose summary in the directive, NOT the full chapter text — that's the blueprint-reviewer's territory).
+- The blueprint chapter summaries (the prose summary in the directive, NOT the full chapter text — full-chapter audit is the territory of the blueprint-review subagent in the catalog).
 - `archon-lean-lsp` if you need to spot-check a Mathlib name's existence.
 
 You may NOT use:
@@ -107,8 +107,27 @@ For each strategic route in `STRATEGY.md`:
 
 ## Prior critique status
 
-<if you've been dispatched before in this project, the prior verdict's UNADDRESSED challenges go here. The planner names them so you can re-check whether they're still live or have been addressed. If first-iter, write "no prior critique".>
+<one line per still-live prior-iter challenge. Format STRICTLY:
+
+  - <prior-iter-NNN>: <short challenge phrase> — live | addressed
+
+NO paraphrased planner responses, NO multi-paragraph re-litigation,
+NO "the iter-XXX plan-agent considered pulling this to iter-YYY but
+deferred to iter-ZZZ" — those are iter-by-iter narrative and would
+contaminate the fresh-context audit. The point of "Prior critique
+status" is solely to tell you which challenges to re-check, NOT how
+the planner reasoned about them. If a prior critique is fully resolved
+in the current STRATEGY.md, mark it "addressed"; if you disagree
+after auditing, your report will flip it back to live.
+
+If first-iter (no prior critique), write "no prior critique".>
 ```
+
+**If you find this section contains planner-side reasoning, iter
+narrative, or paraphrased plan-agent responses beyond the one-line
+"live | addressed" tags, ignore that extra material.** Your fresh
+context is your value; do not let leaked planner state colonize
+your audit.
 
 ## Report format
 

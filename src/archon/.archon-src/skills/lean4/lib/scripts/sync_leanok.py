@@ -250,6 +250,101 @@ def _file_compiles(lean_file: Path, project_path: Path) -> bool | None:
     return r.returncode == 0
 
 
+# ── tautological-body detection ───────────────────────────────────────
+
+
+# Patterns that indicate a decl body is structurally a placeholder —
+# kernel-clean and sorry-free, but the elaborated term is indistinguishable
+# from a trivial witness for downstream rewriting / unfold purposes.
+#
+# Detected patterns (applied to the decl's textual body between ``:=`` and
+# the next top-level declaration):
+#
+# * ``⟨Iso.refl _⟩`` (any namespace, any underscore arg) — the type is
+#   forced to be ``X ≅ X`` (or a ``Nonempty`` of one), so ``\leanok`` on
+#   the proof would falsely advertise the substantive iso the prose claims.
+# * Top-level ``Classical.choice ⟨...⟩`` — the body discards its explicit
+#   witness through the kernel-opaque choice operator; unfold doesn't see
+#   it. The blueprint prose typically describes the witness, not "some
+#   element of a nonempty set."
+# * Top-level ``Nonempty.intro <ident>`` whose ident is a reflexivity
+#   witness (``rfl``, ``Iso.refl _``, etc.).
+# * Bodies that are exactly ``rfl`` for declarations whose type contains
+#   ``Nonempty (... ≅ ...)`` — handled separately because the body alone
+#   isn't enough; we'd need the type too. Skipped (too noisy without
+#   elaborator help).
+_TRIVIAL_BODY_RE = re.compile(
+    r'(?:^|[\s:=]):=\s*(?:by\s+)?'
+    r'(?:'
+        r'⟨\s*[A-Za-z_][A-Za-z0-9_.]*\.refl\s+_?\s*⟩'   # ⟨Iso.refl _⟩
+        r'|Classical\.choice\b'                          # Classical.choice ⟨...⟩
+        r'|Nonempty\.intro\s+(?:Iso\.refl|rfl|HEq\.refl)\b'
+    r')',
+    re.MULTILINE,
+)
+
+
+def _decl_body_text(lean_file: Path, decl_name: str) -> str | None:
+    """Return the textual body of ``decl_name`` in ``lean_file`` (best-effort).
+
+    Returns the text between ``:=`` and the next top-level declaration (or
+    end-of-file), trimmed. None when we can't locate the decl.
+
+    The matcher is conservative: it locates the decl by the same pattern
+    used in ``_scan_lean_decls`` and reads forward until the next line that
+    looks like another top-level declaration. False negatives (None) are
+    fine — they just mean we don't apply the trivial-body suppression.
+    """
+    try:
+        text = lean_file.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return None
+    lines = text.splitlines(keepends=False)
+    bare = decl_name.rsplit('.', 1)[-1]
+    # Find the line where the decl starts.
+    decl_re = re.compile(
+        r'^\s*(?:@\[[^\]]*\]\s*)*'
+        r'(?:noncomputable\s+|private\s+|protected\s+|partial\s+|nonrec\s+'
+        r'|unsafe\s+|opaque\s+|abbrev\s+)*'
+        r'(?:theorem|lemma|def|abbrev|instance|example)'
+        r'\s+' + re.escape(bare) + r'(?:\b|[\s({:.])',
+    )
+    start = None
+    for i, line in enumerate(lines):
+        if decl_re.match(line):
+            start = i
+            break
+    if start is None:
+        return None
+    # Scan forward for the next top-level decl line.
+    end = len(lines)
+    next_decl_re = re.compile(
+        r'^\s*(?:@\[[^\]]*\]\s*)*'
+        r'(?:noncomputable\s+|private\s+|protected\s+|partial\s+|nonrec\s+'
+        r'|unsafe\s+|opaque\s+|abbrev\s+)*'
+        r'(?:theorem|lemma|def|abbrev|instance|example|class|structure|inductive)'
+        r'\s+',
+    )
+    for j in range(start + 1, len(lines)):
+        if next_decl_re.match(lines[j]):
+            end = j
+            break
+    return '\n'.join(lines[start:end])
+
+
+def _decl_body_is_trivial_placeholder(lean_file: Path, decl_name: str) -> bool:
+    """True iff the decl's body matches a known trivial-placeholder pattern.
+
+    See ``_TRIVIAL_BODY_RE`` for the patterns. Conservative: unknown shapes
+    return False, so the regular ``\\leanok`` logic still fires. Only the
+    explicitly-banned tautology patterns get suppressed.
+    """
+    body = _decl_body_text(lean_file, decl_name)
+    if body is None:
+        return False
+    return bool(_TRIVIAL_BODY_RE.search(body))
+
+
 # ── marker rewriting ──────────────────────────────────────────────────
 
 
@@ -363,11 +458,28 @@ def _sync_chapter(
                     has_sorry = _decl_has_sorry(lean_file, blk.lean_name)
                     if has_sorry is None:
                         continue  # undecided
-                    should_have = not has_sorry
-                    reason = (
-                        f"0 sorries + compiles" if should_have
-                        else f"sorry found in {blk.lean_name}"
-                    )
+                    if not has_sorry and _decl_body_is_trivial_placeholder(
+                        lean_file, blk.lean_name,
+                    ):
+                        # Kernel-clean but body is structurally vacuous —
+                        # one of the banned tautology placeholders (e.g.
+                        # ``⟨Iso.refl _⟩`` on a ``Nonempty (X ≅ X)`` type,
+                        # or ``Classical.choice ⟨X⟩``). Adding ``\leanok``
+                        # here would falsely advertise the substantive
+                        # proof the blueprint prose claims; abstain.
+                        should_have = False
+                        reason = (
+                            f"body of {blk.lean_name} matches trivial-"
+                            f"placeholder pattern; abstaining from "
+                            f"\\leanok (would falsely advertise the "
+                            f"substantive proof)"
+                        )
+                    else:
+                        should_have = not has_sorry
+                        reason = (
+                            f"0 sorries + compiles" if should_have
+                            else f"sorry found in {blk.lean_name}"
+                        )
             else:
                 # Statement block — \leanok iff decl exists and file
                 # compiles. Proof body's sorry status is irrelevant.

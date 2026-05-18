@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -106,12 +107,36 @@ class ReviewPhase(Phase):
         else:
             combined = ctx.iter_dir / "prover.jsonl"
 
-        extract_script = data_path("scripts/extract-attempts.py")
-        if extract_script.exists():
-            subprocess.run(
-                [sys.executable, str(extract_script), str(combined), str(attempts_file)],
-                capture_output=True,
+        # ``current_session/attempts_raw.jsonl`` is reused across iters.
+        # When no prover ran this iter (intentional skip, plan-validate
+        # failure, etc.), extract-attempts.py either errors out (input
+        # missing) or produces nothing, leaving the file with the *prior*
+        # iter's attempts — which the review agent then reads as if it
+        # were current. Stamp a sentinel so the file is unambiguously
+        # this-iter, and skip the extract step entirely.
+        if not parsed_logs:
+            sentinel = {
+                "type": "summary",
+                "no_prover_lane": True,
+                "iter": ctx.iter_num,
+                "reason": (
+                    "No prover lane this iter — either an intentional "
+                    "skip (see plan-validate marker / iter sidecar) or "
+                    "the prover phase produced no parsed logs."
+                ),
+            }
+            attempts_file.write_text(
+                json.dumps(sentinel, ensure_ascii=False) + "\n",
+                encoding="utf-8",
             )
+        else:
+            extract_script = data_path("scripts/extract-attempts.py")
+            if extract_script.exists():
+                subprocess.run(
+                    [sys.executable, str(extract_script),
+                     str(combined), str(attempts_file)],
+                    capture_output=True,
+                )
         
         to_user_file = ctx.state_dir / "TO_USER.md"
         to_user_file.write_text("", encoding="utf-8")
@@ -129,6 +154,7 @@ class ReviewPhase(Phase):
             ctx.iter_meta, "review.sessionId",
             enabled=(ctx.resume_phase == self.skip_token),
             label="review",
+            cwd=ctx.project_path,
         )
         ClaudeAgent(model=ctx.model, role="review").run(
             REVIEW_CONTINUE if resume_sid else prompt,

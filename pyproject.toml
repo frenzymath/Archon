@@ -24,3 +24,8 @@ include = ["archon*"]
 "archon" = [".archon-src/**/*",
             ".archon-src/**/.*",
             "ui/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

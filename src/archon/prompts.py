@@ -4,10 +4,17 @@ The actual ``claude`` invocation lives in :mod:`archon.agent`. This
 module only constructs the prompt strings handed to the agent. The
 session-end inspection helpers (which read the JSONL log after a run)
 live in :mod:`archon.session_log`.
+
+Design principle: anything the loop can do deterministically (read a
+file, run a check, compute a summary) is injected INTO this module's
+output rather than asked of the agent. The agent reads what's in
+front of it; the agent does NOT mechanically "go read file X then
+clear it". File-reading and file-clearing are the loop's job.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from textwrap import dedent
 
@@ -22,6 +29,185 @@ from archon.state.iter_state import (
 
 
 # ── context injection helpers ─────────────────────────────────────────
+
+
+def _blueprint_doctor_findings_block(
+    state_dir: Path,
+    iter_num: int,
+    *,
+    max_orphans: int = 15,
+    max_broken_refs: int = 25,
+) -> str:
+    """Inject the prior iter's blueprint-doctor findings into the plan prompt.
+
+    The doctor runs between prover and review of every iter and writes
+    a JSON sidecar at ``logs/iter-NNN/blueprint-doctor.json``. This
+    function reads the *prior* iter's sidecar (the most recently
+    completed one) and renders its findings as a prompt section the
+    plan agent can act on directly — no "go read this file"
+    instruction needed.
+
+    The block is empty (no section header) when:
+
+    * iter is 1 (no prior iter ran yet);
+    * the prior iter's sidecar is missing or unreadable (e.g. the
+      doctor wasn't enabled, or the loop ran without blueprint/);
+    * the sidecar is parseable but the doctor reported no findings.
+
+    Caps the rendered findings at ``max_orphans`` / ``max_broken_refs``
+    so a worst-case bloated report can't dominate the prompt; the
+    overflow note tells the planner to read the full JSON.
+    """
+    if iter_num <= 1:
+        return ""
+    prev = iter_num - 1
+    json_path = state_dir / "logs" / f"iter-{prev:03d}" / "blueprint-doctor.json"
+    if not json_path.is_file():
+        return ""
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    orphans = data.get("orphan_chapters", []) or []
+    broken = data.get("broken_refs", []) or []
+    axioms = data.get("axiom_decls", []) or []
+    if not orphans and not broken and not axioms:
+        return ""
+
+    lines: list[str] = [
+        "",
+        "## Blueprint doctor — live structural findings",
+        "",
+        f"The deterministic blueprint-doctor ran at the end of iter-{prev:03d} "
+        f"and flagged the issues below. These are the items the LLM-based "
+        f"blueprint-reviewer has been observed to miss; they remain live "
+        f"until something in this iter resolves them. Address them THIS "
+        f"iter (or explain in the iter sidecar why you are deferring).",
+        "",
+    ]
+
+    if axioms:
+        lines.append("### Axiom declarations (no new axioms — Archon stance)")
+        lines.append("")
+        lines.append(
+            "Every entry below is an `axiom <name> : ...` found under the "
+            "project's `.lean` files. Remove each (supply a real proof), "
+            "or, when the axiom is the mathematician's explicit boundary "
+            "marker, mark it protected in `archon-protected.yaml` and "
+            "document the rationale in `STRATEGY.md`."
+        )
+        lines.append("")
+        for entry in axioms[:max_orphans]:
+            f = entry.get("file", "")
+            n = entry.get("name", "")
+            lines.append(f"- `{f}` :: `{n}`")
+        if len(axioms) > max_orphans:
+            lines.append(
+                f"- ... and {len(axioms) - max_orphans} more "
+                f"(see `{json_path}` for the full list)."
+            )
+        lines.append("")
+
+    if orphans:
+        lines.append("### Orphan chapters")
+        lines.append("")
+        lines.append(
+            "Files under `blueprint/src/chapters/` not reachable from "
+            "`content.tex` via `\\input{...}` (direct or transitive). "
+            "Either add an `\\input{...}` line to `content.tex` (if the "
+            "chapter is meant to be live) or delete the orphan (if it "
+            "is stale)."
+        )
+        lines.append("")
+        for p in orphans[:max_orphans]:
+            lines.append(f"- `{p}`")
+        if len(orphans) > max_orphans:
+            lines.append(
+                f"- ... and {len(orphans) - max_orphans} more "
+                f"(see `{json_path}` for the full list)."
+            )
+        lines.append("")
+
+    if broken:
+        lines.append("### Broken cross-references")
+        lines.append("")
+        lines.append(
+            "`\\ref{...}` / `\\cref{...}` / `\\uses{...}` / `\\proves{...}` "
+            "targets with no matching `\\label{...}` anywhere in the "
+            "included tex tree. Each is either a label typo, a label "
+            "stranded in an orphan chapter, or a stale `\\uses{...}` list "
+            "from a rename."
+        )
+        lines.append("")
+        # Group by chapter for readability.
+        by_chapter: dict[str, list[tuple[str, str]]] = {}
+        for entry in broken:
+            chapter = entry.get("chapter", "")
+            kind = entry.get("kind", "")
+            label = entry.get("label", "")
+            by_chapter.setdefault(chapter, []).append((kind, label))
+        rendered = 0
+        for chapter in sorted(by_chapter):
+            if rendered >= max_broken_refs:
+                break
+            lines.append(f"- `{chapter}`:")
+            for kind, label in sorted(set(by_chapter[chapter])):
+                if rendered >= max_broken_refs:
+                    break
+                lines.append(f"  - `\\{kind}{{{label}}}`")
+                rendered += 1
+        total = len(broken)
+        if rendered < total:
+            lines.append(
+                f"- ... and {total - rendered} more "
+                f"(see `{json_path}` for the full list)."
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _user_hints_block(captured_hints: str | None) -> str:
+    """Inject already-captured USER_HINTS.md content into the plan prompt.
+
+    The loop reads ``USER_HINTS.md`` before the plan phase, passes the
+    text here, and clears the file after the plan agent succeeds. The
+    agent does NOT read or clear the hints file itself; everything the
+    user wrote is already in this block.
+
+    ``captured_hints`` of ``None`` or empty string renders the
+    "no hints this iter" affordance — the planner reads the prior iter's
+    sidecar for any ``## Fallback if no user response`` section (the
+    user-silent fallback contract).
+    """
+    if not captured_hints or not captured_hints.strip():
+        return dedent("""
+
+            ## User hints
+
+            No user hints this iteration. If the prior iter's sidecar
+            (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
+            user response` section, execute that fallback now and record
+            the auto-execution in this iter's sidecar under
+            `## User-silent fallback executed`. Otherwise proceed
+            normally.
+        """)
+    return dedent(f"""
+
+        ## User hints
+
+        The user wrote the following in `USER_HINTS.md` for this
+        iteration. The loop has already captured the content (shown
+        below) and will clear the file once your plan phase succeeds —
+        you do NOT need to read `USER_HINTS.md` or clear it yourself.
+        Treat anything below as the live hint set; incorporate it into
+        your plan.
+
+        ```
+        {captured_hints.strip()}
+        ```
+    """)
 
 
 def _references_summary(
@@ -231,23 +417,61 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
         load_project_config,
         resolve_subagents_enabled,
     )
-    from archon.subagents.registry import build_registry
+    from archon.subagents.registry import (
+        _builtin_dir,
+        build_registry,
+        load_descriptors_from_dir,
+    )
 
     cfg = load_project_config(project_path)
     enabled = resolve_subagents_enabled(cfg)
     registry = build_registry(project_path, enabled=enabled)
 
     if len(registry) == 0:
-        return dedent("""
+        # Discover what *could* be enabled so the message names them.
+        discoverable: dict[str, str] = {}
+        for d in (_builtin_dir(), project_path / ".archon" / "subagents"):
+            for n, desc in load_descriptors_from_dir(d).items():
+                discoverable[n] = (desc.description or "").splitlines()[0] if desc.description else ""
+        if not discoverable:
+            return dedent("""
 
-            ## Available subagents
+                ## Available subagents
 
-            None are installed for this project. Drop descriptors at
-            ``.archon/subagents/<name>.md`` (YAML frontmatter + prompt
-            body) to make subagents available — or list desired names
-            under ``subagents.enabled`` in ``config.json`` if some are
-            shipped with ``default_enabled: false``.
-        """)
+                None are installed for this project. Drop descriptors at
+                ``.archon/subagents/<name>.md`` (YAML frontmatter + prompt
+                body) to make subagents available.
+            """)
+        lines = [
+            "",
+            "## Available subagents",
+            "",
+            "None are currently **enabled** for this project — subagents "
+            "ship disabled by default. The following are shipped and ready "
+            "to turn on by listing their name in `subagents.enabled` in "
+            "`.archon/config.json`:",
+            "",
+        ]
+        for n in sorted(discoverable):
+            short = discoverable[n]
+            if len(short) > 160:
+                short = short[:157] + "..."
+            suffix = f" — {short}" if short else ""
+            lines.append(f"- `{n}`{suffix}")
+        lines.append("")
+        lines.append("Example `.archon/config.json` snippet to enable a few:")
+        lines.append("")
+        lines.append("```json")
+        lines.append('"subagents": {')
+        lines.append('  "enabled": ["blueprint-reviewer", "strategy-critic", "progress-critic"]')
+        lines.append("}")
+        lines.append("```")
+        lines.append("")
+        lines.append(
+            "Proceed without subagents for now — this phase will complete "
+            "normally; the user has chosen the classic single-agent loop."
+        )
+        return "\n".join(lines) + "\n"
 
     descriptors = registry.descriptors()
     mandatory_for_role = [d for d in descriptors if d.is_mandatory_for(role)]
@@ -327,6 +551,39 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ── stage normalization ───────────────────────────────────────────────
+
+
+# Canonical prover stage tokens shipped at `.archon/prompts/prover-<stage>.md`.
+# Used by ``_normalize_stage_for_prompt_path`` to recover the canonical
+# token from a verbose ``## Current Stage`` line; the planner sometimes
+# writes things like ``prover (Iter-123: M1.b residual — Steps 1-4 ...)``
+# and the raw text breaks the prompt-file path resolution.
+_PROVER_STAGES = ("autoformalize", "prover", "polish")
+
+
+def _normalize_stage_for_prompt_path(stage: str) -> str:
+    """Pick the canonical prover-stage token used in `prover-<stage>.md` paths.
+
+    The plan agent occasionally writes ``## Current Stage`` with descriptive
+    text appended after the stage token, e.g.::
+
+        ## Current Stage
+        prover (Iter-123: M1.b residual — Steps 1-4 of the IsLocalization.of_le)
+
+    The raw text contains parentheses, em-dashes and trailing fragments — when
+    embedded into ``.archon/prompts/prover-<stage>.md`` this produces a
+    non-existent filename and the prover wastes one boot pivoting back to the
+    canonical path. Match the first known prefix instead so the path is always
+    one of the three shipped prompts.
+    """
+    head = stage.strip().lower().lstrip("`*").lstrip()
+    for canonical in _PROVER_STAGES:
+        if head.startswith(canonical):
+            return canonical
+    return "prover"
+
+
 # ── prompt builders ───────────────────────────────────────────────────
 
 
@@ -337,6 +594,7 @@ def build_plan_prompt(
     ignore_multilane: bool = False,
     debug_feedback: bool = False,
     recent_iter_window: int = 3,
+    captured_user_hints: str | None = None,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
     refs_block = ""
@@ -390,6 +648,8 @@ def build_plan_prompt(
         role="plan", window=recent_iter_window,
     )
     catalog_block = _subagent_catalog_block(project_path, role="plan")
+    user_hints_block = _user_hints_block(captured_user_hints)
+    doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
@@ -397,20 +657,25 @@ def build_plan_prompt(
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
-        All state files (PROGRESS.md, task_pending.md, task_done.md, USER_HINTS.md, task_results/) are in {state_dir}/.
-        The .lean files are in {project_path}/.""") + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        State files (PROGRESS.md, task_pending.md, task_done.md, task_results/) live in {state_dir}/.
+        The .lean files are in {project_path}/.
+
+        Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
+        - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int, debug_feedback: bool = False
 ) -> str:
+    stage_path = _normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage}.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         All state files are in {state_dir}/. The .lean files are in {project_path}/.""") + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
@@ -430,12 +695,13 @@ def build_parallel_prover_prompt(
         if hint:
             bp_hint = "\n\n" + hint
 
+    stage_path = _normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage}.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         Check your .lean file for /- USER: ... -/ comments for file-specific hints.
 
         IMPORTANT:
@@ -473,6 +739,36 @@ def build_refactor_prompt(
         (include the slug as the `## Slug` field at the top of the report).""") + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
 
 
+def _blueprint_doctor_block(state_dir: Path, iter_num: int) -> str:
+    """Surface the blueprint-doctor's report in the review prompt.
+
+    The deterministic doctor (orphan chapters + broken cross-refs) runs
+    between prover and review and writes its findings to
+    ``logs/iter-NNN/blueprint-doctor.md``. The review agent should read
+    it (or note its absence) so structural issues are not lost.
+    """
+    doctor_md = state_dir / "logs" / f"iter-{iter_num:03d}" / "blueprint-doctor.md"
+    return dedent(f"""
+
+        ## Blueprint doctor report
+
+        The deterministic ``blueprint-doctor`` runs between the prover and
+        review phases each iteration. Its Markdown report is at:
+
+          {doctor_md}
+
+        Read it before writing your session summary. It flags two classes of
+        structural bug that the blueprint-reviewer subagent has been
+        observed to miss: orphan chapters (``.tex`` files not ``\\input``'d
+        by ``content.tex``) and broken cross-references (``\\ref{{...}}`` /
+        ``\\uses{{...}}`` targets that no ``\\label{{...}}`` defines).
+
+        If the doctor reports findings, surface them in your session
+        ``summary.md`` and ``recommendations.md`` so the next plan agent
+        knows to address them. If the report is missing or empty, that
+        means the doctor was either skipped or found nothing to flag.""")
+
+
 def build_review_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     session_num: int, session_dir: Path, attempts_file: Path,
@@ -485,6 +781,7 @@ def build_review_prompt(
         role="review", window=recent_iter_window,
     )
     catalog_block = _subagent_catalog_block(project_path, role="review")
+    doctor_block = _blueprint_doctor_block(state_dir, iter_num)
 
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
@@ -500,4 +797,4 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
+          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + doctor_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)

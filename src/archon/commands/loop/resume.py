@@ -21,6 +21,7 @@ state files that may have changed since the crash.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from archon import log
@@ -59,6 +60,7 @@ def pick_resume_session(
     *,
     enabled: bool,
     label: str,
+    cwd: Path | None = None,
 ) -> str | None:
     """Return the stored session id for this phase, or None.
 
@@ -69,18 +71,113 @@ def pick_resume_session(
     a fresh run. When enabled but no id is stored, logs a warning and
     falls back to fresh — matching the user's request that --resume
     degrade gracefully on missing state.
+
+    ``cwd`` is the project root (the working directory Claude Code was
+    invoked from). When given, the function also verifies the session's
+    JSONL file actually exists in Claude Code's store
+    (``~/.claude/projects/<sanitized-cwd>/<sid>.jsonl``). If the file
+    is missing, the stored id is stale (Claude Code's session log was
+    rotated / cleaned) and passing it to ``claude --resume`` would
+    error out. We warn and fall back to fresh instead.
     """
     if not enabled or iter_meta is None:
         return None
     sid = read_meta(iter_meta, meta_key)
-    if isinstance(sid, str) and sid:
-        log.step(f"--resume: continuing {label} session {sid[:8]}…")
-        return sid
-    log.warn(
-        f"--resume requested for {label}, but no '{meta_key}' in "
-        f"{iter_meta.name}; running fresh."
-    )
-    return None
+    if not isinstance(sid, str) or not sid:
+        # Show what session ids ARE available in the meta so the user
+        # can diagnose (wrong target phase? prior run crashed before
+        # any session id was captured? etc.).
+        available = _list_available_session_ids(iter_meta)
+        iter_label = _iter_label_from_meta(iter_meta)
+        if available:
+            avail_str = ", ".join(available)
+            log.warn(
+                f"--resume requested for {label}, but no '{meta_key}' "
+                f"stored in {iter_label}'s meta. Available session ids "
+                f"there: {avail_str}. Running fresh."
+            )
+        else:
+            log.warn(
+                f"--resume requested for {label}, but no session ids "
+                f"are stored in {iter_label}'s meta at all (prior run "
+                f"may have crashed before any session id was captured). "
+                f"Running fresh."
+            )
+        return None
+
+    if cwd is not None and not _claude_session_exists(cwd, sid):
+        log.warn(
+            f"--resume requested for {label}, but Claude Code has no "
+            f"session log for id {sid[:8]}… in its store "
+            f"(~/.claude/projects/<this-project>/). Running fresh."
+        )
+        return None
+
+    log.step(f"--resume: continuing {label} session {sid[:8]}…")
+    return sid
+
+
+def _iter_label_from_meta(meta_file: Path) -> str:
+    """Return a human-readable iter label (e.g. ``iter-123``) for a
+    meta.json path. Falls back to the filename when the parent is not
+    an iter-NNN dir.
+    """
+    parent = meta_file.parent
+    if parent.name.startswith("iter-"):
+        return parent.name
+    return meta_file.name
+
+
+def _list_available_session_ids(meta_file: Path) -> list[str]:
+    """Return a sorted list of ``<key>=<sid[:8]>…`` strings for every
+    session id present in the meta.json. Used in the warning message
+    so the user can see what their --resume options actually are.
+    """
+    if not meta_file.exists():
+        return []
+    try:
+        data = json.loads(meta_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    out: list[str] = []
+    for key, sid in _walk_session_ids("", data):
+        out.append(f"{key}={sid[:8]}…")
+    return sorted(out)
+
+
+def _walk_session_ids(prefix: str, value: object):
+    """Yield ``(dotted_key, session_id_str)`` pairs for every
+    ``*.sessionId`` leaf in a nested meta dict.
+    """
+    if not isinstance(value, dict):
+        return
+    for k, v in value.items():
+        full = f"{prefix}.{k}" if prefix else k
+        if k == "sessionId" and isinstance(v, str) and v:
+            yield prefix or k, v
+        elif isinstance(v, dict):
+            yield from _walk_session_ids(full, v)
+
+
+def _claude_session_exists(cwd: Path, session_id: str) -> bool:
+    """True iff Claude Code's session file for ``session_id`` exists.
+
+    Claude Code stores sessions under
+    ``~/.claude/projects/<sanitized-cwd>/<session_id>.jsonl``, where
+    sanitization replaces every path separator ``/`` with ``-`` and
+    keeps the leading dash (so an absolute path ``/home/x/y`` becomes
+    ``-home-x-y``).
+    """
+    try:
+        cwd_resolved = cwd.resolve()
+    except OSError:
+        # If we can't resolve, be permissive — let Claude Code's own
+        # error surface.
+        return True
+    sanitized = str(cwd_resolved).replace(os.sep, "-")
+    home = Path.home()
+    candidate = home / ".claude" / "projects" / sanitized / f"{session_id}.jsonl"
+    return candidate.is_file()
 
 
 def persist_session_id(

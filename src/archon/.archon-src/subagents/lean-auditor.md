@@ -4,7 +4,7 @@ description: Whole-project read-only audit of all .lean code, with no strategy b
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 mandatory: [review]
 dispatcher_notes: |
   - Dispatch me every review phase. I am mandatory.
@@ -17,10 +17,11 @@ dispatcher_notes: |
     to read. That's it.
   - My output is a per-file checklist plus a flagged-issues block. Use
     it to seed `recommendations.md` and (when severe) trigger a
-    refactor-subagent directive next iter.
-  - I am SEPARATE from lean-vs-blueprint-checker. I audit the Lean as
-    Lean; the blueprint-checker audits Lean against blueprint. Run
-    both for full coverage.
+    structural-refactor directive (via the catalog's refactor
+    subagent) next iter.
+  - I audit the Lean as Lean. The catalog may include a separate
+    Lean ↔ blueprint checker that compares Lean against the
+    chapter — run both for full coverage when both are present.
 ---
 
 # Lean Auditor

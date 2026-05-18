@@ -115,6 +115,7 @@ class SerialProverRunner:
         resume_sid = pick_resume_session(
             self.iter_meta, "prover.sessionId",
             enabled=self.resume_enabled, label="prover",
+            cwd=self.project_path,
         )
         with ProverEnvironment(
             snap_dir=self.iter_dir / "snapshots",
@@ -222,6 +223,7 @@ class ParallelProverRunner:
         resume_sid = pick_resume_session(
             self.iter_meta, f"provers.{slug}.sessionId",
             enabled=self.resume_enabled, label=f"prover[{slug}]",
+            cwd=self.project_path,
         )
         with ProverEnvironment(
             snap_dir=snap_dir,
@@ -289,6 +291,7 @@ class ParallelProverRunner:
                 resume_sid = pick_resume_session(
                     self.iter_meta, f"provers.{slug}.sessionId",
                     enabled=self.resume_enabled, label=f"prover[{slug}]",
+                    cwd=self.project_path,
                 )
                 if resume_sid:
                     submit_prompt = PROVER_CONTINUE

@@ -63,18 +63,45 @@ def default_config() -> dict[str, Any]:
         },
         'subagents': {
             '_help': (
-                "Subagent registry config. Subagents are discovered "
-                "from `.archon/subagents/<name>.md` (project) and the "
-                "shipped built-ins. `enabled` is a positive allowlist "
-                "of subagent names; null/missing falls back to every "
-                "descriptor whose frontmatter has default_enabled: true. "
-                "Each named entry (e.g. `subagents.refactor`) is an "
-                "optional per-subagent settings object; the only field "
-                "consulted today is `model` (a model alias overriding "
-                "`loop.model` for that subagent). For backward compat, "
-                "a bare string value is treated as the model alias."
+                "Subagents are OFF by default to preserve the classic "
+                "single-agent loop. To turn one on, add its name to "
+                "`enabled` below (e.g. \"enabled\": [\"strategy-critic\", "
+                "\"blueprint-reviewer\"]). To enable every shipped "
+                "subagent, copy `_available` into `enabled`. Discovery: "
+                "Archon loads `.md` descriptors from `.archon/subagents/` "
+                "(project-local, overrides built-ins) and from the "
+                "shipped built-ins. Each named entry (e.g. "
+                "`subagents.refactor`) is an optional per-subagent "
+                "settings object; the only field consulted today is "
+                "`model` (a model alias overriding `loop.model` for "
+                "that subagent). For backward compat, a bare string "
+                "value is treated as the model alias."
             ),
-            'enabled': None,
+            '_available': [
+                # The subagents shipped with Archon. Copy any of these
+                # names into `enabled` to activate. See
+                # `.archon/subagents/<name>.md` (or the shipped
+                # built-ins) for each one's role and write-domain.
+                'blueprint-reviewer',
+                'blueprint-writer',
+                'lean-auditor',
+                'lean-vs-blueprint-checker',
+                'mathlib-analogist',
+                'progress-critic',
+                'reference-retriever',
+                'refactor',
+                'strategy-critic',
+            ],
+            '_recommended_plan_phase': [
+                'blueprint-reviewer',
+                'strategy-critic',
+                'progress-critic',
+            ],
+            '_recommended_review_phase': [
+                'lean-auditor',
+                'lean-vs-blueprint-checker',
+            ],
+            'enabled': [],
         },
         'state': {
             '_help': (

@@ -440,7 +440,11 @@ class CatalogBlockTest(unittest.TestCase):
     def test_no_subagents_emits_explanatory_block(self):
         out = self._render("plan")
         self.assertIn("Available subagents", out)
-        self.assertIn("None are installed", out)
+        # When nothing is enabled, the hint must (a) flag that no
+        # subagents are active and (b) point the user at the config
+        # they can edit to turn them on.
+        self.assertIn("None are currently", out)
+        self.assertIn("config.json", out)
 
     def test_lists_enabled_descriptors_sorted(self):
         self._write_subagent("zebra", description="last alphabetically")
@@ -591,40 +595,49 @@ class MandatoryAuditTest(unittest.TestCase):
 
 
 class BuiltInRegistryTest(unittest.TestCase):
-    """Tests that the shipped built-in descriptors parse and surface."""
+    """Tests that the shipped built-in descriptors parse and surface.
+
+    Subagents ship with ``default_enabled: false`` (retrocompat: users
+    opt in via ``subagents.enabled``). These smoke tests therefore
+    pass an explicit ``enabled=[name]`` so the descriptor actually
+    loads into the registry; the assertions are about descriptor
+    content (write_domain, mandatory, can_spawn), not the default
+    enable state.
+    """
 
     def test_reference_retriever_loads(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["reference-retriever"])
             self.assertIn("reference-retriever", r)
             desc = r["reference-retriever"]
             self.assertEqual(desc.write_domain, "references/**")
             self.assertFalse(desc.read_only)
             self.assertFalse(desc.can_spawn)
             self.assertEqual(desc.mandatory, ())
-            self.assertTrue(desc.default_enabled)
+            # Ships off by default — retrocompat with pre-subagent Archon.
+            self.assertFalse(desc.default_enabled)
 
     def test_blueprint_writer_can_spawn(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["blueprint-writer"])
             self.assertIn("blueprint-writer", r)
             self.assertTrue(r["blueprint-writer"].can_spawn)
 
     def test_blueprint_reviewer_still_mandatory_for_plan(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["blueprint-reviewer"])
             self.assertTrue(r["blueprint-reviewer"].is_mandatory_for("plan"))
             self.assertFalse(r["blueprint-reviewer"].is_mandatory_for("review"))
 
     def test_lean_auditor_still_mandatory_for_review(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["lean-auditor"])
             self.assertTrue(r["lean-auditor"].is_mandatory_for("review"))
             self.assertFalse(r["lean-auditor"].is_mandatory_for("plan"))
 
     def test_lean_vs_blueprint_checker_mandatory_for_review(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["lean-vs-blueprint-checker"])
             self.assertIn("lean-vs-blueprint-checker", r)
             self.assertTrue(
                 r["lean-vs-blueprint-checker"].is_mandatory_for("review"),
@@ -632,7 +645,7 @@ class BuiltInRegistryTest(unittest.TestCase):
 
     def test_mathlib_analogist_loads(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["mathlib-analogist"])
             self.assertIn("mathlib-analogist", r)
             desc = r["mathlib-analogist"]
             self.assertTrue(desc.read_only)
@@ -640,7 +653,7 @@ class BuiltInRegistryTest(unittest.TestCase):
 
     def test_strategy_critic_mandatory_for_plan(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["strategy-critic"])
             self.assertIn("strategy-critic", r)
             desc = r["strategy-critic"]
             self.assertTrue(desc.read_only)
@@ -649,12 +662,22 @@ class BuiltInRegistryTest(unittest.TestCase):
 
     def test_progress_critic_mandatory_for_plan(self):
         with tempfile.TemporaryDirectory() as d:
-            r = build_registry(Path(d))
+            r = build_registry(Path(d), enabled=["progress-critic"])
             self.assertIn("progress-critic", r)
             desc = r["progress-critic"]
             self.assertTrue(desc.read_only)
             self.assertTrue(desc.is_mandatory_for("plan"))
             self.assertFalse(desc.is_mandatory_for("review"))
+
+    def test_nothing_enabled_by_default(self):
+        """Sanity: ``build_registry`` with no config yields empty.
+
+        Confirms the retrocompat default — no subagents fire until the
+        user explicitly enables them via ``.archon/config.json``.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            r = build_registry(Path(d))
+            self.assertEqual(len(r), 0)
 
 
 if __name__ == "__main__":
