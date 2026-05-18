@@ -10,3 +10,7 @@ src/archon/ui/server/node_modules/
 # Dashboard runtime PID files — written by the dashboard subprocess.
 src/archon/ui/.archon-ui/
 *.venv
+# uv resolved lockfile. Not committed: the installer uses pip and the
+# project's pyproject.toml deps are unpinned, so consumers resolve
+# their own environments instead of being held to pinned versions.
+uv.lock
