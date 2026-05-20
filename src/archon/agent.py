@@ -102,6 +102,49 @@ def _emit_session_start(
         f.write(json.dumps(row) + "\n")
 
 
+def _emit_prompt(
+    jsonl_path: str,
+    *,
+    prompt: str,
+    attempt: int | None = None,
+    resume_session_id: str | None = None,
+) -> None:
+    """Record the full initial prompt sent to claude.
+
+    Stamped right after ``session_start`` on every run (including each
+    idle-timeout retry, since the prompt is what's being re-sent), so
+    the dashboard / log viewer can show exactly what the agent
+    received. Critically, when a user adds a directive via
+    ``USER_HINTS.md`` and the agent appears to ignore it, the prompt
+    event makes it trivial to verify whether the hint actually made it
+    into the prompt — without re-running the plan-prompt builder by
+    hand to reconstruct the string.
+
+    On ``--resume`` runs the recorded prompt is the short continuation
+    message (``PLAN_CONTINUE`` / ``PROVER_CONTINUE`` / ``REVIEW_CONTINUE``),
+    not the original full prompt — that one lives in the prior session's
+    transcript inside Claude Code's store. ``resume_session_id`` is
+    stamped so the consumer knows this is a continuation, not a fresh
+    submission.
+    """
+    row: dict[str, object] = {
+        "ts": _now_iso(),
+        "event": "prompt",
+        "prompt": prompt,
+        "length": len(prompt),
+    }
+    if attempt is not None:
+        row["attempt"] = attempt
+    if resume_session_id:
+        row["resume_session_id"] = resume_session_id
+    try:
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        # Best-effort; never let a logging failure mask the actual run.
+        pass
+
+
 def _emit_idle_timeout(jsonl_path: str, idle_s: float, attempt: int) -> None:
     """Record an idle-timeout kill in the JSONL.
 
@@ -438,6 +481,8 @@ class ClaudeAgent:
                 jsonl_model=real_model,
                 idle_timeout_s=idle_timeout_s,
                 attempt=attempt,
+                prompt=prompt,
+                resume_session_id=resume_session_id,
             )
             last_outcome = outcome
 
@@ -530,6 +575,8 @@ class ClaudeAgent:
         jsonl_model: str | None = None,
         idle_timeout_s: float | None = 900,
         attempt: int = 3,
+        prompt: str | None = None,
+        resume_session_id: str | None = None,
     ) -> RunOutcome:
         """Run claude once with logging + watchdog.
 
@@ -554,6 +601,13 @@ class ClaudeAgent:
             role=self.role,
             attempt=attempt if attempt > 1 else None,
         )
+        if prompt is not None:
+            _emit_prompt(
+                jsonl,
+                prompt=prompt,
+                attempt=attempt if attempt > 1 else None,
+                resume_session_id=resume_session_id,
+            )
 
         cmd = cmd + ["--verbose", "--output-format", "stream-json"]
         parser_script = _STREAM_PARSER.format(

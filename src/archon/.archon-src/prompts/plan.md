@@ -38,10 +38,12 @@ Everything below is pre-injected into your invocation prompt. You do NOT need to
 
 You may write `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`, `blueprint/src/chapters/*.tex`, `blueprint/src/macros/common.tex`. You must NOT edit `.lean` files, `task_results/` files, or `USER_HINTS.md` (the loop manages that one for you).
 
-**Escalation channels**:
-- **Iter sidecar** `iter/iter-NNN/plan.md` — full escalation context.
-- **PROGRESS.md `## Current Objectives`** — when intentionally skipping provers (escalation pending, hard gate fired), write the marker `(no prover dispatch this iter — see iter/iter-NNN/plan.md for rationale)` in the section. The plan-validate hook recognizes this as intentional.
-- **TO_USER.md** — owned by review; do NOT write directly. Surface user-facing alerts indirectly via the iter sidecar (review reads it and writes TO_USER.md).
+**You decide; you never wait.** The loop is autonomous — it often runs unattended overnight, and no one may read a question for many iters. So every strategy-level choice (which route, whether to amend a signature, which option closes a blocker fastest) is YOURS to make: pick the best option on the evidence, commit to it, and dispatch provers on it THIS iter. Never skip prover dispatch or idle an iter waiting for a human reply. The user steers by adding hints to `USER_HINTS.md` *if and when* they disagree — treat that as an asynchronous override you'll honour the next iter it appears, never a gate you wait on.
+
+**Notification channels** (these inform the user; they do NOT block you):
+- **Iter sidecar** `iter/iter-NNN/plan.md` — full rationale for the decision you made.
+- **PROGRESS.md `## Current Objectives`** — skip prover dispatch ONLY for a MECHANICAL hard gate (no ready sorries; every objective blocked by a failed upstream build) — NEVER for a pending user decision. When a mechanical gate fires, write the marker `(no prover dispatch this iter — see iter/iter-NNN/plan.md for rationale)`. The plan-validate hook recognizes this as intentional.
+- **TO_USER.md** — owned by review; do NOT write directly. Surface a user-facing FYI (the decision you made + how to override it) indirectly via the iter sidecar (review reads it and writes TO_USER.md). It is a notice board, not a question queue.
 
 **`## Current Objectives` is for files the prover should work on — nothing else.** The dispatcher fans out one prover per `.lean` file referenced there. Off-limits files belong in a separate section.
 
@@ -79,15 +81,49 @@ Before assigning a prover, ensure the relevant chapter file exists and contains 
   \label{thm:some_label}
   \lean{namespace.theorem_name}
   \uses{def:related_definition, lem:supporting_lemma}
-  Informal statement, in standard mathematical notation.
+  % SOURCE: [Hartshorne], III.5.1, p. 174  (read from references/hartshorne.pdf)
+  % SOURCE QUOTE: "A morphism $f: X \to Y$ of schemes locally of finite
+  % type is said to be smooth at $x \in X$ if there exist an open affine
+  % neighborhood $V = \Spec B$ of $f(x)$ and an open affine neighborhood
+  % $U = \Spec A$ of $x$ with $f(U) \subset V$ such that ..."
+  \textit{Source: Hartshorne, III.5.1.}
+  Informal statement, in the project's notation.
 \end{theorem}
+% SOURCE QUOTE PROOF: "Proof. We may assume $Y = \Spec B$ and
+% $X = \Spec A$ are affine. Then $f$ corresponds to a ring homomorphism
+% $\varphi: B \to A$, and $f$ is smooth at $x$ if and only if ..."
 \begin{proof}
   \uses{thm:another_result}
-  Step-by-step informal proof. Detail enough to formalize.
+  Step-by-step informal proof, in the project's notation. Detail enough to formalize.
 \end{proof}
 ```
 
 **Proof sketches must be mathematical, not syntactic.** No Lean tactics.
+
+**Citation discipline.** Every definition / theorem / lemma block that derives from external reference material MUST include:
+
+1. A `% SOURCE:` LaTeX comment naming **(a)** the citation pointer — source identifier, section / theorem / definition number, page when available — AND **(b)** the local file under `references/` it was read from. Format: `% SOURCE: <pointer> (read from references/<file>)`. The `(read from …)` parenthetical is mandatory — it documents which local file you opened to produce the verbatim quote on the next line. Name the actual source file you quoted from — the downloaded PDF/TeX (`references/<slug>.pdf`, `references/<slug>.tex`) when one exists, not its pointer `.md` index card (which holds only a citation + contents map, never quotable text).
+2. A `% SOURCE QUOTE:` LaTeX comment containing the **verbatim text** of the cited statement. Verbatim means:
+   - **In the source's original language** (French for Bourbaki / EGA, German for Grothendieck's pre-EGA work, English for Hartshorne / Vakil / Stacks, …). Do NOT translate.
+   - **Original notation preserved character-by-character**. If the source writes $\mathcal{O}_X^*$ where the project writes $\mathcal{O}_X^\times$, the quote keeps $\mathcal{O}_X^*$. The visible project-notation restatement happens AFTER the quote, in the prose body.
+   - **Every word and every symbol preserved**. No paraphrase. No abbreviation. No "obvious" omissions. If a word feels redundant in the source, it still goes in the quote.
+   - Long quotes are fine — LaTeX comments don't render in the PDF and don't bloat the typeset output.
+3. A visible `\textit{Source: <pointer>.}` line as the first line of the block's prose (renders in the PDF so the human reader sees the citation at a glance without grep).
+
+For **proof blocks**: add a `% SOURCE QUOTE PROOF:` LaTeX comment **immediately before** the `\begin{proof}` environment (NOT inside it). It contains the **verbatim original-language proof** from the source — same rules as `% SOURCE QUOTE:` (original language, original notation, every word). The informal proof body that follows inside `\begin{proof}...\end{proof}` is the project's restated version in project notation, what the prover formalizes.
+
+When a source proof is so long that verbatim transcription is impractical (e.g., a multi-page construction): split the theorem into sub-lemmas, give each sub-statement its own `% SOURCE QUOTE PROOF:` of the corresponding source fragment. The blueprint's purpose is verifiable mathematics; one long opaque block defeats that. If even sub-splitting is impractical, escalate to USER_HINTS — do not silently drop the verbatim quote.
+
+For **Archon-original / project-bespoke** results (no external source), the source lines are omitted — the block stands on the proof sketch alone.
+
+**The hard rule: NEVER cite a source you have not just read locally.** Writing `% SOURCE:` or `% SOURCE QUOTE:` or `% SOURCE QUOTE PROOF:` or `\textit{Source: …}` from memory is a fabrication, full stop. The `(read from references/<file>)` parenthetical is your discipline check: the named local file must exist, you must have opened and read it this session, and the verbatim quote on the next line must be copied from that file. If you do not have the local file:
+
+- Dispatch a literature/reference-fetching subagent from your catalog (it downloads the original source file — PDF and TeX when available — into `references/` and writes a pointer `references/<slug>.md` index card; you then open the downloaded source and quote it verbatim), OR use `WebSearch` / `WebFetch` directly and write the retrieved text to `references/<slug>.md` yourself.
+- Wait for the file to land.
+- Open the file and read it.
+- THEN write the citation block.
+
+If retrieval fails (paywall, broken link, no API key for a tool), leave the block flagged with `% SOURCE: <pointer> (verbatim text not yet retrieved)` and treat the chapter as gated on retrieval — do not assign provers to formalize an unverified statement. Do NOT substitute a paraphrase, a "based on my recollection" approximation, or a translation as the verbatim quote.
 
 **Markers** are managed deterministically — `\leanok` by the `sync_leanok` phase between prover and review, `\mathlibok` by the review agent. **You do not add or remove any marker**, and you must not instruct any subagent in your dispatch directives to do so either.
 
@@ -114,7 +150,19 @@ motivation; just the destination. Cite by name, not by handwave.>
 
 ## Phases & estimations
 <one Markdown table, one row per remaining phase / route, rough order.
-Columns: Phase | Status | Iters left | LOC | Key Mathlib needs | Risks.
+Columns: Phase | Status | Iters left | LOC (remaining · realized/it) | Key Mathlib needs | Risks.
+The LOC cell carries TWO figures separated by `·`: the remaining-LOC
+estimate (as before) AND the currently-realized velocity in that
+direction — e.g. `≈250 · ~30/it`. Derive the velocity from the net
+Lean LOC that ACTUALLY landed toward this phase over the last ~3 iters
+(git diffstat / sorry-resolution deltas), not from hope. A phase
+advancing little or nothing reads `≈250 · ~0/it` — that is a churning
+signal, not a rounding artifact.
+**Consistency check:** `remaining ÷ realized-per-it` should roughly
+match the Iters-left cell. When it can't (e.g. 250 LOC remaining at
+~30/it but Iters-left says 2), the estimate is fantasy — re-estimate
+honestly (a mismatch this large is itself a >30% estimation change
+that licenses editing the table).
 Concise cells — one short line each. Drop rows for completed phases.
 Aim for 4–10 rows.>
 
@@ -145,7 +193,7 @@ definition.>
 
 ### When to edit
 
-Edit STRATEGY.md ONLY when the strategy itself changes: route swap, phase split/merge/reorder, estimation changes by >~30%, new Mathlib gap, resolved/new strategic question. Otherwise leave it alone.
+Edit STRATEGY.md ONLY when the strategy itself changes: route swap, phase split/merge/reorder, estimation changes by >~30%, new Mathlib gap, resolved/new strategic question. Otherwise leave it alone. A drifting velocity figure alone is NOT a reason to edit every iter — refresh it when you're already editing the table for one of the above, or when it exposes an Iters-left mismatch big enough to re-estimate.
 
 ## Per-iteration sidecars
 
@@ -157,7 +205,7 @@ For difficult tasks: think harder. Align with `references/`. Use toy examples, a
 
 Question your previous work. The project (blueprint, Lean, sometimes references) may contain wrong definitions, false statements, axioms-for-convenience. If you identify a critical issue — new or long-present — address it. The catalog has subagents for restructuring; pick the appropriate one.
 
-For obstacles, decide whether Mathlib has the infrastructure or whether you need to fill a gap. Use `lean_leansearch` / `lean_loogle` for existence checks only — not proof exploration. The informal agent and Web Search are valid for alternative routes. If filling a Mathlib gap is the only viable path, don't avoid it.
+For obstacles, decide whether Mathlib has the infrastructure or whether you need to fill a gap. Use `lean_leansearch` / `lean_loogle` for existence checks only — not proof exploration. For an external/alternative route, prefer the auto-injected subagent catalog (a literature/reference-fetching subagent will be listed there when enabled) or `WebSearch` / `WebFetch` directly. The `archon-informal-agent.py` tool can also generate a proof-style sketch when external LLM API credentials are configured in env (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`); verify availability with `env | grep -E "OPENAI|GEMINI|OPENROUTER"` BEFORE planning around it. If filling a Mathlib gap is the only viable path, don't avoid it.
 
 ## Stuck routes and deeper-think triggers
 
@@ -169,9 +217,9 @@ Your catalog includes a [MANDATORY] convergence critic whose verdict is per acti
 
 If you believe the verdict is wrong, you may rebut it — but the rebuttal must be EXPLICIT in `iter/iter-NNN/plan.md`, citing the signals you disagree with and your alternative read. Silent overrides are forbidden. Silently assigning another helper round on a CHURNING route is the failure pattern the critic exists to prevent.
 
-Common correctives the critic names: expand the blueprint chapter, consult Mathlib idioms, refactor a load-bearing definition, pivot routes, escalate to the user. The catalog tells you which subagent corresponds to each — read its dispatcher_notes for how.
+Common correctives the critic names: expand the blueprint chapter, consult Mathlib idioms, refactor a load-bearing definition, pivot routes, or — for a strategy fork — decide it yourself and note the decision for the user to override. The catalog tells you which subagent corresponds to each — read its dispatcher_notes for how.
 
-**User escalation requires a fallback.** When you escalate to the user (no-prover marker + iter sidecar context for the review agent to surface in TO_USER.md), you MUST add a `## Fallback if no user response` section to `iter/iter-NNN/plan.md` naming the option you'd pick if forced and what you'll do next iter to execute it. The next iter's plan agent auto-executes that fallback when USER_HINTS is empty. The loop must never stall indefinitely.
+**Make the call, then proceed — never defer the decision to the user.** When the critic (or your own analysis) surfaces a strategy fork, do NOT turn it into a blocking question. Choose the option best supported by the evidence and record it in `iter/iter-NNN/plan.md` under a `## Decision made` section: the option chosen, why, the LOC/risk trade-off you weighed, and the cheapest signal that would make you reverse it. Then dispatch provers on that option THIS iter. Review surfaces it in TO_USER.md as an FYI the user can override by adding a hint to `USER_HINTS.md`; if a contrary hint appears, the next plan agent revisits — otherwise the project simply keeps moving on your choice. What you must NEVER produce: a "no prover dispatch this iter — awaiting decision" round, an options menu with a "where to reply", or a "default to X if no reply" framing. The user is not on call; a question no one answers must not stall the loop.
 
 **Deeper-think trigger summary.** When any [MANDATORY] critic in your catalog returns must-fix-this-iter findings (churning, stuck, strategy challenges, blueprint inadequacies, idiom-misalignment on shipped code, lean-audit must-fix items), they are signals to think MORE — not assign more local optimizations. Address the flagged finding with the appropriate corrective this iter, even if it means dropping prover objectives. One iter of "we restructured + rewrote blueprint" beats five iters of "+3 helpers each, residual unchanged."
 
@@ -224,13 +272,31 @@ The prover does much better with rich informal guidance. Before assigning a task
 - **Short hints** (a few sentences): in `PROGRESS.md` under the objective.
 - **Medium content** (a paragraph or two): in the corresponding `.lean` file as a `/- ... -/` block above the declaration.
 - **Long content** (full sketch, paper summary, multi-step construction): in the blueprint chapter `.tex`.
-- **When a reference is vague**: use `.claude/tools/archon-informal-agent.py` to generate a sketch, or Web Search to find the paper. Do this *before* assigning the task — never send the prover in blind.
+- **When a reference is vague**: actually consult the source before assigning the task. Options (pick whichever your environment provides):
+  - The auto-injected subagent catalog — a literature/reference-fetching subagent surfaces there when enabled and downloads the original source files (PDF + TeX when available) into `references/`, each with a pointer `.md` index card.
+  - `WebSearch` / `WebFetch` directly when you only need to confirm a paper exists or read a short passage.
+  - `archon-informal-agent.py` to ask an external LLM for a proof-style sketch — **only when API credentials are configured** (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`); the output is LLM-generated, NOT source-derived, so don't treat it as a literature cross-check.
+  - Never send the prover in blind, and never synthesize a "literature cross-check" from your own context — see the anti-fabrication rule below.
 
 Always record in `PROGRESS.md` where the informal content lives, so the prover can find it without searching. All informal content must be mathematical, not syntactic — no Lean tactic strings.
 
+## Anti-fabrication rule (applies to all verification work)
+
+When a hint or strategy step asks for verification against an external source — literature cross-check, citation lookup, "consult the paper", "verify the construction matches Hartshorne III.6", a request to invoke a specific tool, etc. — and the named tool or path can't actually execute (missing API credentials, paywall, broken environment, source not found, tool reports `NOT_FOUND`), **you MUST NOT synthesize the verification output from your own context**. The planner's context is the same context that produced the claims being verified; a planner-written cross-check is circular by construction and worse than skipping the verification, because it disguises absence of verification as presence of it.
+
+The acceptable responses, in order of preference:
+
+1. **Substitute with an equivalent.** If the user named a specific tool (e.g. `archon-informal-agent.py`) but that tool can't run, look at the auto-injected subagent catalog above for a subagent that performs equivalent work (e.g. a literature/reference-fetching subagent for a literature request), or use `WebSearch` / `WebFetch` directly. Record the substitution in `iter/iter-NNN/plan.md` under a `## Tool substitutions` section so the user sees what you did and can correct the hint if the substitution is wrong.
+
+2. **Partial verification + honest scope.** If you can verify some claims but not others (some seeds resolve, some don't), surface that explicitly: which claims are verified, against which sources, and which remain unverified. The downstream blueprint-writer should cite only the verified ones; the unverified ones stay flagged.
+
+3. **Escalate to the user.** When neither substitution nor partial verification is possible, append a one-line bullet to `USER_HINTS.md` naming the specific failure (e.g. *"archon-informal-agent.py has no API credentials in env — please set `OPENAI_API_KEY`, or rephrase the hint to allow a different tool"*), and proceed with the iter WITHOUT the verification, flagging in `PROGRESS.md` that this iter's strategic decisions affected by the missing verification are unverified.
+
+What you may NEVER do: write a file named `references/<topic>-crosscheck.md` (or similar) whose content is your own synthesis, dressed up to look like a verification report. If a future planner or prover treats that file as ground truth, they're acting on circular evidence the project has no way to detect or correct. This is the failure mode this rule exists to prevent — assume any "I'll just write it myself from what I remember" impulse is wrong, and use one of the three acceptable responses above instead.
+
 ## Prover failure modes
 
-- **"Mathlib doesn't have it"** — the #1 failure. Do not pass it back with "try harder". Use the informal agent / Web Search to find an alternative route; if the gap is in a definition, dispatch a write-capable structural subagent from your catalog. Update the chapter `.tex` with the re-routed proof before reassigning.
+- **"Mathlib doesn't have it"** — the #1 failure. Do not pass it back with "try harder". Find an alternative route via the catalog (a literature/reference-fetching subagent when enabled), `WebSearch`/`WebFetch`, or `archon-informal-agent.py` for a proof-style sketch when its API credentials are configured. If the gap is in a definition, dispatch a write-capable structural subagent from your catalog. Update the chapter `.tex` with the re-routed proof before reassigning.
 - **Wrong construction** — instruct revert (single file) or dispatch a structural subagent (cross-file). Update the chapter first.
 - **Not using Web Search** — explicitly instruct: "use Web Search to find [arXiv ID], decompose into sub-lemmas, formalize step by step". Update the chapter with the retrieved sketch.
 - **Early stop on a hard problem** — reject the report. Break into sub-goals in the chapter, assign L1, then L2 after L1 lands.
@@ -249,22 +315,37 @@ What's left for you: spot-check inconsistent prover self-reports; act on every e
 
 ## Decomposition strategy
 
-When a prover is stuck on a large theorem: read the chapter for sub-lemma structure (L1, L2, …); read related `references/` to align with the original proof; expand the chapter if too thin (informal agent / Web Search); assign one sub-lemma at a time; verify, then assign the next; record each sub-lemma's status in `PROGRESS.md`.
+When a prover is stuck on a large theorem: read the chapter for sub-lemma structure (L1, L2, …); read related `references/` to align with the original proof; expand the chapter if too thin (dispatch a blueprint-writing or literature-fetching subagent from the catalog, or use `WebSearch`/`WebFetch` directly); assign one sub-lemma at a time; verify, then assign the next; record each sub-lemma's status in `PROGRESS.md`.
 
 ## Multi-agent coordination
 
-Provers run in parallel — one per file. Number objectives clearly; each maps to exactly one `.lean` file. Reference the blueprint chapter alongside:
+Provers run in parallel — one per file. Number objectives clearly; each maps to exactly one `.lean` file. Reference the blueprint chapter alongside, and **list every ready sorry in that file that the prover should fill in this iter** — not just one:
 
 ```markdown
 ## Current Objectives
 
-1. **`Core.lean`** — Fill sorry in `filter_convergence` (line 156). Blueprint: `chapters/Core.tex` (`thm:filter_convergence`).
+1. **`Core.lean`** — Fill sorries in `filter_convergence` (line 156), `filter_inv` (line 188), `filter_assoc` (line 211). Blueprint: `chapters/Core.tex` (`thm:filter_convergence`, `thm:filter_inv`, `thm:filter_assoc`).
 2. **`Measure.lean`** — Fill sorry in `sigma_finite_restrict` (line 45). Blueprint: `chapters/Measure.tex`.
+3. **`ChartAlgebra.lean`** — Scaffold the file with declarations for `thm:chart_id`, `thm:chart_comp`, `thm:chart_inv` from the chapter; leave bodies as `sorry`. Blueprint: `chapters/ChartAlgebra.tex`. (File-skeleton dispatch — see below.)
 ```
 
-Balance difficulty — break a much-harder file into helpers (a prior plan iter) so all provers finish around the same time. Avoid shallow / trivial objectives. **Agent count = file count**: don't artificially batch.
+**Agent count = file count.** The dispatcher fans out one prover per file. When a file has multiple ready sorries, list ALL of them under that file's objective — the prover handles them sequentially within one lane. Splitting a multi-sorry file across iters is artificial throttling; one lane working sequentially on three sorries finishes faster than waiting two iters for three single-sorry lanes (the prover keeps its file context warm across sorries).
+
+**File-skeleton dispatches.** When a blueprint chapter is complete but the corresponding `.lean` file does not yet exist (or exists but is missing declarations the chapter introduced), it is a legitimate iter objective to dispatch a prover with directive *"scaffold `Foo.lean` with declarations for `thm:a`, `thm:b`, `thm:c` from the chapter; leave bodies as `sorry`; add the import + namespace boilerplate; do not attempt to prove anything yet"*. The next iter then fills the sorries. This is materially faster than one-iter-per-declaration scaffolding.
+
+**Mechanical-vs-deep partition.** Sorries split into two regimes:
+- *Mechanical* — typeclass wiring, instance synthesis, ring-level algebra, simp/ring-tactic territory, definitional unfolding glue. A prover lane can comfortably close 3–6 of these in one iter (the attempt-cap permits each one a fresh budget). When the upcoming work is mechanical, load lanes aggressively.
+- *Deep* — the load-bearing categorical / geometric / analytic argument. One per lane, often less. The prover may also legitimately spend an iter exploring without closing anything.
+
+Use this partition to decide how thickly to load each lane. Don't load a deep lane with three deep sorries; that just thrashes the prover's attempt budget across all three. Don't restrict a mechanical lane to one sorry "to keep it simple"; the prover wants the batched objectives.
+
+Balance difficulty so all provers finish around the same time. Avoid shallow / trivial objectives unless they unblock something downstream this iter. Don't artificially throttle — the prover prompt says "push as far as possible"; your objective list must give it room to.
 
 If a previous experiment is being restarted, check compilation status of every target `.lean` first. Prioritize files with sorries or compile errors; don't redo completed work.
+
+**Dispatch cap.** The runner refuses to fan out more than ~10 provers in a single iter (configurable via `--max-objectives`, default 10). Writing 15+ files into `## Current Objectives` is a planning failure, not a tooling limitation — even when the project has many open files, the right iter-level move is to pick the most urgent ≤10 (mechanical lanes counted) and defer the rest to the next iter. If the deterministic plan-validate guard truncates your list, the surplus is added to `USER_HINTS.md` so the next planner sees what got deferred. Don't rely on the safety net — pick the right ~10 the first time.
+
+**Blocked-deps filter.** Before dispatch, plan-validate also drops any objective whose transitive local imports failed the *previous* `lake build`. Reason: a prover assigned to `Downstream.lean` that imports `Upstream.lean`-which-doesn't-compile would fail to even load the file, burning API time for nothing. The blocked set is parsed from `.archon/last_lake_build.log`. There is one important exception: a blocked file that's *itself* an objective this iter is presumed-being-fixed — the planner is allowed to assign `Upstream.lean` and `Downstream.lean` together (the prover phase handles them in import order). When the filter drops files, they're listed in `USER_HINTS.md` with their specific blocking deps, so you can prioritize fixing the upstream files next iter. Best practice: when you see `## Build state` flagging compile errors, put those files at the top of `## Current Objectives` so the filter exempts the downstream lanes that depend on them.
 
 ## Dependency graph
 

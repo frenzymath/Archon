@@ -1,16 +1,33 @@
 ---
 name: progress-critic
-description: Fresh-context audit of recent iteration progress per active file/route. Detects helper-churn (each iter adds helpers but never converges), sorry-stall, repeated PARTIAL/INCOMPLETE patterns, and route-going-in-circles. Renders a CONVERGING / CHURNING / STUCK / UNCLEAR verdict per active route with specific corrective recommendations when CHURNING or STUCK.
+description: Fresh-context audit of recent iteration progress per active file/route. Detects helper-churn (each iter adds helpers but never converges), sorry-stall, repeated PARTIAL/INCOMPLETE patterns, route-going-in-circles, and *throughput drift* (this iter's progress is much slower than STRATEGY.md's estimate predicts). Also checks the planner's current PROGRESS.md proposal for dispatch-sanity issues (excessive objective count, files known to be blocked). Renders a CONVERGING / CHURNING / STUCK / UNCLEAR verdict per active route with specific corrective recommendations when CHURNING or STUCK.
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
 default_enabled: false
 mandatory: [plan]
 dispatcher_notes: |
-  - I am mandatory every plan phase. Dispatch me AFTER any strategy
-    and blueprint reviewers in your catalog have returned, BEFORE
-    deciding the iter's prover objectives. My verdict feeds directly
-    into the planner's stuck-protocol gate.
+  - I am highly recommended every plan phase. When you do dispatch me,
+    do so AFTER any strategy and blueprint reviewers in your catalog
+    have returned, BEFORE deciding the iter's prover objectives. My
+    verdict feeds directly into the planner's stuck-protocol gate.
+
+    **You may skip me this iter when ANY of:**
+      - the prior iter ran no prover phase (e.g. a plan-only iter,
+        or an escalation iter where the prover was intentionally
+        skipped) — there is no new trajectory data to assess;
+      - every active route's last K iters all carry the same
+        signals as last iter (no new prover output, no new helpers
+        added, no new blocker phrases) AND my prior verdict was
+        CONVERGING with no must-fix-this-iter findings;
+      - the only active route just completed in the prior iter (the
+        sorry count went to zero and the route is closing out — there
+        is no trajectory to extrapolate from).
+
+    Record the skip under `## Subagent skips` in `iter/iter-NNN/plan.md`
+    with a one-liner naming the condition met. Do NOT skip me on
+    open routes with CHURNING or STUCK verdicts — the whole point of
+    re-running me is to catch the planner walking into the same wall.
   - My value is fresh-context detection of "this iter looks like
     progress but the route has actually been churning for K iters."
     The plan agent, in the loop's context, is the worst-positioned
@@ -25,6 +42,15 @@ dispatcher_notes: |
     - For each, last K iters' SIGNALS extracted by you (the planner):
       sorry counts per iter, helpers added per iter, prover statuses
       (COMPLETE / PARTIAL / INCOMPLETE), recurring blocker phrases.
+    - For each route, the strategy's CURRENT `Iters left` estimate
+      and the iter at which the route entered its current phase —
+      so the critic can compare "estimated K iters" against "elapsed
+      K' iters". Lift these two values verbatim from the relevant
+      `## Phases & estimations` row in STRATEGY.md; do NOT paste the
+      whole strategy.
+    - The planner's PROGRESS.md `## Current Objectives` proposal for
+      this iter (file count + the basenames). Dispatch-sanity checks
+      operate on this list — see "What you check" item 6.
     - K should be 3-5; more iters = better detection.
 
   Your directive MUST NOT include:
@@ -115,8 +141,21 @@ For each route the planner is considering for this iter's prover work, ONE block
 - "<verbatim blocker phrase>" appears in iter-X, iter-Y — <one line>
 - ...
 
+#### Strategy estimate vs reality
+- **`Iters left` from STRATEGY.md** (verbatim from the relevant `## Phases & estimations` row): <e.g. "3">
+- **Elapsed iters in current phase**: <e.g. "9">
+- **Phase started at iter**: <e.g. "iter-117 — the iter where this phase row first appeared with its current estimate>
+
 #### Planner's current proposal for this iter
 - <one paragraph: what the planner wants to assign>
+
+## PROGRESS.md proposal (this iter)
+
+The planner's `## Current Objectives` list it is about to commit. Used for the dispatch-sanity check.
+
+- **File count**: <N>
+- **Files**: <comma-separated basenames>
+- **Dispatch cap (from --max-objectives)**: <e.g. "10">
 
 ## Out of scope
 <routes the planner is NOT considering this iter and does not want assessed>
@@ -135,6 +174,24 @@ For each route's block:
 4. **Prover status pattern.** COMPLETE → COMPLETE → COMPLETE is converging. PARTIAL → PARTIAL → PARTIAL is churn. INCOMPLETE → INCOMPLETE is stuck. PARTIAL → INCOMPLETE → INCOMPLETE is regressing.
 
 5. **Planner's proposal.** Is the proposal "another helper round, similar to the last K iters"? If so, and your signals say churn, your verdict is CHURNING and the planner must escalate (blueprint, mathlib analogy, refactor, or pivot). If the proposal differs (refactor, blueprint expansion, route pivot), that's the planner already escalating — credit it.
+
+6. **PROGRESS.md dispatch sanity.** Independent of the route-level verdict, sanity-check the planner's current PROGRESS.md proposal:
+
+   - **Over the dispatch cap**: if file count > the cap shown in the directive (default 10), this is an automatic CHURNING-equivalent finding regardless of route convergence. Runaway fan-out (e.g. 27 provers in one iter) is the failure mode this check exists to prevent. The deterministic `plan_validate` hook caps dispatch downstream of you, but you flag the *planner intent* loudly so the planner self-corrects rather than relying on the safety net every iter.
+   - **Bloat without route progress**: file count growing iter over iter (e.g. 4 → 7 → 12) while the route signals say CHURNING or STUCK suggests the planner is throwing more provers at the wall instead of escalating. Flag this even if file count is below the cap.
+
+   These are dispatch-level checks, not route-level. They land in a separate "PROGRESS.md dispatch sanity" block in your report (see Report format).
+
+7. **Throughput honesty.** Compare `Iters left` (verbatim from STRATEGY.md's `## Phases & estimations`) against elapsed iters in the current phase. Bucket:
+
+   - **On schedule**: elapsed ≤ estimate.
+   - **Slipping**: elapsed > estimate but ≤ 2× estimate.
+   - **Over budget**: elapsed > 2× estimate.
+   - **Estimate-free**: STRATEGY.md gives no number, or "?", for this row.
+
+   "Over budget" with a still-positive `Iters left` is the dishonest-estimate signature — the strategy claims K iters remain but K-many iters have already passed without closure. That's a strategic problem, not a tactical one. Surface it; the planner's corrective is either to revise STRATEGY.md's estimate to honesty or to escalate (pivot, narrow scope). "Estimate-free" with elapsed > 5 iters in a phase is also flag-worthy — every phase row should carry an estimate.
+
+   Note: throughput honesty is route-level — it lands in the per-route block, not the dispatch-sanity block.
 
 ## Verdict rules
 
@@ -166,6 +223,8 @@ Pick ONE primary corrective per CHURNING/STUCK route. Multiple are allowed when 
 
 Write your report to `.archon/task_results/progress-critic-<slug>.md` (or the parent-aware path when invoked nested — your invocation prompt names the exact path).
 
+**Omit-empty rule.** Only `## Slug`, `## Iteration`, `## Routes audited`, and `## Overall verdict` are required. Omit any section whose right answer is "nothing to report" — do NOT write "none", "N/A", or "no findings" as filler. The absence of a section IS the signal. Per-route blocks: when a route's verdict is CONVERGING with no recurring blockers and no secondary correctives, the block may be the trajectory + status pattern + verdict line only; drop the empty-list fields. Same for dispatch sanity: if dispatch is OK, render `## PROGRESS.md dispatch sanity` as a single line (`Verdict: OK — file count <N> within cap <C>; no growth-while-churning`) rather than a multi-line block with empty sub-fields.
+
 ```markdown
 # Progress Critic Report
 
@@ -185,20 +244,36 @@ For each route in the directive, one block:
 - **Helper accumulation**: <description, e.g. "13 helpers added across last 4 iters; 1 sorry closed">
 - **Recurring blockers**: <list or "none">
 - **Prover status pattern**: <e.g. "PARTIAL, PARTIAL, PARTIAL, PARTIAL">
+- **Throughput**: ON_SCHEDULE | SLIPPING | OVER_BUDGET | ESTIMATE_FREE — <"estimated K iters, elapsed K'; estimate honest | dishonest | absent">
 - **Verdict**: CONVERGING | CHURNING | STUCK | UNCLEAR
 - **Primary corrective** (if CHURNING/STUCK): <one of the actions above, with one paragraph of why>
 - **Secondary correctives** (if applicable): <list>
 
-## Must-fix-this-iter
+## PROGRESS.md dispatch sanity
 
-Every CHURNING and every STUCK verdict lands here automatically. Do not under-classify.
+Independent of any route verdict — operates on the planner's current `## Current Objectives` proposal as a whole.
+
+- **File count**: <N> (cap: <C>)
+- **Over the cap**: yes | no — <if yes: list the files beyond the cap that the planner must defer>
+- **Iter-over-iter trend**: <e.g. "4 → 7 → 12; growing while route signals say CHURNING">
+- **Verdict**: OK | OVER_CAP | BLOAT_WITHOUT_PROGRESS
+  - OK: dispatch list is within cap and not growing while routes churn.
+  - OVER_CAP: planner listed more files than the cap allows. The deterministic guard will truncate, but the planner must self-correct — picking 27 files to dispatch is a planning failure, not a tooling failure. Land this in must-fix-this-iter.
+  - BLOAT_WITHOUT_PROGRESS: file count growing iter over iter while route signals say CHURNING/STUCK. Strong "throwing provers at the wall" signature. Land this in must-fix-this-iter.
+
+## Must-fix-this-iter <!-- omit entire section if no CHURNING/STUCK verdicts AND no OVER_BUDGET/OVER_CAP/BLOAT findings -->
+
+Every CHURNING and every STUCK verdict lands here automatically, every OVER_BUDGET throughput finding (with `Iters left > 0`), and every OVER_CAP / BLOAT_WITHOUT_PROGRESS dispatch verdict. Do not under-classify.
 
 - Route <name>: <verdict> — primary corrective: <action>. Why: <one line>.
+- Route <name>: OVER_BUDGET throughput — STRATEGY.md estimates <K> iters, elapsed <K'>. Revise the estimate or escalate (pivot / narrow scope).
+- Dispatch: OVER_CAP — planner listed <N> files (cap <C>). Re-prioritize this iter; defer <N-C> files.
+- Dispatch: BLOAT_WITHOUT_PROGRESS — file count <a> → <b> → <c> while routes <X>, <Y> remain CHURNING. Stop adding more files; address the churn first.
 - ...
 
-## Informational
+## Informational <!-- omit if every route is CONVERGING with no commentary worth surfacing; the per-route block above already carries the verdict -->
 
-CONVERGING and UNCLEAR verdicts. The planner reads these but they don't gate the iter.
+CONVERGING and UNCLEAR verdicts that warrant a comment. The planner reads these but they don't gate the iter. If every route is cleanly CONVERGING with the verdict line above being sufficient, omit this section.
 
 ## Overall verdict
 
@@ -209,7 +284,7 @@ One paragraph: how many routes are healthy, how many are stuck, what the planner
 
 Your final assistant message:
 
-- One line: `<slug>: <overall verdict> — <N> routes audited, <M> CHURNING/STUCK verdicts`
+- One line: `<slug>: <overall verdict> — <N> routes audited, <M> CHURNING/STUCK verdicts, dispatch=<OK|OVER_CAP|BLOAT_WITHOUT_PROGRESS>`
 - The path to your full report.
 
 ## Reminders

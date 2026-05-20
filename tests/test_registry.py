@@ -453,24 +453,41 @@ class CatalogBlockTest(unittest.TestCase):
         self.assertLess(out.index("**alpha**"), out.index("**zebra**"))
 
     def test_mandatory_tag_for_calling_phase(self):
+        # The frontmatter field name is still ``mandatory: [...]`` for
+        # backward compat, but the rendered tag now says HIGHLY RECOMMENDED
+        # to match the softened dispatch semantics (planner may skip with
+        # a recorded rationale; the audit silences when one is recorded).
         self._write_subagent(
             "reviewer", description="audit", mandatory=["plan"], read_only=True,
         )
         plan_out = self._render("plan")
         review_out = self._render("review")
-        self.assertIn("MANDATORY", plan_out)
-        self.assertNotIn("MANDATORY", review_out)
+        self.assertIn("HIGHLY RECOMMENDED", plan_out)
+        self.assertNotIn("HIGHLY RECOMMENDED", review_out)
+        # The old "MANDATORY" tag should be gone — including it would be
+        # misleading given the new skip-rationale affordance.
+        self.assertNotIn("[MANDATORY]", plan_out)
 
     def test_mandatory_footer_when_phase_has_mandatory(self):
         self._write_subagent("reviewer", mandatory=["plan"])
         out = self._render("plan")
-        self.assertIn("You MUST dispatch", out)
+        # The footer no longer says "You MUST dispatch"; it asks the
+        # planner to dispatch OR record a skip rationale, and names the
+        # canonical ``## Subagent skips`` section the audit reads.
+        self.assertIn("HIGHLY RECOMMENDED", out)
+        self.assertIn("Subagent skips", out)
         self.assertIn("`reviewer`", out)
+        # The old hard-mandatory phrasing is gone.
+        self.assertNotIn("You MUST dispatch", out)
 
     def test_no_mandatory_footer_when_optional_only(self):
         self._write_subagent("writer", description="optional", mandatory=[])
         out = self._render("plan")
-        self.assertNotIn("You MUST dispatch", out)
+        # No highly-recommended subagent ⇒ the dispatch-or-skip footer is
+        # absent (the catalog still renders the subagent, just without
+        # the recommendation footer).
+        self.assertNotIn("HIGHLY RECOMMENDED", out)
+        self.assertNotIn("Subagent skips", out)
 
     def test_read_only_and_can_spawn_tags(self):
         self._write_subagent("ro", description="r", read_only=True)
@@ -589,6 +606,135 @@ class MandatoryAuditTest(unittest.TestCase):
             self.project, self.state, 7, "plan", enabled=self._enabled,
         )
         self.assertEqual(missing, [])
+
+    # ── skip-rationale recognition ────────────────────────────────
+
+    def _write_skip_rationale(self, phase: str, lines: list[str]):
+        """Create ``iter/iter-007/<phase>.md`` with a ## Subagent skips block."""
+        sidecar_dir = self.state / "iter" / "iter-007"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        body = ["# Iter 7 — " + phase, "", "## Subagent skips", ""]
+        body.extend(lines)
+        (sidecar_dir / f"{phase}.md").write_text(
+            "\n".join(body) + "\n", encoding="utf-8",
+        )
+
+    def test_skip_rationale_silences_missing(self):
+        """A recommended subagent with a recorded skip rationale is NOT
+        reported as missing — the planner consciously chose to skip."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("auditor", mandatory=["plan"])
+        self._write_skip_rationale("plan", [
+            "- auditor: STRATEGY.md SHA unchanged from iter-006",
+        ])
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "plan", enabled=self._enabled,
+        )
+        self.assertEqual(missing, [])
+
+    def test_skip_rationale_does_not_apply_across_phases(self):
+        """A rationale in plan.md doesn't silence a review-phase miss
+        (and vice versa) — each phase reads its own sidecar."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("reviewer", mandatory=["review"])
+        # Rationale in plan.md, but the missing audit is for review phase.
+        self._write_skip_rationale("plan", [
+            "- reviewer: dispatched somewhere else",
+        ])
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "review", enabled=self._enabled,
+        )
+        self.assertEqual(missing, ["reviewer"])
+
+    def test_skip_rationale_partial_coverage(self):
+        """Two recommended subagents, one dispatched, one skipped-with-rationale,
+        one missing-without-rationale → only the third is reported as missing."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("first", mandatory=["plan"])
+        self._write_subagent("second", mandatory=["plan"])
+        self._write_subagent("third", mandatory=["plan"])
+        self._record_dispatch("first", "x")
+        self._write_skip_rationale("plan", [
+            "- second: prior verdict was SOUND",
+        ])
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "plan", enabled=self._enabled,
+        )
+        self.assertEqual(missing, ["third"])
+
+    def test_skip_rationale_ignores_prose_lines(self):
+        """Free-text lines under ``## Subagent skips`` shouldn't be misread
+        as subagent names; only ``- <name>: <reason>`` bullets count."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("auditor", mandatory=["plan"])
+        self._write_skip_rationale("plan", [
+            "This iter we are skipping the auditor because",
+            "of the following reasons:",
+            "",
+            "- something else here that isn't a subagent name",
+            "- auditor: STRATEGY.md unchanged",
+        ])
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "plan", enabled=self._enabled,
+        )
+        self.assertEqual(missing, [])
+
+    def test_skip_rationale_section_must_be_named_exactly(self):
+        """A ``## Skipped`` or ``## Notes`` heading does NOT count — only
+        the canonical ``## Subagent skips`` name. Prevents the planner
+        from silencing the audit via a misnamed section."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("auditor", mandatory=["plan"])
+        sidecar_dir = self.state / "iter" / "iter-007"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        (sidecar_dir / "plan.md").write_text(
+            "# Plan\n\n## Skipped subagents\n\n- auditor: any reason\n",
+            encoding="utf-8",
+        )
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "plan", enabled=self._enabled,
+        )
+        self.assertEqual(missing, ["auditor"])
+
+    def test_skip_rationale_stops_at_next_section(self):
+        """The parser stops reading bullets when it hits the next ``## `` heading,
+        so a bullet from an unrelated subsequent section can't silence the audit."""
+        from archon.subagents.audit import check_mandatory_dispatched
+        self._enabled = []
+        self._write_subagent("auditor", mandatory=["plan"])
+        sidecar_dir = self.state / "iter" / "iter-007"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        (sidecar_dir / "plan.md").write_text(
+            "# Plan\n\n"
+            "## Subagent skips\n\n"
+            "- some-other-subagent: some reason\n\n"
+            "## Open questions\n\n"
+            "- auditor: not actually a skip, just a question naming the subagent\n",
+            encoding="utf-8",
+        )
+        missing = check_mandatory_dispatched(
+            self.project, self.state, 7, "plan", enabled=self._enabled,
+        )
+        self.assertEqual(missing, ["auditor"])
+
+    def test_skip_rationale_helper_returns_dict(self):
+        """Direct unit test of ``_read_skip_rationales`` — verifies the parser
+        produces the expected ``{name: reason}`` mapping."""
+        from archon.subagents.audit import _read_skip_rationales
+        self._write_skip_rationale("plan", [
+            "- strategy-critic: STRATEGY.md SHA unchanged from iter-006",
+            "- progress-critic: no prover output last iter",
+        ])
+        got = _read_skip_rationales(self.state, 7, "plan")
+        self.assertEqual(got, {
+            "strategy-critic": "STRATEGY.md SHA unchanged from iter-006",
+            "progress-critic": "no prover output last iter",
+        })
 
 
 # ── built-in descriptors smoke ──────────────────────────────────────

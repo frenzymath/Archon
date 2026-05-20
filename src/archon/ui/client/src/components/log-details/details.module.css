@@ -112,6 +112,25 @@
 .resultWarning { padding: 0 12px; background: rgba(227, 155, 0, 0.06); color: #b08800; }
 .resultSuccess { padding: 0 12px; background: rgba(40, 167, 69, 0.06); color: #22863a; }
 
+/* -- Prompt block (initial prompt sent to claude) --
+ * Preformatted so whitespace is preserved exactly as sent. The font
+ * is monospaced for the same reason — character-for-character fidelity
+ * matters when verifying hint injection. */
+.promptBlock {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 500px;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 /* -- Thinking/text block -- */
 .thinkingBlock {
   padding: 8px 12px;

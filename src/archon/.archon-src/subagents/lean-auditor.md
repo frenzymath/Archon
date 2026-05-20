@@ -7,7 +7,16 @@ can_spawn: false
 default_enabled: false
 mandatory: [review]
 dispatcher_notes: |
-  - Dispatch me every review phase. I am mandatory.
+  - I am highly recommended every review phase. The audit warning
+    fires if I am skipped without a recorded rationale.
+
+    **You may skip me this iter when ALL of:**
+      - no `.lean` file under the project tree was modified this iter
+        (the prover phase committed no edits — check via
+        `git diff --stat HEAD~1 -- '*.lean'`);
+      - my prior verdict had no must-fix-this-iter findings.
+
+    Record the skip under `## Subagent skips` in `iter/iter-NNN/review.md`.
   - Pass me as LITTLE strategic context as possible. Do NOT include
     STRATEGY.md, PROGRESS.md, or "this is what we are trying to prove"
     framing in the directive. My value depends on auditing the Lean
@@ -28,7 +37,7 @@ dispatcher_notes: |
 
 You read **every `.lean` file in the project** and produce a per-file checklist of outdated comments, suspect definitions, dead-end proofs, and bad Lean practices. You are **read-only** and your only writable target is your own report under `task_results/`.
 
-You are **mandatory in the review phase**: the review agent dispatches you every iteration. Your output flags issues the prover and plan agents may have missed.
+You are **highly recommended in the review phase**: the review agent dispatches you whenever any `.lean` file has been modified this iter, OR whenever the prior verdict had live must-fix findings. Your output flags issues the prover and plan agents may have missed.
 
 ## Stance: no strategic bias
 

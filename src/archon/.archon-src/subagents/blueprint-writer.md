@@ -103,17 +103,57 @@ Each declaration block in a chapter looks like:
   \label{thm:some_label}
   \lean{namespace.theorem_name}
   \uses{def:related_definition, lem:supporting_lemma}
-  Informal statement of the theorem, using standard mathematical notation.
+  % SOURCE: [Hartshorne], III.5.1, p. 174  (read from references/hartshorne-III-5.md)
+  % SOURCE QUOTE: "A morphism $f: X \to Y$ of schemes locally of finite
+  % type is said to be smooth at $x \in X$ if there exist an open affine
+  % neighborhood $V = \Spec B$ of $f(x)$ and an open affine neighborhood
+  % $U = \Spec A$ of $x$ with $f(U) \subset V$ such that ..."
+  \textit{Source: Hartshorne, III.5.1.}
+  Informal statement of the theorem, in the project's notation.
 \end{theorem}
 
+% SOURCE QUOTE PROOF: "Proof. We may assume $Y = \Spec B$ and
+% $X = \Spec A$ are affine. Then $f$ corresponds to a ring homomorphism
+% $\varphi: B \to A$, and $f$ is smooth at $x$ if and only if ..."
 \begin{proof}
   \uses{thm:another_result}
-  Step-by-step informal proof. Reference blueprint labels with \uses{...}
-  so the dependency graph stays accurate.
+  Step-by-step informal proof, in the project's notation. Reference blueprint labels
+  with \uses{...} so the dependency graph stays accurate.
 \end{proof}
 ```
 
 Use `\definition`, `\lemma`, `\theorem`, `\proposition`, `\corollary` as appropriate. `\lean{...}` names the Lean declaration this block corresponds to. `\uses{...}` records cross-references; keep it accurate so `leanblueprint`'s dependency graph remains usable.
+
+### Citation discipline (the hard rule)
+
+**Every declaration block that derives from external reference material requires three citation elements:**
+
+1. **`% SOURCE:` LaTeX comment** — pointer + local file. Format: `% SOURCE: <citation pointer> (read from references/<file>.md)`. The pointer is the source identifier + section/theorem/definition number + page when available (e.g. `[Hartshorne], III.5.1, p. 174` or `[Stacks Project], Tag 01V4`). The `(read from references/<file>.md)` parenthetical names the local file you opened to produce the verbatim quote.
+2. **`% SOURCE QUOTE:` LaTeX comment** — the **verbatim text** of the cited statement, copied character-by-character from the local reference file you just named in the `% SOURCE:` line. Verbatim means:
+   - **Original language.** French for Bourbaki / EGA, German for Grothendieck's early notes, English for Hartshorne / Vakil / Stacks, etc. Do NOT translate.
+   - **Original notation preserved.** If the source writes $\mathcal{O}_X^*$ and the project uses $\mathcal{O}_X^\times$, the verbatim quote keeps $\mathcal{O}_X^*$. The project-notation restatement happens in the prose body that follows, NOT in the quote.
+   - **Every word, every symbol.** No paraphrase, no "for brevity" abbreviation. The quote is the anti-hallucination signal — a writer who actually opened the source can paste; a writer reconstructing from memory cannot reproduce the source's exact words.
+3. **Visible `\textit{Source: <pointer>.}` line** — first line of the prose body. Renders in the PDF so a mathematician reading the typeset blueprint sees the citation at a glance.
+
+**For proof blocks**: include a `% SOURCE QUOTE PROOF:` LaTeX comment **immediately before** the `\begin{proof}` environment (NOT inside it). Same verbatim rules — original language, original notation, every word. The informal proof body inside `\begin{proof}...\end{proof}` is the project's restated version in project notation, what the prover formalizes.
+
+When a source proof is too long for one verbatim block (multi-page construction): split the theorem into sub-lemmas in the directive's logical structure, and give each sub-statement its own `% SOURCE QUOTE PROOF:`. One opaque mega-quote defeats verifiability. If even sub-splitting is impractical, report it in "Notes for Plan Agent" — do not silently drop the verbatim quote.
+
+**For Archon-original / project-bespoke results** (the directive does not name an external source for this block): the source lines are omitted — the block stands on the proof sketch alone.
+
+**The hard rule, explicit:**
+
+> **You may NEVER write `% SOURCE:`, `% SOURCE QUOTE:`, `% SOURCE QUOTE PROOF:`, or `\textit{Source: ...}` from training memory.** Every such line must be backed by a local file under `references/` that you have **opened and read in this session**, and the verbatim quote must be a character-by-character copy of text from that file.
+
+The `(read from references/<file>.md)` parenthetical in `% SOURCE:` is your discipline check. If, when reviewing your own draft, you find a block where you cannot point to the specific local file you read to produce the quote — you fabricated it. Delete the quote. Either dispatch a `reference-retriever` (see below) to obtain the missing source, or report the block as INCOMPLETE under "Notes for Plan Agent".
+
+If the directive named a source but the local reference file is missing or doesn't contain the specific statement you need:
+
+- **Dispatch a `reference-retriever` mid-session** (see "Dispatching a reference-retriever" below) to fetch the missing material into `references/<slug>.md`.
+- **Wait for the retriever to return**, then **open and read the new file**.
+- THEN write the citation block, citing the new local file in the `% SOURCE:` parenthetical.
+
+If retrieval fails (paywall, broken link, no API key, not available online): mark the block `% SOURCE: <pointer> (verbatim text not yet retrieved)` and skip it. Report it as INCOMPLETE. Do NOT substitute a paraphrase, a recollection, or a translation as the verbatim quote — that's the iter-149 failure mode and the entire rule exists to prevent it.
 
 ## Rules
 
@@ -129,7 +169,8 @@ Use `\definition`, `\lemma`, `\theorem`, `\proposition`, `\corollary` as appropr
 - **Stay within your chapter.** Your declared write-domain is one `*.tex` file. The Archon CLI rejects writes outside it.
 - **Define non-standard macros in `blueprint/src/macros/common.tex`** before using them — but: that file is outside your write-domain, so you DON'T touch it. If the directive requires a new macro, you note in your report "needs macro `\foo`" and leave the LaTeX using the new command name; the plan agent adds the macro before next iter's typeset.
 - **Use mathematical, not Lean-syntactic prose.** Describe the proof in the language of mathematics — definitions, set inclusions, ring maps, universal properties — not in Lean tactic syntax. The prover formalizes your math.
-- **Document every change** in your report.
+- **Follow citation discipline** for every block derived from external reference material (see "Citation discipline (the hard rule)" above). Each such block needs `% SOURCE:` with a local-file parenthetical, `% SOURCE QUOTE:` with a verbatim original-language quote, `% SOURCE QUOTE PROOF:` before the proof env when applicable, and a visible `\textit{Source: ...}` prefix. Never cite from memory — only from a local `references/<file>.md` you opened and read in this session.
+- **Document every change** in your report, including which `references/<file>.md` files you opened (under "References consulted").
 
 ### What you MUST NOT do
 - **Do NOT add `\leanok` or `\mathlibok` markers.** Those are managed by the `sync_leanok` phase + the review agent — never by you.
@@ -138,6 +179,8 @@ Use `\definition`, `\lemma`, `\theorem`, `\proposition`, `\corollary` as appropr
 - **Do NOT edit `.lean` files** or any other state file.
 - **Do NOT write Lean syntax** — keep the chapter mathematical, not syntactic.
 - **Do NOT expand scope.** Stick to what the directive listed under "Required content".
+- **Do NOT fabricate citations.** Never write `% SOURCE:`, `% SOURCE QUOTE:`, `% SOURCE QUOTE PROOF:`, or `\textit{Source: ...}` from memory. If you don't have a local `references/<file>.md` containing the source text, dispatch a retriever and wait. The `(read from references/<file>.md)` parenthetical is the discipline check — if you cannot truthfully point to the file you read, the citation block is not allowed in the chapter.
+- **Do NOT translate or restate the verbatim quote.** `% SOURCE QUOTE:` and `% SOURCE QUOTE PROOF:` contain the source's original language, original notation, every word as-is. Project-notation rewrites belong in the rendered prose body, not in the verbatim comment.
 
 ## Reading references
 
@@ -176,13 +219,13 @@ If your invocation's recorded write-domain does NOT include `references/**` (you
 ## Workflow
 
 1. Read your directive completely.
-2. **Read `references/summary.md`** and every reference your directive points at; also read sibling-chapter material that informs cross-references.
+2. **Read `references/summary.md`** and every reference your directive points at; also read sibling-chapter material that informs cross-references. Track which local files you actually opened — you will need their paths for the `% SOURCE:` parenthetical.
 3. Read the target chapter currently on disk to see what's already there.
-4. Plan the edits: which blocks to add, which to revise. Decide where each new block goes in the chapter's existing flow.
-5. **If a needed source is missing from `references/`, dispatch a `reference-retriever`** (see above) and wait for it to return before drafting the affected sections.
-6. Make the edits.
-7. Verify the file is still valid LaTeX at a glance (no unmatched begin/end, balanced braces in `\label`/`\uses`/`\lean`).
-8. Write your report.
+4. Plan the edits: which blocks to add, which to revise. Decide where each new block goes in the chapter's existing flow. For each block that derives from an external source, identify the specific local `references/<file>.md` containing the verbatim statement (and proof, if applicable). If no local file covers the statement, list it as "retrieval needed" for the next step.
+5. **For every "retrieval needed" item, dispatch a `reference-retriever`** (see above) and **wait** for it to return. THEN open and read the newly-written `references/<slug>.md` before drafting the citing block. Do not draft citation blocks against pending or imagined sources.
+6. Make the edits. For each citation block: copy `% SOURCE QUOTE:` and `% SOURCE QUOTE PROOF:` content character-by-character from the local reference file — original language, original notation, every word. Do not transcribe from a window of the file you "remember reading"; have the file open and copy.
+7. Verify the file is still valid LaTeX at a glance (no unmatched begin/end, balanced braces in `\label`/`\uses`/`\lean`). Spot-check that every `% SOURCE:` line has a non-empty `(read from references/<file>.md)` parenthetical and that the named file exists.
+8. Write your report. List under "References consulted" every local file you opened in step 2 and step 5.
 
 ## Logging
 
@@ -211,6 +254,11 @@ blueprint/src/chapters/<chapter-slug>.tex
 ## Cross-references introduced
 - `\uses{thm:bar}` added in proof of `\thm:foo` — verify `thm:bar` exists in <chapter or this same one>
 - ...
+
+## References consulted
+<every local file under `references/` you OPENED and READ this session, with a one-line note on what you took from each. The plan agent and the reviewer use this list to verify that every `% SOURCE:` parenthetical points at a file you actually read. Omit this section only when you wrote zero citation blocks (Archon-original chapter).>
+- `references/hartshorne-III-5.md` — verbatim quote for `\thm:smooth_criterion` (statement + proof).
+- `references/stacks-tag-01V4.md` — verbatim quote for `\def:etale_morphism`.
 
 ## Macros needed (if any)
 - `\foo{...}` — used in <where>; needs definition in `macros/common.tex`. NOT added by me (out of write-domain).

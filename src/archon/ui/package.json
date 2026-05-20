@@ -1,6 +1,6 @@
 {
   "name": "archon-ui",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Archon Dashboard UI - A web-based dashboard for monitoring Archon formalization projects",
   "scripts": {

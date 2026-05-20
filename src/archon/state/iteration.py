@@ -348,8 +348,12 @@ def extract_session_id(jsonl_path: Path) -> str | None:
             if sid:
                 return sid
     # Fallback: session_meta (captured at session start so crashed
-    # sessions are still resumable).
-    for line in text.splitlines():
+    # sessions are still resumable). Walked in reverse so a phase that
+    # restarted multiple times (each restart leaves its own session_meta
+    # earlier in the file) yields the LATEST run — that's the session
+    # Claude Code's store actually has, and the older session_metas are
+    # rolled into it via prior --resume calls.
+    for line in reversed(text.splitlines()):
         line = line.strip()
         if not line:
             continue

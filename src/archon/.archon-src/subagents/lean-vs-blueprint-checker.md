@@ -7,11 +7,23 @@ can_spawn: false
 default_enabled: false
 mandatory: [review]
 dispatcher_notes: |
-  - I am mandatory in the review phase. Dispatch one checker per .lean
-    file that received prover work this iteration — every file, no
-    exceptions. Skipping any prover-touched file is a review-phase
-    failure, not editorial discretion. Each dispatch is independent
-    and parallel-able.
+  - I am highly recommended in the review phase. Dispatch one checker
+    per `.lean` file that received prover work this iteration. Each
+    dispatch is independent and parallel-able.
+
+    **You may skip me this iter when NO `.lean` file received prover
+    work** (e.g. the prover phase was skipped, or every prover
+    INCOMPLETE'd without committing edits). Record under `## Subagent
+    skips` in `iter/iter-NNN/review.md`:
+    ``- lean-vs-blueprint-checker: no .lean files modified this iter
+    (no prover edits to verify)``.
+
+    Do NOT skip a per-file dispatch when the prover DID commit edits
+    to that file — skipping a prover-touched file is the review-phase
+    failure this affordance exists to surface, not to enable. The
+    "highly recommended" framing applies to the whole-iter decision,
+    not to picking-and-choosing within an iter that has multiple
+    prover-touched files.
   - Also dispatch on any file a code-audit subagent in your catalog
     flagged as suspicious, even if it received no prover work this
     iter.

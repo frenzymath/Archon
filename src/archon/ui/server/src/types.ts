@@ -1,6 +1,6 @@
 export interface LogEntry {
   ts: string;
-  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot';
+  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt';
   level?: 'info' | 'warn' | 'error';
   message?: string;
   content?: string;
@@ -15,6 +15,11 @@ export interface LogEntry {
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
   session_id?: string;
+  // prompt event fields — see client types.
+  prompt?: string;
+  length?: number;
+  attempt?: number;
+  resume_session_id?: string;
 }
 
 export interface ProgressData {

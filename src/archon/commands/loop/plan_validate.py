@@ -11,9 +11,13 @@ plan agent reads and clears) and signals the caller to skip prover
 dispatch for this iteration.
 
 Recognizes an *intentional* no-prover-this-iter marker in PROGRESS.md
-— when the planner correctly skips provers (user escalation, hard
-gate, etc.) and writes the marker, validate returns True, no
-corrective hint fires, and the iter completes cleanly.
+— when the planner correctly skips provers for a MECHANICAL hard gate
+(no ready sorries, every objective blocked by a failed upstream build,
+blueprint-completeness gate failed) and writes the marker, validate
+returns True, no corrective hint fires, and the iter completes cleanly.
+A skip is NOT legitimate just because a strategy decision is pending:
+per the plan prompt, the planner decides such forks itself and still
+dispatches provers — it never idles an iter waiting on the user.
 
 Also enforces soft length / structure limits on STRATEGY.md — see
 :func:`_check_strategy_bounds`. STRATEGY.md has been observed bloating
@@ -33,13 +37,20 @@ from archon.commands.tooling.iteration import commit_phase
 from archon.state import auto_fix_objectives, write_meta
 from archon.state.progress import _extract_section
 
+from .blocked_deps import (
+    build_local_import_graph,
+    filter_objectives_for_blocked_deps,
+    parse_blocked_files_from_log,
+)
 from .context import LoopContext
 
 
 # A line inside `## Current Objectives` matching this regex marks the
-# iteration as an intentional no-prover round (e.g. user escalation,
-# hard gate fired, blueprint-completeness gate failed). The validator
-# treats this as a legitimate state — not a parse failure.
+# iteration as an intentional no-prover round for a MECHANICAL hard gate
+# (no ready sorries, all objectives blocked by a failed upstream build,
+# blueprint-completeness gate failed). The validator treats this as a
+# legitimate state — not a parse failure. A pending user decision is NOT
+# a valid reason to skip: the planner decides strategy forks itself.
 _INTENTIONAL_SKIP_RE = re.compile(
     r"\(no\s+prover\s+(dispatch\s+)?this\s+iter",
     re.IGNORECASE,
@@ -104,9 +115,91 @@ def validate_plan_output(ctx: LoopContext) -> bool:
         write_meta(ctx.iter_meta, **{"planValidate.fixes": fixes})
 
     if objectives:
+        # Drop objectives whose transitive local imports failed the
+        # previous lake build — prover dispatch on them would fail to
+        # load the file. The filter exempts blocked files that are
+        # themselves in the objective list (presumed-being-fixed).
+        original_proposed = len(objectives)
+        if getattr(ctx.options, "block_on_blocked_deps", True):
+            objectives, blocked_dropped = _apply_blocked_deps_filter(
+                ctx, objectives,
+            )
+        else:
+            blocked_dropped = []
+
+        if blocked_dropped:
+            blocked_meta = [
+                {
+                    "file": _rel_to_project(p, ctx.project_path),
+                    "blockedDeps": [str(b) for b in deps],
+                }
+                for p, deps in blocked_dropped
+            ]
+            log.warn(
+                f"plan-validate: dropped {len(blocked_dropped)} "
+                f"objective(s) whose transitive imports failed the "
+                f"previous lake build — prover dispatch on them would "
+                f"fail to load the file. See planValidate."
+                f"objectivesBlocked in meta.json for details."
+            )
+            _append_blocked_hint(
+                ctx.state_dir / "USER_HINTS.md", blocked_meta,
+            )
+
+        if not objectives:
+            # Every objective was filtered out as blocked-by-deps. Don't
+            # silently fall through to the "no parseable objectives"
+            # path — that error message would be misleading. Emit a
+            # specific failure: prover phase is skipped, next iter's
+            # plan agent sees the dropped list and must fix the
+            # upstream blockers first.
+            log.error(
+                "plan-validate: every objective was dropped because its "
+                "transitive imports failed the previous lake build. "
+                "Skipping prover this iter; next iter's plan agent "
+                "must address the upstream compile errors first."
+            )
+            write_meta(ctx.iter_meta, **{
+                "planValidate.status": "failed_all_blocked",
+                "planValidate.objectivesProposed": original_proposed,
+                "planValidate.objectivesDispatched": 0,
+                "planValidate.objectivesBlocked": blocked_meta,
+            })
+            return False
+
+        cap = ctx.options.max_objectives
+        proposed = len(objectives)
+        blocked_meta_field = (
+            {"planValidate.objectivesBlocked": blocked_meta}
+            if blocked_dropped else {}
+        )
+        if proposed > cap:
+            deferred = objectives[cap:]
+            deferred_rels = [_rel_to_project(p, ctx.project_path) for p in deferred]
+            log.warn(
+                f"plan-validate: PROGRESS.md lists {proposed} objectives — "
+                f"over the dispatch cap of {cap}. The runner will dispatch "
+                f"only the first {cap}; {len(deferred)} files are deferred "
+                f"and re-surfaced to the next plan agent via USER_HINTS. "
+                f"This guards against runaway fan-out (e.g. 27 provers "
+                f"launched in one iter)."
+            )
+            _append_overcap_hint(
+                ctx.state_dir / "USER_HINTS.md",
+                cap=cap, proposed=proposed, deferred_rels=deferred_rels,
+            )
+            write_meta(ctx.iter_meta, **{
+                "planValidate.status": "ok_overcap",
+                "planValidate.objectivesProposed": proposed,
+                "planValidate.objectivesDispatched": cap,
+                "planValidate.objectivesDeferred": deferred_rels,
+                **blocked_meta_field,
+            })
+            return True
         write_meta(ctx.iter_meta, **{
             "planValidate.status": "ok",
-            "planValidate.objectives": len(objectives),
+            "planValidate.objectives": proposed,
+            **blocked_meta_field,
         })
         return True
 
@@ -115,7 +208,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
     if _has_intentional_skip_marker(ctx.progress_file):
         log.info(
             "plan-validate: PROGRESS.md flagged as intentional no-prover "
-            "this iter (e.g. user escalation, hard gate). Proceeding "
+            "this iter (mechanical hard gate). Proceeding "
             "without prover dispatch; no corrective hint appended."
         )
         write_meta(ctx.iter_meta, **{
@@ -218,6 +311,111 @@ def _has_intentional_skip_marker(progress_file: Path) -> bool:
         if _INTENTIONAL_SKIP_RE.search(line):
             return True
     return False
+
+
+def _apply_blocked_deps_filter(
+    ctx: LoopContext,
+    objectives: list[Path],
+) -> tuple[list[Path], list[tuple[Path, list[Path]]]]:
+    """Filter objectives whose transitive imports failed the last lake build.
+
+    Returns ``(kept, dropped)``. ``dropped`` is
+    ``[(objective_path, [blocked_dep_rel, ...]), ...]`` — the second
+    element lists the blocked files that disqualified the objective,
+    so the caller can render a useful USER_HINTS message.
+
+    The blocked set is read from ``.archon/last_lake_build.log`` — the
+    file the finalize phase writes when ``lake build`` fails. An
+    empty / missing log returns ``(objectives, [])`` (nothing to
+    filter against).
+    """
+    log_path = ctx.state_dir / "last_lake_build.log"
+    blocked = parse_blocked_files_from_log(
+        log_path, project_path=ctx.project_path,
+    )
+    if not blocked:
+        return objectives, []
+    graph = build_local_import_graph(ctx.project_path)
+    return filter_objectives_for_blocked_deps(
+        objectives,
+        blocked=blocked,
+        graph=graph,
+        project_path=ctx.project_path,
+    )
+
+
+def _append_blocked_hint(
+    hints_file: Path,
+    blocked_meta: list[dict],
+) -> None:
+    """Append a hint listing files dropped because their imports don't compile.
+
+    The next plan agent reads-then-clears USER_HINTS, so this lands
+    in front of the planner exactly once. Listing the specific
+    blocking deps means the planner can prioritize fixing the
+    upstream files first.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        f"\n- [{ts}] archon[plan-validate]: dropped "
+        f"{len(blocked_meta)} objective(s) because their transitive "
+        f"imports failed the previous `lake build`. Fix the blocking "
+        f"deps first, then re-list the downstream files:",
+    ]
+    for entry in blocked_meta:
+        deps = ", ".join(entry["blockedDeps"]) or "(none)"
+        lines.append(f"  - {entry['file']} — blocked by: {deps}")
+    hint = "\n".join(lines) + "\n"
+    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if hints_file.exists():
+        try:
+            existing = hints_file.read_text()
+        except OSError:
+            pass
+    hints_file.write_text(existing + hint)
+
+
+def _rel_to_project(path: Path, project_path: Path) -> str:
+    """Render a parsed-objective Path as a project-relative string."""
+    try:
+        return str(path.resolve().relative_to(project_path.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _append_overcap_hint(
+    hints_file: Path,
+    *,
+    cap: int,
+    proposed: int,
+    deferred_rels: list[str],
+) -> None:
+    """Append a hint listing the files deferred by the dispatch cap.
+
+    The next plan agent reads-then-clears USER_HINTS each iter, so the
+    listing lands in front of the planner exactly once. Including the
+    file paths means the planner doesn't have to dig through meta.json
+    to re-prioritize.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    deferred_block = "\n".join(f"  - {r}" for r in deferred_rels) or "  - (none)"
+    hint = (
+        f"\n- [{ts}] archon[plan-validate]: previous iter's PROGRESS.md "
+        f"listed {proposed} objectives — over the dispatch cap of {cap}. "
+        f"The first {cap} were dispatched; the {len(deferred_rels)} below "
+        f"were deferred. Re-prioritize: pick the most urgent for this "
+        f"iter (still within the cap), defer or drop the rest.\n"
+        f"{deferred_block}\n"
+    )
+    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if hints_file.exists():
+        try:
+            existing = hints_file.read_text()
+        except OSError:
+            pass
+    hints_file.write_text(existing + hint)
 
 
 def _append_hint(hints_file: Path) -> None:

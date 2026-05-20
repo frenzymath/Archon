@@ -1,7 +1,7 @@
 // --- Log types ---
 export interface LogEntry {
   ts: string;
-  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot';
+  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt';
   level?: 'info' | 'warn' | 'error';
   message?: string;
   content?: string;
@@ -21,6 +21,13 @@ export interface LogEntry {
   output_tokens?: number;
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
+  // prompt event fields — the initial prompt sent to claude (stamped right
+  // after session_start so users can verify hint injection, see what the
+  // continuation prompt was on --resume runs, etc.).
+  prompt?: string;
+  length?: number;
+  attempt?: number;
+  resume_session_id?: string;
 }
 
 export interface LogFile {

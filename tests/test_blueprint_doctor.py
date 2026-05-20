@@ -151,6 +151,87 @@ class RunBlueprintDoctorTest(unittest.TestCase):
         labels = {l for _, _, l in r.broken_refs}
         self.assertEqual(labels, {"thm:bad"})
 
+    def test_detects_empty_uses(self):
+        # \uses{} — empty argument crashes plastex's depgraph builder.
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\\uses{}A.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        self.assertEqual(len(r.malformed_refs), 1)
+        chapter, kind, reason = r.malformed_refs[0]
+        self.assertEqual(chapter.name, "Good.tex")
+        self.assertEqual(kind, "uses")
+        self.assertEqual(reason, "empty argument")
+        # Empty \uses{} must NOT bleed into broken_refs.
+        self.assertEqual(r.broken_refs, [])
+        self.assertTrue(r.has_findings)
+
+    def test_detects_empty_proves(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\\proves{}A.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        kinds = {k for _, k, _ in r.malformed_refs}
+        self.assertIn("proves", kinds)
+
+    def test_detects_empty_label(self):
+        # \label{} — empty definition. Doesn't crash plastex on its own
+        # but the depgraph treats the empty key as a self-cycle node.
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{}A.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        kinds_reasons = {(k, reason) for _, k, reason in r.malformed_refs}
+        self.assertEqual(kinds_reasons, {("label", "empty argument")})
+
+    def test_detects_empty_ref(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}A.\\end{theorem}\n"
+            "\\ref{}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        kinds_reasons = {(k, reason) for _, k, reason in r.malformed_refs}
+        self.assertEqual(kinds_reasons, {("ref", "empty argument")})
+
+    def test_detects_empty_list_item_in_uses(self):
+        # \uses{thm:good,,thm:other} — middle item is empty.
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:good}A.\\end{theorem}\n"
+            "\\begin{theorem}\\label{thm:other}B.\\end{theorem}\n"
+            "\\begin{theorem}\\label{thm:foo}"
+            "\\uses{thm:good,,thm:other}C.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        # The non-empty pieces still resolve (no broken refs); the empty
+        # piece in the middle is recorded as malformed.
+        self.assertEqual(r.broken_refs, [])
+        kinds_reasons = {(k, reason) for _, k, reason in r.malformed_refs}
+        self.assertEqual(kinds_reasons, {("uses", "empty list item")})
+
+    def test_detects_trailing_comma_in_uses(self):
+        # \uses{thm:good,} — trailing comma yields one empty list item.
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:good}A.\\end{theorem}\n"
+            "\\begin{theorem}\\label{thm:foo}"
+            "\\uses{thm:good,}B.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertIsNotNone(r)
+        self.assertEqual(r.broken_refs, [])
+        kinds_reasons = {(k, reason) for _, k, reason in r.malformed_refs}
+        self.assertEqual(kinds_reasons, {("uses", "empty list item")})
+
     def test_ignores_commented_input(self):
         # The default content.tex has a commented-out \\input for Orphan;
         # the comment-stripping should keep Orphan.tex marked orphan.
@@ -266,6 +347,29 @@ class WriteReportsTest(unittest.TestCase):
         data = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(len(data["orphan_chapters"]), 1)
         self.assertEqual(len(data["broken_refs"]), 1)
+
+    def test_findings_report_lists_malformed_annotations(self):
+        # Mix of empty argument and empty list item — both must surface
+        # in the Markdown report and the JSON sidecar.
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:good}A.\\end{theorem}\n"
+            "\\begin{theorem}\\label{thm:other}B.\\end{theorem}\n"
+            "\\begin{theorem}\\label{thm:foo}"
+            "\\uses{}\\uses{thm:good,,thm:other}C.\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        iter_dir = self.root / ".archon" / "logs" / "iter-003"
+        json_path, md_path = write_reports(r, iter_dir, self.root)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Malformed annotations", md)
+        self.assertIn("empty argument", md)
+        self.assertIn("empty list item", md)
+        import json
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["malformed_refs"]), 2)
+        reasons = {entry["reason"] for entry in data["malformed_refs"]}
+        self.assertEqual(reasons, {"empty argument", "empty list item"})
 
 
 if __name__ == "__main__":

@@ -23,6 +23,8 @@ class LoopOptions:
     project_path: Path
     max_iterations: int
     max_parallel: int
+    max_objectives: int
+    block_on_blocked_deps: bool
     parallel: bool
     verbose_logs: bool
     no_review: bool

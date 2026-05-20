@@ -61,6 +61,7 @@ def pick_resume_session(
     enabled: bool,
     label: str,
     cwd: Path | None = None,
+    jsonl_fallback: Path | None = None,
 ) -> str | None:
     """Return the stored session id for this phase, or None.
 
@@ -68,9 +69,9 @@ def pick_resume_session(
     ``ctx.resume_phase == self.skip_token``; ``ctx.resume_phase`` is
     None on iter >= 1, so the gate naturally falls open for those).
     When disabled the function short-circuits to None so the caller does
-    a fresh run. When enabled but no id is stored, logs a warning and
-    falls back to fresh — matching the user's request that --resume
-    degrade gracefully on missing state.
+    a fresh run. When enabled but no id is stored anywhere, logs a
+    warning and falls back to fresh — matching the user's request that
+    --resume degrade gracefully on missing state.
 
     ``cwd`` is the project root (the working directory Claude Code was
     invoked from). When given, the function also verifies the session's
@@ -79,31 +80,29 @@ def pick_resume_session(
     is missing, the stored id is stale (Claude Code's session log was
     rotated / cleaned) and passing it to ``claude --resume`` would
     error out. We warn and fall back to fresh instead.
+
+    ``jsonl_fallback`` is the path to the phase's stream JSONL log
+    (e.g. ``iter-NNN/plan.jsonl``). When the meta key is missing —
+    which happens whenever the agent crashed BEFORE ``persist_session_id``
+    ran at end of phase — the function reads the session id directly
+    from the JSONL's ``session_meta`` event (emitted on session start).
+    If found, the id is also stamped into ``iter_meta`` so the next
+    inspection of meta.json shows it. The previous behavior (give up
+    and run fresh) was the "lost session" failure mode the user
+    reported: the JSONL had the id all along.
     """
     if not enabled or iter_meta is None:
         return None
     sid = read_meta(iter_meta, meta_key)
+    recovered_from_jsonl = False
     if not isinstance(sid, str) or not sid:
-        # Show what session ids ARE available in the meta so the user
-        # can diagnose (wrong target phase? prior run crashed before
-        # any session id was captured? etc.).
-        available = _list_available_session_ids(iter_meta)
-        iter_label = _iter_label_from_meta(iter_meta)
-        if available:
-            avail_str = ", ".join(available)
-            log.warn(
-                f"--resume requested for {label}, but no '{meta_key}' "
-                f"stored in {iter_label}'s meta. Available session ids "
-                f"there: {avail_str}. Running fresh."
-            )
-        else:
-            log.warn(
-                f"--resume requested for {label}, but no session ids "
-                f"are stored in {iter_label}'s meta at all (prior run "
-                f"may have crashed before any session id was captured). "
-                f"Running fresh."
-            )
-        return None
+        sid = _try_jsonl_fallback(
+            jsonl_fallback, iter_meta, meta_key, label,
+        )
+        if sid is None:
+            _warn_no_session(iter_meta, meta_key, label)
+            return None
+        recovered_from_jsonl = True
 
     if cwd is not None and not _claude_session_exists(cwd, sid):
         log.warn(
@@ -113,8 +112,68 @@ def pick_resume_session(
         )
         return None
 
-    log.step(f"--resume: continuing {label} session {sid[:8]}…")
+    if recovered_from_jsonl:
+        log.step(
+            f"--resume: recovered {label} session {sid[:8]}… from "
+            f"phase JSONL (meta.json had no '{meta_key}'; prior run "
+            f"crashed before persist_session_id ran)"
+        )
+    else:
+        log.step(f"--resume: continuing {label} session {sid[:8]}…")
     return sid
+
+
+def _try_jsonl_fallback(
+    jsonl_fallback: Path | None,
+    iter_meta: Path,
+    meta_key: str,
+    label: str,
+) -> str | None:
+    """Try to recover a session id from the phase's stream JSONL.
+
+    Returns the recovered id (and stamps it into ``iter_meta`` for
+    future lookups) or None. ``persist_session_id``'s same helper —
+    ``extract_session_id`` — does the JSONL parsing; we just call it
+    here when the meta lookup missed.
+    """
+    if jsonl_fallback is None or not jsonl_fallback.exists():
+        return None
+    from archon.state import extract_session_id
+    sid = extract_session_id(jsonl_fallback)
+    if not sid:
+        return None
+    # Stamp into meta so future invocations find it directly. This is
+    # idempotent — a clean exit later will overwrite with the
+    # session_end id (which is usually the same anyway).
+    try:
+        write_meta(iter_meta, **{meta_key: sid})
+    except OSError:
+        # Don't let a meta write failure block the resume.
+        pass
+    return sid
+
+
+def _warn_no_session(
+    iter_meta: Path, meta_key: str, label: str,
+) -> None:
+    """Log the "no session id anywhere" warning, with diagnostic detail."""
+    available = _list_available_session_ids(iter_meta)
+    iter_label = _iter_label_from_meta(iter_meta)
+    if available:
+        avail_str = ", ".join(available)
+        log.warn(
+            f"--resume requested for {label}, but no '{meta_key}' "
+            f"stored in {iter_label}'s meta and no session_meta event "
+            f"in the phase JSONL. Available session ids in meta: "
+            f"{avail_str}. Running fresh."
+        )
+    else:
+        log.warn(
+            f"--resume requested for {label}, but no session ids are "
+            f"stored in {iter_label}'s meta and no session_meta event "
+            f"in the phase JSONL either (prior run crashed before "
+            f"any session id was captured). Running fresh."
+        )
 
 
 def _iter_label_from_meta(meta_file: Path) -> str:

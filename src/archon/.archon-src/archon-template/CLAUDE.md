@@ -20,7 +20,7 @@ Project tools live in `.claude/tools/` as directly-executable scripts. List with
 
 Two always-present scripts:
 
-- **`archon-informal-agent.py`** — call external LLMs (OpenAI/Gemini/OpenRouter) for informal mathematical reasoning. Useful for a second opinion or a paper-style sketch.
+- **`archon-informal-agent.py`** — call external LLMs (OpenAI/Gemini/OpenRouter) for an informal proof-style sketch when you're stuck on an approach and want a second opinion. **Requires `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` in env** — check via `env | grep -E "OPENAI|GEMINI|OPENROUTER"` BEFORE planning around its use; if no key is set, fall back to alternatives below. The output is LLM-generated from training data, NOT source-derived: this tool is **not** a literature retriever. For actual literature lookup (cross-check a claim against Hartshorne, fetch an arXiv paper, summarize a Stacks tag) consult the auto-injected subagent catalog — when a literature/reference-fetching subagent is enabled it will appear there — or use the `WebSearch` / `WebFetch` tools directly.
 - **`archon-subagent.py`** — the generic subagent dispatcher (one wrapper handles every subagent — see "Subagents" below).
 
 ## Subagents
@@ -43,7 +43,7 @@ The wrapper exits 0 on success, prints a one-line status, writes the report to `
 
 **Dispatch synchronously** (not via background `Bash` with `run_in_background: true`). Background dispatch leaves the parent's session log stuck on "running in background" on the dashboard.
 
-**Mandatory subagents.** A descriptor whose frontmatter sets `mandatory: [plan]` MUST be dispatched at least once during the plan phase (similarly for `[review]`). The catalog tags them `[MANDATORY]`. A post-phase audit warns when a mandatory dispatch is missing. **Subagents ship disabled by default** (`default_enabled: false`), so the rule only fires for subagents the user has explicitly listed under `subagents.enabled` in `.archon/config.json`; on a fresh project the catalog is empty and no mandatory dispatch is required.
+**Highly-recommended subagents.** A descriptor whose frontmatter sets `mandatory: [plan]` is treated as **highly recommended** for the plan phase (similarly `[review]` for the review phase). The catalog tags them `[HIGHLY RECOMMENDED]`. Dispatch each one unless you have a concrete reason to skip — when skipping, record a one-line rationale under a `## Subagent skips` section in `iter/iter-NNN/<phase>.md` (e.g. `- strategy-critic: STRATEGY.md SHA unchanged from prior iter and last verdict was SOUND`). A post-phase audit checks both signals: it silences when the subagent dispatched OR a skip rationale was recorded, and warns only when neither happened. Each subagent's `dispatcher_notes` enumerates its specific skip conditions — read them before deciding. **Subagents ship disabled by default** (`default_enabled: false`), so the rule only fires for subagents the user has explicitly listed under `subagents.enabled` in `.archon/config.json`; on a fresh project the catalog is empty and no recommended dispatch is required. (The frontmatter field is still named `mandatory: [...]` for backward compat with existing configs and descriptors — its semantic meaning is "highly recommended", not "must dispatch".)
 
 ## Key Files & Permissions
 
@@ -105,7 +105,7 @@ No marker means the block is unformalized. If a block fails to translate, leave 
 
 The user provides hints in two places:
 
-- **Strategic hints** → `.archon/USER_HINTS.md`. The Archon loop captures this file's content before each plan phase, injects it into the plan agent's prompt, and clears the file after the plan phase succeeds. The plan agent does NOT read or clear that file itself. Provers never see these hints.
+- **Strategic hints** → `.archon/USER_HINTS.md`. The Archon loop captures this file's content before each plan phase, injects it into the plan agent's prompt, and resets the file to its bundled template (an HTML-comment format guide + zero bullets) after the plan phase succeeds. The HTML-comment preamble is stripped before injection so a template-only file renders as "no hints" to the planner. The plan agent does NOT read or clear that file itself. Provers never see these hints.
 - **File-specific hints** → `/- USER: ... -/` comments directly in `.lean` files. The prover that owns that file sees them naturally.
 
 ## Agent Roles

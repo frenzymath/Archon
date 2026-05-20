@@ -1,6 +1,6 @@
 """Blueprint-doctor: deterministic structural lints for the project blueprint.
 
-Three classes of bug that the doctor catches deterministically — all
+Four classes of bug that the doctor catches deterministically — all
 cheap to detect and dramatically more reliable than asking an LLM to
 notice them every iter:
 
@@ -14,7 +14,14 @@ notice them every iter:
    defined in any included chapter. These corrupt the dependency graph
    silently — leanblueprint will draw a broken edge or none at all.
 
-3. **New axiom introductions** — ``axiom`` declarations under the
+3. **Malformed annotations** — ``\\uses{}`` / ``\\proves{}`` /
+   ``\\label{}`` / ``\\ref{}`` with empty argument, plus empty list
+   items inside otherwise-valid ``\\uses{a,,b}``. These crash plastex
+   (``Label '' could not be resolved`` followed by a depgraph
+   RecursionError) without ever reaching the LLM reviewer, so detecting
+   them statically is the only way to keep them out of the loop.
+
+4. **New axiom introductions** — ``axiom`` declarations under the
    project's ``.lean`` files (excluding ``.lake``/``.archon``). Archon's
    stance is "no new axioms"; finding any is a red flag that earns a
    review-phase callout.
@@ -38,7 +45,10 @@ from pathlib import Path
 
 
 _INPUT_RE = re.compile(r"\\(?:input|include)\s*\{\s*([^{}]+?)\s*\}")
-_LABEL_RE = re.compile(r"\\label\s*\{\s*([^{}]+?)\s*\}")
+# ``*`` (not ``+``) on the inner class so empty ``\label{}`` matches and
+# is routed to ``malformed_refs``. The non-empty case continues to feed
+# ``labels_defined`` unchanged.
+_LABEL_RE = re.compile(r"\\label\s*\{\s*([^{}]*?)\s*\}")
 # An `axiom` declaration at the start of a line (after optional whitespace
 # and visibility modifiers). The doctor's caller filters out the audit's
 # own snapshot tree, but we also guard against the keyword appearing in
@@ -84,12 +94,16 @@ def _strip_tex_comments(text: str) -> str:
     return "\n".join(out_lines)
 # References that point at an existing label. ``\uses{a, b}`` may list
 # multiple labels separated by commas; we split on commas and trim.
+# All inner classes use ``*?`` (not ``+?``) so empty ``\ref{}`` /
+# ``\uses{}`` etc. match and are routed to ``malformed_refs`` rather
+# than silently dropped. Non-empty matches feed the broken-ref check
+# unchanged.
 _REF_RES = (
-    re.compile(r"\\ref\s*\{\s*([^{}]+?)\s*\}"),
-    re.compile(r"\\eqref\s*\{\s*([^{}]+?)\s*\}"),
-    re.compile(r"\\cref\s*\{\s*([^{}]+?)\s*\}"),
-    re.compile(r"\\Cref\s*\{\s*([^{}]+?)\s*\}"),
-    re.compile(r"\\autoref\s*\{\s*([^{}]+?)\s*\}"),
+    re.compile(r"\\ref\s*\{\s*([^{}]*?)\s*\}"),
+    re.compile(r"\\eqref\s*\{\s*([^{}]*?)\s*\}"),
+    re.compile(r"\\cref\s*\{\s*([^{}]*?)\s*\}"),
+    re.compile(r"\\Cref\s*\{\s*([^{}]*?)\s*\}"),
+    re.compile(r"\\autoref\s*\{\s*([^{}]*?)\s*\}"),
     re.compile(r"\\uses\s*\{\s*([^{}]*?)\s*\}"),
     re.compile(r"\\proves\s*\{\s*([^{}]*?)\s*\}"),
 )
@@ -106,6 +120,11 @@ class DoctorReport:
     labels_defined: set[str] = field(default_factory=set)
     broken_refs: list[tuple[Path, str, str]] = field(default_factory=list)
     # (referencing_chapter, ref_kind, missing_label)
+    malformed_refs: list[tuple[Path, str, str]] = field(default_factory=list)
+    # (file, ref_kind, reason) — empty-argument annotations
+    # (\uses{}/\proves{}/\label{}/\ref{}/...) and empty list items
+    # (\uses{a,,b}). Reason is a short human-readable phrase such as
+    # "empty argument" or "empty list item".
     axiom_decls: list[tuple[Path, str]] = field(default_factory=list)
     # (lean_file, decl_name) — every `axiom` found under project .lean
 
@@ -114,6 +133,7 @@ class DoctorReport:
         return (
             bool(self.orphan_chapters)
             or bool(self.broken_refs)
+            or bool(self.malformed_refs)
             or bool(self.axiom_decls)
         )
 
@@ -128,6 +148,10 @@ class DoctorReport:
             "broken_refs": [
                 {"chapter": str(c), "kind": k, "label": lbl}
                 for c, k, lbl in sorted(self.broken_refs, key=lambda t: (str(t[0]), t[1], t[2]))
+            ],
+            "malformed_refs": [
+                {"chapter": str(c), "kind": k, "reason": r}
+                for c, k, r in sorted(self.malformed_refs, key=lambda t: (str(t[0]), t[1], t[2]))
             ],
             "axiom_decls": [
                 {"file": str(f), "name": n}
@@ -185,15 +209,24 @@ def _collect_inputs(start: Path, src_dir: Path) -> set[Path]:
 
 def _scan_labels_and_refs(
     tex_files: list[Path],
-) -> tuple[set[str], list[tuple[Path, str, str]]]:
-    """Return (defined-labels, raw-references) across the given .tex files.
+) -> tuple[set[str], list[tuple[Path, str, str]], list[tuple[Path, str, str]]]:
+    """Return (defined-labels, raw-references, malformed) across the .tex files.
 
-    Each raw-reference is ``(file, ref_kind, label)``. The caller filters
-    against the defined-labels set to compute broken_refs. ``\\uses{a, b}``
-    is split into one entry per comma-separated label.
+    * ``defined-labels``: every non-empty ``\\label{X}`` target. Used by
+      the caller to filter ``raw-references`` into broken vs resolved.
+    * ``raw-references``: ``(file, ref_kind, label)`` for every non-empty
+      ``\\ref{...}`` / ``\\uses{...}`` / etc. ``\\uses{a, b}`` produces
+      one entry per comma-separated label.
+    * ``malformed``: ``(file, ref_kind, reason)`` for every empty
+      annotation (``\\uses{}``, ``\\label{}``, ``\\ref{}``, ...) and
+      every empty list item inside an otherwise-non-empty
+      ``\\uses{a,,b}``. These never reach plastex as resolvable labels
+      and crash its depgraph build; surfacing them here lets the
+      reviewer fix them before the next ``leanblueprint web``.
     """
     labels: set[str] = set()
     refs: list[tuple[Path, str, str]] = []
+    malformed: list[tuple[Path, str, str]] = []
     for tex in tex_files:
         try:
             text = tex.read_text(encoding="utf-8", errors="ignore")
@@ -201,18 +234,29 @@ def _scan_labels_and_refs(
             continue
         text = _strip_tex_comments(text)
         for m in _LABEL_RE.finditer(text):
-            labels.add(m.group(1).strip())
+            piece = m.group(1).strip()
+            if piece:
+                labels.add(piece)
+            else:
+                malformed.append((tex, "label", "empty argument"))
         for ref_re in _REF_RES:
             kind = ref_re.pattern.split("\\\\")[1].split("\\")[0]
             kind = re.match(r"[A-Za-z]+", kind).group(0)  # type: ignore[union-attr]
             for m in ref_re.finditer(text):
-                arg = m.group(1)
-                # \uses{a, b, c} → ["a", "b", "c"]
+                arg = m.group(1).strip()
+                if not arg:
+                    # \uses{} / \ref{} / etc. — empty body.
+                    malformed.append((tex, kind, "empty argument"))
+                    continue
+                # \uses{a, b, c} → ["a", "b", "c"]; empty pieces from
+                # `\uses{a,,b}` or `\uses{a,}` are also malformed.
                 for piece in arg.split(","):
                     piece = piece.strip()
                     if piece:
                         refs.append((tex, kind, piece))
-    return labels, refs
+                    else:
+                        malformed.append((tex, kind, "empty list item"))
+    return labels, refs, malformed
 
 
 def _scan_axiom_decls(project_path: Path) -> list[tuple[Path, str]]:
@@ -332,7 +376,7 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
     # \inputs). This way \label{X} defined in a sub-included file is
     # available for cross-references in another chapter.
     label_scan_targets = sorted(included)
-    labels, refs = _scan_labels_and_refs(label_scan_targets)
+    labels, refs, malformed = _scan_labels_and_refs(label_scan_targets)
 
     broken: list[tuple[Path, str, str]] = []
     for tex, kind, lbl in refs:
@@ -355,6 +399,7 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
         orphan_chapters=orphan_chapters,
         labels_defined=labels,
         broken_refs=broken,
+        malformed_refs=malformed,
         axiom_decls=axiom_decls,
     )
 
@@ -388,8 +433,9 @@ def write_reports(
         lines.append(
             "No structural findings: every chapter is `\\input`'d by "
             "`content.tex`, every `\\ref{...}` / `\\uses{...}` resolves to "
-            "a defined `\\label{...}`, and no `axiom` declarations are "
-            "present under the project's `.lean` files."
+            "a defined `\\label{...}`, every annotation has a non-empty "
+            "argument, and no `axiom` declarations are present under the "
+            "project's `.lean` files."
         )
         md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return json_path, md_path
@@ -425,6 +471,33 @@ def write_reports(
         for p in report.orphan_chapters:
             lines.append(f"- `{_rel(p)}`")
         lines.append("")
+
+    if report.malformed_refs:
+        lines.append("## Malformed annotations")
+        lines.append("")
+        lines.append(
+            "Annotations with an empty argument (`\\uses{}`, `\\proves{}`, "
+            "`\\label{}`, `\\ref{}`, ...) or an empty list item "
+            "(`\\uses{a,,b}`, `\\uses{a,}`). plastex emits "
+            "`Label '' could not be resolved` for each of these and then "
+            "the leanblueprint depgraph builder enters infinite recursion "
+            "(`RecursionError`), so the blueprint never finishes building. "
+            "Fix each one by either filling in the intended label or "
+            "deleting the empty annotation. Do NOT defer — the next "
+            "`leanblueprint web` run will crash until these are resolved."
+        )
+        lines.append("")
+        # Group by (chapter, kind, reason) for readability.
+        by_chapter_m: dict[Path, dict[tuple[str, str], int]] = {}
+        for chapter, kind, reason in report.malformed_refs:
+            by_chapter_m.setdefault(chapter, {}).setdefault((kind, reason), 0)
+            by_chapter_m[chapter][(kind, reason)] += 1
+        for chapter in sorted(by_chapter_m):
+            lines.append(f"### `{_rel(chapter)}`")
+            for (kind, reason), count in sorted(by_chapter_m[chapter].items()):
+                suffix = f" ×{count}" if count > 1 else ""
+                lines.append(f"- `\\{kind}{{...}}` — {reason}{suffix}")
+            lines.append("")
 
     if report.broken_refs:
         lines.append("## Broken cross-references")

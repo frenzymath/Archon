@@ -53,15 +53,54 @@ def _capture_user_hints(state_dir: Path) -> str | None:
 
 
 def _clear_user_hints(state_dir: Path) -> None:
-    """Empty USER_HINTS.md after the plan phase consumed its content.
+    """Reset USER_HINTS.md to the bundled template after the plan phase
+    consumed its content.
 
-    Idempotent: writes an empty string regardless of prior content.
+    The bundled template lives at
+    ``.archon-src/archon-template/USER_HINTS.md`` and contains an
+    HTML-comment preamble showing the user the expected hint format
+    (timestamped bullets) plus zero actual hint bullets. The init state
+    and the cleared state both equal this template — every plan-phase
+    "user hints" snapshot sees the same clean preamble unless the user
+    (or a plan-validate corrective hint) has appended live content
+    since the prior iter. The plan-prompt renderer strips HTML comments
+    before deciding whether content is present, so the preamble alone
+    renders as "no hints" to the planner. Reading the template at
+    clear time (instead of hard-coding empty) means future template
+    tweaks propagate without a code change.
+
+    Falls back to writing an empty string when the template is
+    unreadable for any reason — the cleared state must never carry
+    over stale content from the iter we just consumed.
     """
     hints_file = state_dir / "USER_HINTS.md"
     try:
-        hints_file.write_text("", encoding="utf-8")
+        template = _read_user_hints_template()
+    except Exception:
+        template = ""
+    try:
+        hints_file.write_text(template, encoding="utf-8")
     except OSError as e:
         log.warn(f"could not clear {hints_file}: {e}")
+
+
+def _read_user_hints_template() -> str:
+    """Return the bundled ``USER_HINTS.md`` template content.
+
+    Resolved via the same ``data_path`` helper ``archon init`` uses, so
+    the runtime can't drift from what a fresh ``archon init`` would
+    produce. Empty string when the template is missing — defensive
+    fallback so a missing-template scenario degrades to clean clear
+    behavior rather than crashing the loop.
+    """
+    from archon.commands.init.utils import data_path
+    template_path = data_path("archon-template/USER_HINTS.md")
+    if not template_path.is_file():
+        return ""
+    try:
+        return template_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 class PlanPhase(Phase):
@@ -101,6 +140,7 @@ class PlanPhase(Phase):
                 enabled=(ctx.resume_phase == self.skip_token),
                 label="plan",
                 cwd=ctx.project_path,
+                jsonl_fallback=Path(str(plan_log) + ".jsonl"),
             )
             ClaudeAgent(model=ctx.model, role="plan").run(
                 PLAN_CONTINUE if resume_sid else plan_prompt,

@@ -5,12 +5,17 @@ import LogViewer from './views/LogViewer';
 import Journal from './views/Journal';
 import DiffPlayback from './views/DiffPlayback';
 import ProofGraph from './views/ProofGraph';
+// Vite's resolveJsonModule (enabled by default) lets us import the
+// version from package.json so the badge stays in sync with releases
+// without manual updates. If you move package.json or the build setup
+// changes, adjust this import path.
+import { version as APP_VERSION } from '../../package.json';
 
 function ConnectionBanner({ isError }: { isError: boolean }) {
   if (!isError) return null;
   return (
     <div style={{
-      background: '#dc3545', color: 'white', padding: '6px 16px',
+      background: '#dc2626', color: 'white', padding: '6px 16px',
       fontSize: '13px', textAlign: 'center', fontWeight: 500,
     }}>
       ⚠ Cannot reach server — check that <code style={{ background: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: 3 }}>
@@ -21,12 +26,14 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
 
 export default function App() {
   const { data: project, isError } = useProject();
-
   return (
     <div className="app">
       <ConnectionBanner isError={isError} />
       <header className="header">
         <h1>Archon</h1>
+        <span className="version-badge" title={`Archon dashboard v${APP_VERSION}`}>
+          v{APP_VERSION}
+        </span>
         {project && <span className="project-badge" title={project.path}>{project.name}</span>}
         <nav className="header-nav">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>

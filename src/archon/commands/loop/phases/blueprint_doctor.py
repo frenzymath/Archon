@@ -1,13 +1,17 @@
 """BlueprintDoctorPhase — structural lints for the project blueprint.
 
 Runs after the prover phase (alongside ``sync_leanok``), before the
-review agent gets dispatched. Detects two classes of bug that have
+review agent gets dispatched. Detects classes of bug that have
 repeatedly slipped past the (mandatory) blueprint-reviewer subagent:
 
 1. ``.tex`` files under ``blueprint/src/chapters/`` that are not
    ``\\input``'d by ``content.tex`` — orphan chapters.
 2. ``\\ref{...}`` / ``\\uses{...}`` / ``\\cref{...}`` (etc.) targets
    that no ``\\label{...}`` defines — broken cross-references.
+3. Empty-argument annotations (``\\uses{}``, ``\\label{}``, ...) and
+   empty list items (``\\uses{a,,b}``) — malformed annotations that
+   crash plastex with ``Label '' could not be resolved`` followed by
+   a depgraph ``RecursionError``.
 
 The doctor is *informational*. It writes a Markdown report + a JSON
 sidecar to ``.archon/logs/iter-NNN/blueprint-doctor.{md,json}`` and
@@ -59,7 +63,8 @@ class BlueprintDoctorPhase(Phase):
                 log.warn(
                     f"blueprint-doctor: {len(report.orphan_chapters)} orphan "
                     f"chapter(s), {len(report.broken_refs)} broken "
-                    f"reference(s) ({secs}s) — no iter sidecar to persist into"
+                    f"reference(s), {len(report.malformed_refs)} malformed "
+                    f"annotation(s) ({secs}s) — no iter sidecar to persist into"
                 )
             else:
                 log.success(f"blueprint-doctor: clean ({secs}s)")
@@ -75,6 +80,7 @@ class BlueprintDoctorPhase(Phase):
             log.warn(
                 f"blueprint-doctor: {len(report.orphan_chapters)} orphan "
                 f"chapter(s), {len(report.broken_refs)} broken reference(s), "
+                f"{len(report.malformed_refs)} malformed annotation(s), "
                 f"{len(report.axiom_decls)} axiom decl(s) "
                 f"({secs}s) — see {md_path}"
             )

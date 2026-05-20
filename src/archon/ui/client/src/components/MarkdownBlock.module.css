@@ -1,0 +1,342 @@
+/* Scoped styles for content produced by utils/markdown.ts. All rules are
+ * descendant-scoped to `.markdown` so they cannot leak into the rest of
+ * the app. */
+
+.markdown {
+  /* Design tokens — keep variables here so the palette can be retuned in
+   * one place. Hues sit in the indigo / slate family with a single warm
+   * accent for links; this reads as "modern dev tool" without being
+   * brand-specific. */
+  --md-fg: #1e293b;            /* slate-800 */
+  --md-fg-muted: #64748b;      /* slate-500 */
+  --md-heading: #0f172a;       /* slate-900 */
+  --md-rule: #e2e8f0;          /* slate-200 */
+  --md-rule-strong: #cbd5e1;   /* slate-300 */
+
+  --md-link: #4f46e5;          /* indigo-600 */
+  --md-link-hover: #3730a3;    /* indigo-800 */
+
+  /* Inline code: soft indigo tint, indigo-tinted text. The tint is low-
+   * saturation so dense prose with many code tokens doesn't get noisy. */
+  --md-code-bg: rgba(99, 102, 241, 0.10);
+  --md-code-fg: #4338ca;       /* indigo-700 */
+  --md-code-ring: rgba(99, 102, 241, 0.18);
+
+  /* Code blocks: light surface with subtle indigo tint to coordinate
+   * with inline code pills. Previously used a dark slate slab which
+   * felt too heavy in light-theme dashboards. */
+  --md-pre-bg: #f8fafc;        /* slate-50 */
+  --md-pre-fg: #1e293b;        /* slate-800 */
+  --md-pre-border: #e2e8f0;    /* slate-200 */
+
+  /* Table chrome */
+  --md-table-bg: #ffffff;
+  --md-table-head-bg: #f8fafc; /* slate-50 */
+  --md-table-stripe: #fafbfc;
+  --md-table-border: #e2e8f0;
+
+  --md-quote-bar: #6366f1;     /* indigo-500 */
+  --md-quote-bg: rgba(99, 102, 241, 0.05);
+
+  --md-radius-sm: 4px;
+  --md-radius-md: 6px;
+  --md-radius-lg: 10px;
+
+  /* Typography */
+  font-family:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--md-fg);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11"; /* Inter stylistic */
+}
+
+/* Vertical rhythm: one rule does the work of many. */
+.markdown > * + * { margin-top: 0.9em; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+
+/* ─── Headings ───────────────────────────────────────────────────────
+ * Tight tracking, heavy weight, real size contrast. H1/H2 carry a
+ * gradient underline that's barely there but adds a hint of polish.
+ * The pseudo-element is `width: 2.5em` so it acts as an accent mark
+ * rather than a full-width rule. */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  color: var(--md-heading);
+}
+
+.markdown h1 {
+  font-size: 1.7em;
+  margin-top: 1.5em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--md-rule);
+  position: relative;
+}
+.markdown h1::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 2.5em;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--md-link), var(--md-quote-bar));
+}
+
+.markdown h2 {
+  font-size: 1.32em;
+  margin-top: 1.35em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-rule);
+}
+
+.markdown h3 {
+  font-size: 1.12em;
+  margin-top: 1.25em;
+  color: var(--md-heading);
+}
+
+.markdown h4 {
+  font-size: 1em;
+  margin-top: 1.15em;
+}
+
+.markdown h5,
+.markdown h6 {
+  font-size: 0.92em;
+  color: var(--md-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ─── Paragraphs ───────────────────────────────────────────────────── */
+.markdown p { margin: 0; }
+
+/* ─── Lists ───────────────────────────────────────────────────────────
+ * Fixes the screenshot issue (markers in gutter) and tints the markers
+ * indigo so numbered steps read as intentional, not browser-default. */
+.markdown ul,
+.markdown ol {
+  margin: 0;
+  padding-left: 1.6em;
+}
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
+
+.markdown li { margin-top: 0.3em; }
+
+.markdown li::marker {
+  color: var(--md-link);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.markdown li > p { margin: 0; }
+
+.markdown li > ul,
+.markdown li > ol {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+/* ─── Inline code ─────────────────────────────────────────────────────
+ * Soft tinted pill, indigo-tinted text, hairline ring for definition
+ * against busy backgrounds. The ring uses box-shadow inset so it doesn't
+ * add to the box dimensions. */
+.markdown code {
+  font-family:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+  font-size: 0.86em;
+  font-weight: 500;
+  background: var(--md-code-bg);
+  color: var(--md-code-fg);
+  padding: 0.15em 0.4em;
+  border-radius: var(--md-radius-sm);
+  box-shadow: inset 0 0 0 1px var(--md-code-ring);
+  word-break: break-word;
+}
+
+/* ─── Code blocks ─────────────────────────────────────────────────────
+ * Dark slab against a light page reads as "this is code" instantly. The
+ * inner <code> resets the inline pill styling. Rounded corners + scroll
+ * shadow if content overflows. */
+.markdown pre {
+  margin: 0;
+  background: var(--md-pre-bg);
+  color: var(--md-pre-fg);
+  border: 1px solid var(--md-pre-border);
+  border-radius: var(--md-radius-md);
+  padding: 0.9em 1.1em;
+  overflow-x: auto;
+  font-size: 0.86em;
+  line-height: 1.55;
+  /* Subtle elevation. */
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.markdown pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 1em;
+  font-weight: 400;
+  white-space: pre;
+}
+
+/* ─── Lean syntax highlighting ────────────────────────────────────────
+ * Token classes emitted by renderLeanBlock() in utils/markdown.ts
+ * via utils/leanHighlight.ts. Palette is tuned for the LIGHT code
+ * surface (slate-50 bg / slate-800 text) — pick colors that read
+ * cleanly at the prose font-size without competing with inline
+ * indigo code pills. Each token gets its own class so re-theming
+ * is one edit per role. */
+.markdown pre code .hl-kw {
+  color: #7c3aed; /* violet-600 — generic keywords (by, where, fun, ...) */
+  font-weight: 500;
+}
+.markdown pre code .hl-decl {
+  color: #2563eb; /* blue-600 — declaration kinds (theorem, lemma, def, ...) */
+  font-weight: 600;
+}
+.markdown pre code .hl-comment {
+  color: #64748b; /* slate-500 — softer than body so it visually recedes */
+  font-style: italic;
+}
+.markdown pre code .hl-sorry {
+  /* `sorry` deserves to stand out — it's the placeholder the agent
+   * is hunting. Warm amber + subtle ring + slight background so it
+   * catches the eye even in a wall of code. */
+  color: #b45309; /* amber-700 */
+  background: rgba(245, 158, 11, 0.12);
+  padding: 0 3px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+/* ─── Tables ─────────────────────────────────────────────────────────
+ * The trick for rounded corners on a <table>: border-collapse hides the
+ * radius, so use border-spacing: 0 + a wrapper effect via overflow on a
+ * surrogate. Here we use `border-collapse: separate` with shared borders
+ * controlled at the cell level, and clip via overflow:hidden on the
+ * table itself. display:block + overflow-x:auto handles wide tables. */
+.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--md-table-border);
+  border-radius: var(--md-radius-md);
+  overflow: hidden;
+  font-size: 0.93em;
+  background: var(--md-table-bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.markdown th,
+.markdown td {
+  padding: 0.55em 0.85em;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--md-table-border);
+  border-right: 1px solid var(--md-table-border);
+}
+
+.markdown th:last-child,
+.markdown td:last-child { border-right: 0; }
+
+.markdown tbody tr:last-child td { border-bottom: 0; }
+
+.markdown thead th {
+  background: var(--md-table-head-bg);
+  font-weight: 600;
+  color: var(--md-heading);
+  letter-spacing: -0.005em;
+}
+
+.markdown tbody tr:nth-child(even) {
+  background: var(--md-table-stripe);
+}
+
+/* ─── Blockquotes ─────────────────────────────────────────────────────
+ * Accent rail + faint tinted background. Reads as "callout" rather than
+ * generic quote. */
+.markdown blockquote {
+  margin: 0;
+  padding: 0.6em 0.9em 0.6em 1em;
+  border-left: 3px solid var(--md-quote-bar);
+  background: var(--md-quote-bg);
+  border-radius: 0 var(--md-radius-md) var(--md-radius-md) 0;
+  color: var(--md-fg);
+}
+
+.markdown blockquote > :first-child { margin-top: 0; }
+.markdown blockquote > :last-child { margin-bottom: 0; }
+
+/* ─── Horizontal rule ─────────────────────────────────────────────────
+ * Centered short rule rather than full-width slab. */
+.markdown hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--md-rule-strong) 20%,
+    var(--md-rule-strong) 80%,
+    transparent
+  );
+  margin: 1.4em 0;
+}
+
+/* ─── Links ───────────────────────────────────────────────────────────
+ * Underline appears on hover via background-image trick so the baseline
+ * doesn't jump. */
+.markdown a {
+  color: var(--md-link);
+  text-decoration: none;
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 0 1px;
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  transition: background-size 0.15s ease, color 0.15s ease;
+}
+.markdown a:hover {
+  color: var(--md-link-hover);
+  background-size: 100% 1px;
+}
+
+/* ─── Images ─────────────────────────────────────────────────────────── */
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--md-radius-md);
+  border: 1px solid var(--md-rule);
+}
+
+/* ─── Emphasis ────────────────────────────────────────────────────── */
+.markdown strong {
+  font-weight: 650;
+  color: var(--md-heading);
+}
+.markdown em { font-style: italic; }
+.markdown del { color: var(--md-fg-muted); }
+
+/* ─── KaTeX ─────────────────────────────────────────────────────────── */
+.markdown .katex-display {
+  margin: 0.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}

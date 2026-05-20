@@ -155,6 +155,7 @@ class ReviewPhase(Phase):
             enabled=(ctx.resume_phase == self.skip_token),
             label="review",
             cwd=ctx.project_path,
+            jsonl_fallback=Path(str(review_log) + ".jsonl"),
         )
         ClaudeAgent(model=ctx.model, role="review").run(
             REVIEW_CONTINUE if resume_sid else prompt,

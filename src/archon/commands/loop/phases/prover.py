@@ -146,6 +146,8 @@ class ProverPhase(Phase):
             iter_meta=ctx.iter_meta,
             iter_num=ctx.iter_num,
             max_parallel=ctx.options.max_parallel,
+            max_objectives=ctx.options.max_objectives,
+            block_on_blocked_deps=ctx.options.block_on_blocked_deps,
             verbose_logs=ctx.verbose_logs,
             model=ctx.model,
             dashboard_url=ctx.dashboard_url,

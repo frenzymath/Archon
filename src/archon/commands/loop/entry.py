@@ -28,6 +28,23 @@ def loop(
         None, "--max-parallel",
         help="Max concurrent provers in parallel mode. (default from config or 4)",
     ),
+    max_objectives: Optional[int] = typer.Option(
+        None, "--max-objectives",
+        help="Hard cap on the number of files the planner can list under "
+             "'## Current Objectives' for a single iter. When the planner "
+             "exceeds it (e.g. writes 27 files), only the first N are "
+             "dispatched to provers; the remainder are deferred to the "
+             "next iter via a USER_HINTS entry. Prevents the runaway "
+             "fan-out failure mode. (default from config or 10)",
+    ),
+    block_on_blocked_deps: Optional[bool] = typer.Option(
+        None, "--block-on-deps/--no-block-on-deps",
+        help="Skip prover dispatch for an objective when one of its "
+             "transitive local imports failed the previous `lake build`. "
+             "Such provers would fail to load the file anyway. The "
+             "blocked-and-itself-objective case (planner is fixing the "
+             "blocked file) is exempt. (default from config or on)",
+    ),
     stage: Optional[Stage] = typer.Option(
         None, "--stage", "-s",
         help="Force a stage instead of reading from PROGRESS.md.",
@@ -149,6 +166,10 @@ def loop(
 
     max_iterations = _resolve(max_iterations, section=loop_cfg, key='max_iterations', default=10)
     max_parallel = _resolve(max_parallel, section=loop_cfg, key='max_parallel', default=4)
+    max_objectives = _resolve(max_objectives, section=loop_cfg, key='max_objectives', default=10)
+    block_on_blocked_deps = _resolve(
+        block_on_blocked_deps, section=loop_cfg, key='block_on_blocked_deps', default=True,
+    )
     parallel = _resolve(parallel, section=loop_cfg, key='parallel', default=True)
     verbose_logs = _resolve(verbose_logs, section=loop_cfg, key='verbose_logs', default=False)
     no_review = _resolve(no_review, section=loop_cfg, key='no_review', default=False)
@@ -172,6 +193,8 @@ def loop(
         project_path=resolved,
         max_iterations=max_iterations,
         max_parallel=max_parallel,
+        max_objectives=max_objectives,
+        block_on_blocked_deps=block_on_blocked_deps,
         parallel=parallel,
         verbose_logs=verbose_logs,
         no_review=no_review,

@@ -50,6 +50,26 @@ class UserHintsBlockTest(unittest.TestCase):
         self.assertIn("clear", block.lower())
         self.assertIn("do NOT need to read", block)
 
+    def test_html_comment_only_treated_as_no_hints(self):
+        # The bundled USER_HINTS.md template is an HTML-comment
+        # preamble. Template-only content must render as "no hints" —
+        # otherwise the planner sees the format guide as live
+        # instructions.
+        block = _user_hints_block(
+            "<!-- format guide for the user; not a hint -->\n"
+        )
+        self.assertIn("No user hints", block)
+
+    def test_html_comment_stripped_when_bullets_present(self):
+        # Real hints + preamble: only the bullets should reach the
+        # planner; the comment preamble must be stripped.
+        block = _user_hints_block(
+            "<!-- format guide -->\n"
+            "- [2026-05-18T12:00:00Z] focus on the M2.a route\n"
+        )
+        self.assertIn("focus on the M2.a route", block)
+        self.assertNotIn("format guide", block)
+
 
 class BlueprintDoctorFindingsBlockTest(unittest.TestCase):
     def setUp(self):
@@ -126,6 +146,28 @@ class BlueprintDoctorFindingsBlockTest(unittest.TestCase):
         # underneath as sub-bullets.
         a_count = block.count("A.tex")
         self.assertEqual(a_count, 1, f"expected A.tex grouped once, got {a_count}")
+
+    def test_renders_malformed_annotations(self):
+        self._write_prior_doctor(5, {
+            "orphan_chapters": [],
+            "broken_refs": [],
+            "malformed_refs": [
+                {"chapter": "/proj/blueprint/src/chapters/A.tex",
+                 "kind": "uses", "reason": "empty argument"},
+                {"chapter": "/proj/blueprint/src/chapters/A.tex",
+                 "kind": "uses", "reason": "empty list item"},
+                {"chapter": "/proj/blueprint/src/chapters/B.tex",
+                 "kind": "label", "reason": "empty argument"},
+            ],
+            "axiom_decls": [],
+        })
+        block = _blueprint_doctor_findings_block(self.state, 5)
+        self.assertIn("Malformed annotations", block)
+        self.assertIn("empty argument", block)
+        self.assertIn("empty list item", block)
+        # The block must explicitly warn that this is what crashes
+        # the leanblueprint build.
+        self.assertIn("crash", block.lower())
 
     def test_renders_axiom_decls(self):
         self._write_prior_doctor(5, {

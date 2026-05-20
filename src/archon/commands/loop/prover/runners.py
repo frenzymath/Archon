@@ -116,6 +116,7 @@ class SerialProverRunner:
             self.iter_meta, "prover.sessionId",
             enabled=self.resume_enabled, label="prover",
             cwd=self.project_path,
+            jsonl_fallback=Path(str(prover_log) + ".jsonl"),
         )
         with ProverEnvironment(
             snap_dir=self.iter_dir / "snapshots",
@@ -153,6 +154,8 @@ class ParallelProverRunner:
         iter_meta: Path,
         iter_num: int,
         max_parallel: int,
+        max_objectives: int,
+        block_on_blocked_deps: bool,
         verbose_logs: bool,
         model: str,
         dashboard_url: str | None = None,
@@ -168,6 +171,8 @@ class ParallelProverRunner:
         self.iter_meta = iter_meta
         self.iter_num = iter_num
         self.max_parallel = max_parallel
+        self.max_objectives = max_objectives
+        self.block_on_blocked_deps = block_on_blocked_deps
         self.verbose_logs = verbose_logs
         self.model = model
         self.dashboard_url = dashboard_url
@@ -185,6 +190,56 @@ class ParallelProverRunner:
             log.warn("The plan agent must list target files in **bold** or `backticks`.")
             log.warn("Skipping prover iteration.")
             return
+
+        # Drop files whose transitive imports failed the previous lake
+        # build. plan_validate already filtered these and hinted the
+        # planner; the runner enforces it again so a stale PROGRESS.md
+        # replayed via --from prover still gets the filter applied.
+        if self.block_on_blocked_deps:
+            from ..blocked_deps import (
+                build_local_import_graph,
+                filter_objectives_for_blocked_deps,
+                parse_blocked_files_from_log,
+            )
+            log_path = self.state_dir / "last_lake_build.log"
+            blocked = parse_blocked_files_from_log(
+                log_path, project_path=self.project_path,
+            )
+            if blocked:
+                graph = build_local_import_graph(self.project_path)
+                sorry_files, dropped = filter_objectives_for_blocked_deps(
+                    sorry_files,
+                    blocked=blocked,
+                    graph=graph,
+                    project_path=self.project_path,
+                )
+                if dropped:
+                    log.warn(
+                        f"Dropped {len(dropped)} objective(s) whose "
+                        f"transitive imports failed the previous lake "
+                        f"build — they were already hinted to the "
+                        f"planner via USER_HINTS."
+                    )
+                if not sorry_files:
+                    log.warn(
+                        "All objectives are blocked by upstream compile "
+                        "errors; skipping prover dispatch."
+                    )
+                    return
+
+        # Hard cap on dispatched provers. plan_validate already warned
+        # loudly and queued the deferred list into USER_HINTS; we slice
+        # here so the dispatcher is deterministic even if plan_validate
+        # was bypassed (e.g. --from prover replay of a stale PROGRESS.md
+        # that's over the cap).
+        if len(sorry_files) > self.max_objectives:
+            log.warn(
+                f"PROGRESS.md lists {len(sorry_files)} objectives — "
+                f"capping dispatch at {self.max_objectives}. The remaining "
+                f"{len(sorry_files) - self.max_objectives} files are "
+                f"already queued for the next plan agent via USER_HINTS."
+            )
+            sorry_files = sorry_files[: self.max_objectives]
 
         file_count = len(sorry_files)
 
@@ -224,6 +279,7 @@ class ParallelProverRunner:
             self.iter_meta, f"provers.{slug}.sessionId",
             enabled=self.resume_enabled, label=f"prover[{slug}]",
             cwd=self.project_path,
+            jsonl_fallback=Path(str(prover_log) + ".jsonl"),
         )
         with ProverEnvironment(
             snap_dir=snap_dir,
@@ -287,11 +343,14 @@ class ParallelProverRunner:
                 # Per-slug resume: each parallel prover keeps its own
                 # session id under provers.<slug>.sessionId. Files added
                 # in this round that weren't part of the prior run have
-                # no stored id; pick_resume_session degrades to fresh.
+                # no stored id; pick_resume_session degrades to fresh
+                # (or recovers from the slug's JSONL fallback if the
+                # prior run crashed mid-prove).
                 resume_sid = pick_resume_session(
                     self.iter_meta, f"provers.{slug}.sessionId",
                     enabled=self.resume_enabled, label=f"prover[{slug}]",
                     cwd=self.project_path,
+                    jsonl_fallback=Path(str(prover_log) + ".jsonl"),
                 )
                 if resume_sid:
                     submit_prompt = PROVER_CONTINUE

@@ -15,8 +15,23 @@ clear it". File-reading and file-clearing are the loop's job.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from textwrap import dedent
+
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", flags=re.DOTALL)
+
+
+def _strip_html_comments(text: str) -> str:
+    """Strip HTML comments from ``text``.
+
+    ``USER_HINTS.md`` ships an HTML-comment preamble explaining the
+    format to the mathematician. The preamble is for the human; the
+    plan agent must not see it (otherwise "template only" content
+    looks like live hints to the planner). We strip the comment block
+    before checking emptiness and before injection.
+    """
+    return _HTML_COMMENT_RE.sub("", text)
 
 from archon.commands.tooling.blueprint import lean_file_to_chapter_slug
 from archon.state.iter_state import (
@@ -71,8 +86,9 @@ def _blueprint_doctor_findings_block(
 
     orphans = data.get("orphan_chapters", []) or []
     broken = data.get("broken_refs", []) or []
+    malformed = data.get("malformed_refs", []) or []
     axioms = data.get("axiom_decls", []) or []
-    if not orphans and not broken and not axioms:
+    if not orphans and not broken and not malformed and not axioms:
         return ""
 
     lines: list[str] = [
@@ -129,6 +145,44 @@ def _blueprint_doctor_findings_block(
             )
         lines.append("")
 
+    if malformed:
+        lines.append("### Malformed annotations (block blueprint build)")
+        lines.append("")
+        lines.append(
+            "Annotations with an empty argument (`\\uses{}`, `\\proves{}`, "
+            "`\\label{}`, `\\ref{}`, ...) or an empty list item "
+            "(`\\uses{a,,b}`). plastex emits `Label '' could not be "
+            "resolved` for each, then the leanblueprint depgraph builder "
+            "enters infinite recursion. **`leanblueprint web` will keep "
+            "crashing until every entry below is resolved.** Fix each by "
+            "filling in the intended label or removing the empty annotation."
+        )
+        lines.append("")
+        # Group by (chapter, kind, reason) for readability.
+        m_by_chapter: dict[str, list[tuple[str, str]]] = {}
+        for entry in malformed:
+            chapter = entry.get("chapter", "")
+            kind = entry.get("kind", "")
+            reason = entry.get("reason", "")
+            m_by_chapter.setdefault(chapter, []).append((kind, reason))
+        m_rendered = 0
+        for chapter in sorted(m_by_chapter):
+            if m_rendered >= max_broken_refs:
+                break
+            lines.append(f"- `{chapter}`:")
+            for kind, reason in sorted(set(m_by_chapter[chapter])):
+                if m_rendered >= max_broken_refs:
+                    break
+                lines.append(f"  - `\\{kind}{{...}}` — {reason}")
+                m_rendered += 1
+        m_total = len(malformed)
+        if m_rendered < m_total:
+            lines.append(
+                f"- ... and {m_total - m_rendered} more "
+                f"(see `{json_path}` for the full list)."
+            )
+        lines.append("")
+
     if broken:
         lines.append("### Broken cross-references")
         lines.append("")
@@ -180,8 +234,17 @@ def _user_hints_block(captured_hints: str | None) -> str:
     "no hints this iter" affordance — the planner reads the prior iter's
     sidecar for any ``## Fallback if no user response`` section (the
     user-silent fallback contract).
+
+    HTML comments in ``captured_hints`` are stripped before both the
+    emptiness check and the injection. The bundled ``USER_HINTS.md``
+    template is an HTML-comment preamble explaining the format to the
+    user; "template only" content must render as "no hints" to the
+    planner, not as live instructions.
     """
-    if not captured_hints or not captured_hints.strip():
+    stripped_text = (
+        _strip_html_comments(captured_hints) if captured_hints else ""
+    )
+    if not stripped_text.strip():
         return dedent("""
 
             ## User hints
@@ -205,7 +268,7 @@ def _user_hints_block(captured_hints: str | None) -> str:
         your plan.
 
         ```
-        {captured_hints.strip()}
+        {stripped_text.strip()}
         ```
     """)
 
@@ -480,7 +543,7 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     for d in descriptors:
         tags: list[str] = []
         if d.is_mandatory_for(role):
-            tags.append("MANDATORY")
+            tags.append("HIGHLY RECOMMENDED")
         if d.read_only:
             tags.append("read-only")
         if d.can_spawn:
@@ -518,11 +581,27 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
 
     if mandatory_for_role:
         names = ", ".join(f"`{d.name}`" for d in mandatory_for_role)
+        sidecar_name = f"{role}.md"
         lines.append("")
         lines.append(
-            f"**You MUST dispatch every [MANDATORY] subagent before "
-            f"completing this phase.** For this phase that means: {names}. "
-            f"A post-phase check warns if any mandatory dispatch is missing."
+            f"**Each [HIGHLY RECOMMENDED] subagent should be dispatched "
+            f"this phase unless you have a concrete reason to skip.** For "
+            f"this phase that means: {names}. When you choose to skip one "
+            f"(e.g. STRATEGY.md unchanged from prior iter and last verdict "
+            f"was SOUND, or no new prover output to assess), record the "
+            f"rationale as a one-line bullet under a `## Subagent skips` "
+            f"section in `iter/iter-NNN/{sidecar_name}`:\n\n"
+            f"```markdown\n"
+            f"## Subagent skips\n\n"
+            f"- <subagent-name>: <one-line reason, naming the condition that justifies the skip>\n"
+            f"```\n\n"
+            f"A post-phase audit reads that section and silences its "
+            f"warning for subagents you skipped with rationale; it warns "
+            f"only for subagents that neither dispatched nor were named "
+            f"under `## Subagent skips`. Filling templates with hollow "
+            f"dispatches when nothing has changed is the failure mode this "
+            f"affordance exists to avoid — be willing to skip when the "
+            f"input hasn't changed."
         )
 
     # Workflow guidance section: aggregate dispatcher_notes from

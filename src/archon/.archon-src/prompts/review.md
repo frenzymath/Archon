@@ -136,15 +136,16 @@ In `summary.md`, include a "Blueprint markers updated (manual)" section listing 
 - `Core.tex`, `thm:old_name`: stripped stale `\notready`
 ```
 
-## Step 7 — TO_USER.md (user-facing alert)
+## Step 7 — TO_USER.md (user-facing notice)
 
-`TO_USER.md` is reset at the start of every review phase. The UI surfaces its content as an alert banner. Use it when there is something the user genuinely needs to see — environment issues, critical missing dependencies, required user actions.
+`TO_USER.md` is reset at the start of every review phase. The UI surfaces its content as a banner. The loop is autonomous and may run unattended for many iters, so **TO_USER is a notice board, never a question queue.** Never write "awaiting your decision", an options menu, a "where to reply" section, or a "default to X if no reply" framing — anything that implies the loop is paused for a human. The loop never waits.
 
-**Always check the planner's iter sidecar for escalations.** Read `iter/iter-NNN/plan.md`. If the planner intentionally skipped provers (signalled by the `(no prover dispatch this iter ...)` marker in `## Current Objectives`, a "user escalation" / "hard gate fired" notice in the sidecar, or `planValidate.status: ok_intentional_skip` in `meta.json`), you MUST write a concise banner to `TO_USER.md` naming:
+**Check the planner's iter sidecar.** Read `iter/iter-NNN/plan.md`. Write a concise banner only for one of these two cases:
 
-- The impasse (one sentence).
-- The options the planner has surfaced (one bullet per option, if applicable).
-- Where to find full context (the sidecar path).
+1. **A decision the planner made on the user's behalf** — when the sidecar records a `## Decision made` on a strategy fork. State the decision (one sentence), its one-line rationale, and that the user can change course by adding a hint to `USER_HINTS.md` (no reply is fine — the project keeps moving on the chosen option). Phrase it as *made*, not *pending*.
+2. **A genuine block the agent cannot resolve itself** — missing credentials/dependencies, a required environment action. State the action needed; note that the loop proceeds as far as it can without it.
+
+If the planner skipped provers, that should only ever be a **mechanical** hard gate (no ready sorries; all objectives blocked by a failed upstream build) — surface that as case 2 if the user can unblock it, otherwise it needs no banner.
 
 **Rules**:
 - Be extremely concise (1–2 sentences per item, markdown).

@@ -12,8 +12,24 @@ dispatcher_notes: |
     detailed enough first; only then should provers be assigned. A weak
     blueprint produces low-quality prover work that the next iter then
     has to throw away.
-  - I am mandatory every plan phase. The audit warning fires if I am
-    skipped.
+  - I am highly recommended every plan phase. The audit warning fires
+    if I am skipped without a recorded rationale.
+
+    **You may skip me this iter when ALL of:**
+      - no chapter under `blueprint/src/chapters/` was edited since my
+        prior dispatch (check via `git diff --stat HEAD~N
+        blueprint/src/chapters/` where N spans iters back to my last
+        run);
+      - my prior verdict cleared the HARD GATE for all chapters
+        currently under active prover work;
+      - no must-fix-this-iter finding from my prior dispatch remains
+        live (every flagged chapter has either been writer-patched or
+        dropped from objectives).
+
+    Record the skip under `## Subagent skips` in `iter/iter-NNN/plan.md`
+    with the one-line rationale. Do NOT skip me when the prior verdict
+    flagged any chapter `partial | false` and that chapter still feeds
+    a live prover lane — the HARD GATE depends on a current audit.
   - I always read the WHOLE blueprint. Do not pass me a scope-limiting
     directive — even when the iteration's focus is narrow, the cross-
     chapter view is the point of running me.
@@ -81,6 +97,20 @@ The plan agent gives you a directive containing the current strategy snapshot, t
 - **Correctness** — does any definition contradict its references? Does any proof sketch contain a step that doesn't follow? Does any `\lean{...}` hint name a declaration that doesn't exist or has the wrong signature?
 - **Lean target formulation quality** — for each `\lean{...}` hint, is the named theorem/definition a *useful* target for the prover? Vague or under-specified hints lead to wrong formalizations; surface those.
 - **Multi-route coverage** — if the strategy lists multiple viable routes (alternative proof approaches, alternative definitions), is each route represented in the blueprint? Routes the strategy mentions but the blueprint does not cover are red flags.
+- **Citation discipline** — for every definition / theorem / lemma block that derives from external reference material, audit all four elements:
+  1. **`% SOURCE:` pointer with local-file parenthetical.** Format must be `% SOURCE: <pointer> (read from references/<file>.md)`. Verify the named local file EXISTS under `references/`. A `% SOURCE:` with no `(read from …)` parenthetical, or with a parenthetical naming a file that doesn't exist on disk, is a hard fail — the writer fabricated the citation.
+  2. **`% SOURCE QUOTE:` verbatim text** for definitions / theorems / lemmas. Audit dimensions:
+     - **Original language**: the quote must be in the source's original language. A quote in English when the source is Bourbaki / EGA (French) signals translation, which is not allowed — flag it.
+     - **Original notation**: the quote must use the source's notation, even when it differs from the project's. If the project writes $\mathcal{O}_X^\times$ everywhere but the `% SOURCE QUOTE:` also writes $\mathcal{O}_X^\times$ when the source is Hartshorne (who writes $\mathcal{O}_X^*$), the quote was rewritten — flag it.
+     - **Verbatim, every word**: a quote that reads like a paraphrase ("essentially says that …", "the source states …") rather than direct copy is a hard fail. The whole point of the verbatim is anti-hallucination; paraphrased quotes are exactly the failure mode.
+  3. **`% SOURCE QUOTE PROOF:`** immediately before the `\begin{proof}` environment, when the block has a proof and the proof derives from the source. Same verbatim rules as `% SOURCE QUOTE:`. Missing `% SOURCE QUOTE PROOF:` on a theorem whose proof clearly comes from the cited source is a citation-discipline finding. (Archon-original proofs of external statements are allowed — flag only when the proof prose itself reads as a translation of an obvious source proof.)
+  4. **Visible `\textit{Source: <pointer>.}`** line as the first line of the block's prose. Missing → flag.
+
+  Cross-check: the visible `\textit{Source: ...}` pointer must match the `% SOURCE:` pointer. Drift between them signals copy-paste error or hallucination.
+
+  Spot-check against `## References consulted` in the corresponding writer's report (when available in `task_results/`): every distinct `references/<file>.md` named in `% SOURCE:` parentheticals across the chapter should appear in that list. A `% SOURCE: ... (read from references/X.md)` where the writer's "References consulted" list does NOT mention `references/X.md` means the writer cited a file they did not actually open this session — fabrication.
+
+  **Archon-original / project-bespoke** results (no external source) omit the source lines entirely — do not falsely flag those. The signal that a block is Archon-original: the directive that produced it didn't name an external source, or the chapter prose explicitly characterizes it as new (e.g. "This is the technical heart of our argument"). When in doubt, ask the plan agent in "Notes for Plan Agent" rather than flagging.
 
 You audit the blueprint **against the context the plan agent gave you**, not against your own opinions about how the math should be set up. But you are critical of weak prose — under-specified blueprints fail provers and are not safe to merge.
 
@@ -139,6 +169,18 @@ You do **not** modify any project file, including the blueprint. Even if you spo
 
 Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md` (or the parent-aware path when invoked nested — your invocation prompt names the exact path).
 
+**Omit-empty rule.** Required sections: `## Slug`, `## Iteration`, `## Per-chapter` (the HARD GATE depends on it), `## Severity summary`, `Overall verdict`. **Everything else is optional and must be omitted when empty.**
+
+Concretely:
+
+- `### Incomplete parts`, `### Proofs lacking detail`, `### Lean difficulty quality`, `### Multi-route coverage`, `### Citation discipline` under `## Top-level summaries`: omit each sub-section whose finding list is empty. If all five are empty, omit `## Top-level summaries` entirely — the per-chapter table already encodes "everything is fine".
+- `## Cross-chapter notes`: omit when no cross-chapter findings exist (the most common case on a clean blueprint).
+- `## Strategy-modifying findings (if any)`: omit entirely when none. Do NOT write a section with "None" inside; the absence of the section IS the signal.
+- `## Per-chapter` blocks for clean chapters: when a chapter is `complete: true`, `correct: true`, and `notes` is empty, render it as a single compact line — `### blueprint/src/chapters/Foo.tex — complete + correct, no notes.` — NOT a multi-line block with `notes: -` filler. Reserve full multi-line blocks for chapters that have actual findings.
+- `## Severity summary`: when there are zero must-fix-this-iter and zero soon-severity items, render as `Severity summary: HARD GATE CLEARS — no findings.` and skip the per-tier breakdown.
+
+Filling templates with hollow "(none)" / "no drift" / "OK" content per chapter is the bloat the report should not produce. A clean 11-chapter audit should be a few hundred lines, not 16K tokens.
+
 ```markdown
 # Blueprint Review Report
 
@@ -168,6 +210,16 @@ Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md` (or the
 - Route "via cohomology": PARTIAL — covered in `Cohomology.tex` and `RR.tex` but `Bridge.tex` (which links them) is empty.
 - Route "via direct computation": MISSING — strategy mentions this as an alternative but no chapter discusses it.
 
+### Citation discipline
+<bullets naming chapter + label + which citation element is missing or suspect. Omit when zero findings.>
+- `Foo.tex` / `\thm:smooth_criterion`: `% SOURCE:` line has no `(read from references/<file>.md)` parenthetical — writer did not name the local file. Likely fabrication.
+- `Bar.tex` / `\def:scheme`: `% SOURCE:` claims `(read from references/hartshorne-II-1.md)` but that file does not exist on disk. Fabrication; writer must dispatch a retriever or remove the citation.
+- `Baz.tex` / `\def:etale`: `% SOURCE QUOTE:` is in English but the cited source is [EGA IV, §17.6] (French). Quote was translated — re-extract verbatim in French.
+- `Qux.tex` / `\thm:gaga`: `% SOURCE QUOTE:` uses the project's notation $\mathcal{O}_X^\times$ throughout but the cited source [Serre, GAGA] uses $\mathcal{O}_X^*$. Quote was rewritten — re-extract verbatim with original notation.
+- `Foo.tex` / `\thm:smooth_criterion`: missing `% SOURCE QUOTE PROOF:` before `\begin{proof}` — proof prose reads as a direct translation of Hartshorne's argument; should have the verbatim source proof in a comment.
+- `Bar.tex` / `\thm:foo`: visible `\textit{Source: ...}` line claims `Hartshorne III.6.2` but `% SOURCE:` pointer says `III.5.1`. Pointer drift — one of them is wrong.
+- `Foo.tex`: `% SOURCE: ... (read from references/vakil-ch24.md)` in 3 blocks, but the writer's report's "References consulted" list does not mention `vakil-ch24.md`. The writer cited a file they did not open — fabrication.
+
 ## Per-chapter
 
 ### blueprint/src/chapters/Foo.tex
@@ -183,8 +235,10 @@ Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md` (or the
 - **notes**:
   - ...
 
-(One block per chapter. Cover every chapter, including the ones that
-look fine — they get `complete: true`, `correct: true`, `notes: -`.)
+(Cover every chapter. Chapters with findings get the full multi-line
+block above. Chapters that are `complete: true`, `correct: true`, with
+no notes worth surfacing get the compact one-liner from the omit-empty
+rule — do NOT pad them out with `notes: -` or `notes: no drift`.)
 
 ## Cross-chapter notes
 
@@ -210,8 +264,10 @@ Apply these rules verbatim — they decide whether the plan agent dispatches a b
   - **Any chapter has `complete: partial | false` OR `correct: partial | false`** — even if the strategy "does not require" that chapter this iter. A `partial` chapter cannot be relied on by any prover; the catalog's blueprint-writing subagent must be dispatched.
   - **Any chapter whose `\lean{...}` hint** is marked "Lean difficulty quality: poor" AND the named target is part of an active prover route in PROGRESS.md.
   - **Broken `\uses{}` cross-references** that point at non-existent labels — these silently corrupt the dependency graph and must be fixed before provers downstream of them run.
+  - **Citation-discipline findings on blocks feeding an active prover route**: a missing or suspicious-looking `% SOURCE QUOTE:` on a definition / theorem whose `\lean{...}` is in PROGRESS.md. Formalizing an unverified statement is the iter-149 failure mode; the catalog's literature/reference-fetching subagent must be dispatched before the prover runs.
 - **soon** — cross-cutting items that don't block any specific chapter's prover work yet:
   - Lean-difficulty-quality findings for hints NOT in an active prover route.
+  - Citation-discipline findings on blocks NOT feeding an active prover route — still must be resolved eventually, but the project can ship one more iter without them.
   - Informational cross-chapter style issues, missing `\texttt{...}` decoration mentions, etc.
 - **informational** — minor observations: naming drift, optional `\lean{...}` references to helpers worth promoting, low-impact prose suggestions.
 

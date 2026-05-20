@@ -16,7 +16,7 @@ function splitToolHeadline(headline: string): { toolLabel: string; rest: string 
 const EVENT_COLORS: Record<string, string> = {
   shell: 'var(--blue)', thinking: 'var(--text-muted)', tool_call: 'var(--purple)',
   tool_result: 'var(--orange)', text: 'var(--green)', session_end: 'var(--green)',
-  code_snapshot: 'var(--blue)',
+  code_snapshot: 'var(--blue)', prompt: 'var(--purple)',
 };
 
 interface Props { entry: LogEntry; }
@@ -91,6 +91,21 @@ export default function LogEntryLine({ entry }: Props) {
       hasDetail = true;
       break;
     }
+    case 'prompt': {
+      // Headline summarizes the prompt at a glance. The first non-empty
+      // line is usually the title/heading of the prompt, so it's the
+      // most useful preview. Char count + attempt/resume info live in
+      // the detail header.
+      const promptText = entry.prompt || '';
+      const firstLine = promptText.split('\n').find(l => l.trim().length > 0) || '';
+      const charCount = (entry.length ?? promptText.length).toLocaleString();
+      const kind = entry.resume_session_id ? 'continuation prompt' : 'initial prompt';
+      const attemptTag = entry.attempt && entry.attempt > 1 ? ` · attempt ${entry.attempt}` : '';
+      const preview = truncate(firstLine, 120).text;
+      headline = `${kind} · ${charCount} chars${attemptTag}${preview ? ` — ${preview}` : ''}`;
+      hasDetail = true;
+      break;
+    }
     case 'session_end': {
       const dur = entry.duration_ms ? `${(entry.duration_ms / 1000).toFixed(0)}s` : '';
       let model = '';
@@ -129,7 +144,11 @@ export default function LogEntryLine({ entry }: Props) {
         )}
         {hasDetail && <span className={styles.expandHint}>{expanded ? ' ▾' : ' ▸'}</span>}
       </span>
-      {expanded && <DetailRenderer entry={entry} />}
+      {expanded && (
+        <div className={styles.detail}>
+          <DetailRenderer entry={entry} />
+        </div>
+      )}
     </div>
   );
 }
