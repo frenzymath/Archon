@@ -35,6 +35,7 @@ from archon.state import (
 from . import plan_validate
 from .context import LoopContext, LoopOptions
 from .phases import (
+    AxiomSweepPhase,
     BlueprintDoctorPhase,
     FinalizePhase,
     PlanPhase,
@@ -282,6 +283,13 @@ class LoopCommand:
         # blueprint-reviewer LLM has been observed to miss; writes its
         # findings to iter-NNN/blueprint-doctor.{md,json}.
         BlueprintDoctorPhase(ctx).run()
+
+        # Phase 2d — Axiom sweep (opt-in, loop.axiom_sweep): catch
+        # sorryAx laundering — decls that compile with no sorry warning
+        # yet depend on sorryAx through a clean-compiling delegate, which
+        # the warning-based sorry count misses. Writes
+        # iter-NNN/axiom-sweep.{md,json}; never blocks.
+        AxiomSweepPhase(ctx).run()
 
         # Phase 3 — Review
         ReviewPhase(ctx).run()

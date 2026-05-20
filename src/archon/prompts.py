@@ -222,6 +222,67 @@ def _blueprint_doctor_findings_block(
     return "\n".join(lines)
 
 
+def _axiom_sweep_findings_block(
+    state_dir: Path,
+    iter_num: int,
+    *,
+    max_decls: int = 25,
+) -> str:
+    """Inject the prior iter's axiom-sweep ``sorryAx`` launderings.
+
+    The optional axiom sweep (``loop.axiom_sweep``) runs between prover
+    and review and writes ``logs/iter-NNN/axiom-sweep.json``. This reads
+    the *prior* iter's sidecar and renders any ``sorryAx``-laundering
+    declarations — ones that compile with NO sorry warning yet depend on
+    ``sorryAx`` — as a prompt section the plan agent must act on. These
+    are invisible to the warning-based sorry count, so without this the
+    planner can believe a decl is closed when it is not.
+
+    Empty (no header) when iter is 1, the sidecar is missing/unreadable
+    (sweep off, or no Lean project), or no launderings were found.
+    """
+    if iter_num <= 1:
+        return ""
+    prev = iter_num - 1
+    json_path = state_dir / "logs" / f"iter-{prev:03d}" / "axiom-sweep.json"
+    if not json_path.is_file():
+        return ""
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    launderings = data.get("sorryLaunderings", []) or []
+    if not launderings:
+        return ""
+
+    lines: list[str] = [
+        "",
+        "## Axiom sweep — sorryAx laundering (treat as OPEN sorries)",
+        "",
+        f"The deterministic axiom sweep ran at the end of iter-{prev:03d} and "
+        f"found declarations that compile with NO `sorry` warning yet depend "
+        f"on `sorryAx` — a `sorry` reached through a clean-compiling delegate. "
+        f"The warning-based sorry count does NOT see these, so the headline "
+        f"metric may understate the real open surface. Treat each as an open "
+        f"sorry: trace the delegate chain to the underlying `sorry` and close "
+        f"it (or, if the underlying statement is false, fix the statement). "
+        f"Do NOT rely on the sorry count to tell you these are done.",
+        "",
+    ]
+    for entry in launderings[:max_decls]:
+        decl = entry.get("decl", "")
+        axiom = entry.get("axiom", "sorryAx")
+        lines.append(f"- `{decl}` — depends on `{axiom}`")
+    if len(launderings) > max_decls:
+        lines.append(
+            f"- ... and {len(launderings) - max_decls} more "
+            f"(see `{json_path}` for the full list)."
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _user_hints_block(captured_hints: str | None) -> str:
     """Inject already-captured USER_HINTS.md content into the plan prompt.
 
@@ -729,6 +790,7 @@ def build_plan_prompt(
     catalog_block = _subagent_catalog_block(project_path, role="plan")
     user_hints_block = _user_hints_block(captured_user_hints)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
+    axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
@@ -741,7 +803,7 @@ def build_plan_prompt(
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
-        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(

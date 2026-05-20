@@ -226,14 +226,21 @@ def _decl_has_sorry(lean_file: Path, decl_name: str) -> bool | None:
         return None
 
     bare = decl_name.rsplit('.', 1)[-1]
+    saw_unattributed = False
     for s in sorries:
         in_decl = s.get('in_declaration') if isinstance(s, dict) else None
         if not in_decl:
+            # A sorry the analyzer found but couldn't pin to a declaration.
+            # We can't rule out that it belongs to THIS decl, so we must
+            # not return a confident "no sorry" below.
+            saw_unattributed = True
             continue
         if in_decl == decl_name or in_decl == bare:
             return True
         if in_decl.endswith('.' + bare) or decl_name.endswith('.' + in_decl):
             return True
+    if saw_unattributed:
+        return None  # undecidable: an unattributed sorry exists in this file
     return False
 
 
@@ -457,8 +464,18 @@ def _sync_chapter(
                 else:
                     has_sorry = _decl_has_sorry(lean_file, blk.lean_name)
                     if has_sorry is None:
-                        continue  # undecided
-                    if not has_sorry and _decl_body_is_trivial_placeholder(
+                        # Can't certify the proof is sorry-free (analyzer
+                        # unavailable/timed out, or an unattributed sorry
+                        # exists in the file). A proof-block \leanok asserts
+                        # "proof closed, no sorry" — never let that claim
+                        # stand unverified. Fail safe: remove it.
+                        should_have = False
+                        reason = (
+                            f"sorry status undecided for {blk.lean_name}; "
+                            f"removing proof \\leanok (fail-safe — a proof-"
+                            f"complete claim must be positively verified)"
+                        )
+                    elif not has_sorry and _decl_body_is_trivial_placeholder(
                         lean_file, blk.lean_name,
                     ):
                         # Kernel-clean but body is structurally vacuous —

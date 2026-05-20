@@ -60,6 +60,20 @@ def default_config() -> dict[str, Any]:
                 "while you are iterating on Archon itself."
             ),
             'debug_feedback': False,
+            '_axiom_sweep_help': (
+                "Run a deterministic #print axioms sweep between the "
+                "prover and review phases (after \\leanok sync) to catch "
+                "'sorryAx laundering' — declarations that compile with no "
+                "sorry WARNING yet depend on sorryAx through a clean-"
+                "compiling delegate, which the warning-based sorry count "
+                "misses. Findings are written to "
+                ".archon/logs/iter-NNN/axiom-sweep.{md,json}; the phase "
+                "never blocks. OFF by default: it temporarily appends "
+                "#print axioms to each Lean file and recompiles, so it is "
+                "noticeably slower than the other deterministic checks. "
+                "Turn it on for soundness-critical projects."
+            ),
+            'axiom_sweep': False,
         },
         'subagents': {
             '_help': (
