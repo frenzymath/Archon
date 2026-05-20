@@ -47,7 +47,7 @@ You may write `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`, `
 
 **`## Current Objectives` is for files the prover should work on — nothing else.** The dispatcher fans out one prover per `.lean` file referenced there. Off-limits files belong in a separate section.
 
-**Blueprint gate** (before listing any file F in `## Current Objectives`): the corresponding blueprint chapter must be complete + correct per the catalog's latest blueprint-review status. If it fails the gate, drop F this iter, dispatch the relevant blueprint-writing subagent (see catalog), and record the deferral in the iter sidecar. **Same-iter fast path:** on a pivot iter where you rewrite chapter C and `lake build` then goes green, you do NOT have to wait a whole iter for the next mandatory review — re-dispatch the blueprint-reviewer *scoped to C alone*; if it returns C complete + correct with no must-fix, add C's files to the objectives and send a prover THIS iter. See the blueprint-reviewer's HARD GATE section for the exact rule. The fast path never bypasses the gate: a fresh complete+correct verdict is still required (a green build alone is not enough).
+**Blueprint gate** (before listing any file F in `## Current Objectives`): the corresponding blueprint chapter must be complete + correct per the catalog's latest blueprint-review status. The chapter for F is the one declaring `% archon:covers ... F ...` if any (a consolidated chapter that blueprints several files), else the 1:1 `Foo/Bar.lean → Foo_Bar.tex` slug; a covered chapter's verdict gates every file it lists. If it fails the gate, drop F this iter, dispatch the relevant blueprint-writing subagent (see catalog), and record the deferral in the iter sidecar. **Same-iter fast path:** on a pivot iter where you rewrite chapter C and `lake build` then goes green, you do NOT have to wait a whole iter for the next mandatory review — re-dispatch the blueprint-reviewer *scoped to C alone*; if it returns C complete + correct with no must-fix, add C's files to the objectives and send a prover THIS iter. See the blueprint-reviewer's HARD GATE section for the exact rule. The fast path never bypasses the gate: a fresh complete+correct verdict is still required (a green build alone is not enough).
 
 **Diligence**: never choose laziness. Even when the task spans many iters / LOC, dive in, restructure, fill gaps — the user sees your iter / LOC estimations in STRATEGY.md and expects effort that matches them.
 
@@ -73,6 +73,14 @@ When your plan recipe suggests a Mathlib lemma, tag it: `[verified]` (you confir
 ## Blueprint chapters
 
 Informal proofs live in `blueprint/src/chapters/<slug>.tex`, one file per Lean source file (`Foo/Bar.lean` → `Foo_Bar.tex`). `blueprint/src/content.tex` `\input`s the chapters; keep it updated. Each chapter contains rigorous prose at textbook level — not sketches.
+
+**Consolidated chapters.** When the math for several Lean files is most naturally written as one chapter (and the sibling chapters would just be thin pointers), declare the coverage explicitly at the top of the consolidated chapter:
+
+```latex
+% archon:covers RigidityKbar.lean Cotangent/ChartAlgebra.lean Cotangent/ChartAlgebraS3.lean
+```
+
+(whitespace- or comma-separated, repeatable across lines). The prover-dispatch gate then treats that one chapter as the blueprint for all listed files, and the blueprint doctor lints the declaration (covered file must exist; no file covered by two chapters). Without a `covers:` line the strict 1:1 slug mapping applies.
 
 Before assigning a prover, ensure the relevant chapter file exists and contains the content the prover needs. Each declaration block looks like:
 

@@ -45,8 +45,15 @@ dispatcher_notes: |
 
   - For each `.lean` file F you are considering adding to
     `## Current Objectives` (i.e. about to send a prover to), identify
-    the corresponding blueprint chapter C (the `Foo/Bar.lean →
-    Foo_Bar.tex` slug mapping). Look up C in my per-chapter checklist.
+    the corresponding blueprint chapter C. The mapping is: if some
+    chapter declares `% archon:covers ... F ...` near its top, THAT
+    chapter is C (a consolidated chapter blueprints several files while
+    its siblings are thin pointers); otherwise fall back to the 1:1
+    `Foo/Bar.lean → Foo_Bar.tex` slug. Look up C in my per-chapter
+    checklist. When a chapter declares `covers:`, its single verdict
+    gates EVERY file it lists — so a `correct: false` on the
+    consolidated chapter defers all of them, and one writer directive
+    against that chapter fixes the content behind all of them.
   - If C has `complete: true` AND `correct: true` AND no must-fix-this-iter
     finding touches it, F may go into the objectives.
   - Otherwise (C is `partial | false` on either axis, OR a must-fix

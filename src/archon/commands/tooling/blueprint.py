@@ -253,6 +253,78 @@ def lean_file_to_chapter_slug(rel_lean_path: str | Path) -> str:
     return rel.replace("/", "_").replace(os.sep, "_").replace(".", "_")
 
 
+# A chapter may declare that it is the blueprint for Lean files OTHER than
+# the one its slug names — the common case being a consolidated chapter
+# whose math backs several files while sibling chapters are thin pointers.
+# It does so with one or more comment lines of the form:
+#
+#   % archon:covers Foo/Bar.lean Cotangent/ChartAlgebra.lean
+#
+# (whitespace- or comma-separated; repeatable across lines). The HARD GATE
+# uses this so a single chapter verdict fans out to every file it covers,
+# instead of relying on the strict 1:1 ``Foo/Bar.lean → Foo_Bar.tex`` slug.
+_COVERS_RE = re.compile(r"^\s*%\s*archon:covers\s+(?P<files>.+?)\s*$", re.MULTILINE)
+
+
+def parse_chapter_covers(chapter_text: str) -> list[str]:
+    """Return the Lean files a chapter declares it covers (``%archon:covers``).
+
+    Paths are normalised to forward slashes; order is preserved and
+    duplicates removed. Empty list when the chapter makes no declaration.
+    """
+    out: list[str] = []
+    for m in _COVERS_RE.finditer(chapter_text):
+        for tok in re.split(r"[\s,]+", m.group("files").strip()):
+            if not tok:
+                continue
+            norm = tok.replace(os.sep, "/")
+            if norm not in out:
+                out.append(norm)
+    return out
+
+
+def chapter_coverage_map(project_path: str | Path) -> dict[str, list[str]]:
+    """Map each chapter slug to the Lean files it explicitly ``covers``.
+
+    Only chapters carrying a ``% archon:covers`` declaration appear. Used
+    to invert into a file→chapter lookup for the prover-dispatch gate and
+    to lint coverage integrity in the blueprint doctor.
+    """
+    chapters_dir = Path(project_path) / "blueprint" / "src" / "chapters"
+    out: dict[str, list[str]] = {}
+    if not chapters_dir.is_dir():
+        return out
+    for tex in sorted(chapters_dir.glob("*.tex")):
+        if tex.name == "_preamble.tex":
+            continue
+        try:
+            covers = parse_chapter_covers(tex.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if covers:
+            out[tex.stem] = covers
+    return out
+
+
+def chapter_slug_for_lean_file(
+    project_path: str | Path, rel_lean_path: str | Path,
+) -> str:
+    """Return the chapter slug that blueprints ``rel_lean_path``.
+
+    Prefers an explicit ``% archon:covers`` declaration (a consolidated
+    chapter wins over the thin pointer the 1:1 slug would name); falls
+    back to the ``Foo/Bar.lean → Foo_Bar`` slug when no chapter claims the
+    file. When two chapters both claim it, the first by sorted slug wins
+    deterministically — the blueprint doctor flags the ambiguity.
+    """
+    rel = str(rel_lean_path).replace(os.sep, "/")
+    coverage = chapter_coverage_map(project_path)
+    for slug in sorted(coverage):
+        if rel in coverage[slug]:
+            return slug
+    return lean_file_to_chapter_slug(rel_lean_path)
+
+
 _CHAPTER_TEMPLATE = r"""% Auto-generated chapter for {rel_lean}
 % Archon reads and writes this file. The plan agent writes proof sketches
 % here; the prover reads them and marks \leanok when formalization succeeds.

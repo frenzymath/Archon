@@ -88,7 +88,8 @@ def _blueprint_doctor_findings_block(
     broken = data.get("broken_refs", []) or []
     malformed = data.get("malformed_refs", []) or []
     axioms = data.get("axiom_decls", []) or []
-    if not orphans and not broken and not malformed and not axioms:
+    covers_problems = data.get("covers_problems", []) or []
+    if not orphans and not broken and not malformed and not axioms and not covers_problems:
         return ""
 
     lines: list[str] = [
@@ -121,6 +122,26 @@ def _blueprint_doctor_findings_block(
         if len(axioms) > max_orphans:
             lines.append(
                 f"- ... and {len(axioms) - max_orphans} more "
+                f"(see `{json_path}` for the full list)."
+            )
+        lines.append("")
+
+    if covers_problems:
+        lines.append("### Chapter coverage problems (`% archon:covers`)")
+        lines.append("")
+        lines.append(
+            "A chapter's `% archon:covers <file> ...` declaration tells the "
+            "prover-dispatch gate which Lean files that chapter blueprints. "
+            "The issues below would route the gate to the wrong chapter; fix "
+            "the declaration (correct the path, or make exactly one chapter "
+            "own each file)."
+        )
+        lines.append("")
+        for entry in covers_problems[:max_orphans]:
+            lines.append(f"- {entry.get('detail', '')}")
+        if len(covers_problems) > max_orphans:
+            lines.append(
+                f"- ... and {len(covers_problems) - max_orphans} more "
                 f"(see `{json_path}` for the full list)."
             )
         lines.append("")

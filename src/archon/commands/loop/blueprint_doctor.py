@@ -127,6 +127,9 @@ class DoctorReport:
     # "empty argument" or "empty list item".
     axiom_decls: list[tuple[Path, str]] = field(default_factory=list)
     # (lean_file, decl_name) — every `axiom` found under project .lean
+    covers_problems: list[tuple[str, str]] = field(default_factory=list)
+    # (kind, detail) — `% archon:covers` integrity issues: a covered file
+    # that doesn't exist, or a file claimed by more than one chapter.
 
     @property
     def has_findings(self) -> bool:
@@ -135,6 +138,7 @@ class DoctorReport:
             or bool(self.broken_refs)
             or bool(self.malformed_refs)
             or bool(self.axiom_decls)
+            or bool(self.covers_problems)
         )
 
     def as_dict(self) -> dict:
@@ -156,6 +160,10 @@ class DoctorReport:
             "axiom_decls": [
                 {"file": str(f), "name": n}
                 for f, n in sorted(self.axiom_decls, key=lambda t: (str(t[0]), t[1]))
+            ],
+            "covers_problems": [
+                {"kind": k, "detail": d}
+                for k, d in sorted(self.covers_problems)
             ],
         }
 
@@ -339,6 +347,39 @@ def _strip_lean_comments(text: str) -> str:
     return "".join(result)
 
 
+def _scan_covers_problems(project_path: Path) -> list[tuple[str, str]]:
+    """Integrity check for ``% archon:covers`` declarations.
+
+    Flags (a) a covers entry naming a Lean file that doesn't exist, and
+    (b) a Lean file claimed by more than one chapter. Both are silent
+    mis-mappings that would make the prover-dispatch gate consult the
+    wrong chapter (or two), so they're worth surfacing deterministically.
+    """
+    from archon.commands.tooling.blueprint import chapter_coverage_map
+
+    coverage = chapter_coverage_map(project_path)
+    problems: list[tuple[str, str]] = []
+    for slug, files in sorted(coverage.items()):
+        for f in files:
+            if not (project_path / f).is_file():
+                problems.append((
+                    "missing_file",
+                    f"chapter `{slug}.tex` covers `{f}`, which does not exist",
+                ))
+    owners: dict[str, list[str]] = {}
+    for slug, files in coverage.items():
+        for f in files:
+            owners.setdefault(f, []).append(slug)
+    for f, slugs in sorted(owners.items()):
+        if len(slugs) > 1:
+            problems.append((
+                "double_coverage",
+                f"`{f}` is covered by multiple chapters: "
+                + ", ".join(f"`{s}.tex`" for s in sorted(slugs)),
+            ))
+    return problems
+
+
 def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
     """Run the blueprint doctor on ``project_path``.
 
@@ -384,6 +425,7 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
             broken.append((tex, kind, lbl))
 
     axiom_decls = _scan_axiom_decls(project_path)
+    covers_problems = _scan_covers_problems(project_path) if has_blueprint else []
 
     if not has_blueprint and not axiom_decls:
         # Pure-Lean project with no blueprint AND no axioms — nothing
@@ -401,6 +443,7 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
         broken_refs=broken,
         malformed_refs=malformed,
         axiom_decls=axiom_decls,
+        covers_problems=covers_problems,
     )
 
 
@@ -454,6 +497,21 @@ def write_reports(
         lines.append("")
         for f, n in sorted(report.axiom_decls, key=lambda t: (str(t[0]), t[1])):
             lines.append(f"- `{_rel(f)}` :: `{n}`")
+        lines.append("")
+
+    if report.covers_problems:
+        lines.append("## Chapter coverage problems (`% archon:covers`)")
+        lines.append("")
+        lines.append(
+            "A chapter's `% archon:covers <file> ...` declaration tells the "
+            "prover-dispatch gate which Lean files that chapter blueprints. "
+            "The issues below would route the gate to the wrong chapter — "
+            "fix the declaration (correct the path, or make exactly one "
+            "chapter own each file)."
+        )
+        lines.append("")
+        for _kind, detail in sorted(report.covers_problems):
+            lines.append(f"- {detail}")
         lines.append("")
 
     if report.orphan_chapters:

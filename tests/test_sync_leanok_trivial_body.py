@@ -112,5 +112,49 @@ class DeclBodyIsTrivialPlaceholderTest(unittest.TestCase):
         )
 
 
+class DeclHasSorryAttributionTest(unittest.TestCase):
+    """``_decl_has_sorry`` must not answer a confident "no sorry" when the
+    analyzer found a sorry it couldn't attribute to a declaration — that
+    is exactly the gap that let a sorry-bearing proof keep its
+    proof-block ``\\leanok``. It should return None (undecided), which
+    the proof-block branch now treats as fail-safe removal.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_sync_module()
+
+    def _patch_analyzer(self, sorries):
+        import json as _json
+        import types
+
+        def fake_run(*_a, **_k):
+            return types.SimpleNamespace(
+                returncode=0, stdout=_json.dumps({"sorries": sorries}), stderr="",
+            )
+
+        orig = self.mod.subprocess.run
+        self.mod.subprocess.run = fake_run
+        self.addCleanup(lambda: setattr(self.mod.subprocess, "run", orig))
+
+    def test_attributed_sorry_is_true(self):
+        self._patch_analyzer([{"in_declaration": "foo"}])
+        self.assertIs(self.mod._decl_has_sorry(Path("X.lean"), "foo"), True)
+
+    def test_clean_file_is_false(self):
+        self._patch_analyzer([])
+        self.assertIs(self.mod._decl_has_sorry(Path("X.lean"), "foo"), False)
+
+    def test_sorry_only_in_other_decl_is_false(self):
+        self._patch_analyzer([{"in_declaration": "bar"}])
+        self.assertIs(self.mod._decl_has_sorry(Path("X.lean"), "foo"), False)
+
+    def test_unattributed_sorry_is_undecided(self):
+        # A sorry the analyzer couldn't pin to a decl → can't certify
+        # `foo` is clean → None (caller fail-safe removes the \leanok).
+        self._patch_analyzer([{"in_declaration": None}])
+        self.assertIsNone(self.mod._decl_has_sorry(Path("X.lean"), "foo"))
+
+
 if __name__ == "__main__":
     unittest.main()
