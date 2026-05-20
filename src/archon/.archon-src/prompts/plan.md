@@ -47,7 +47,7 @@ You may write `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`, `
 
 **`## Current Objectives` is for files the prover should work on — nothing else.** The dispatcher fans out one prover per `.lean` file referenced there. Off-limits files belong in a separate section.
 
-**Blueprint gate** (before listing any file F in `## Current Objectives`): the corresponding blueprint chapter must be complete + correct per the catalog's latest blueprint-review status. If it fails the gate, drop F this iter, dispatch the relevant blueprint-writing subagent (see catalog), and record the deferral in the iter sidecar.
+**Blueprint gate** (before listing any file F in `## Current Objectives`): the corresponding blueprint chapter must be complete + correct per the catalog's latest blueprint-review status. If it fails the gate, drop F this iter, dispatch the relevant blueprint-writing subagent (see catalog), and record the deferral in the iter sidecar. **Same-iter fast path:** on a pivot iter where you rewrite chapter C and `lake build` then goes green, you do NOT have to wait a whole iter for the next mandatory review — re-dispatch the blueprint-reviewer *scoped to C alone*; if it returns C complete + correct with no must-fix, add C's files to the objectives and send a prover THIS iter. See the blueprint-reviewer's HARD GATE section for the exact rule. The fast path never bypasses the gate: a fresh complete+correct verdict is still required (a green build alone is not enough).
 
 **Diligence**: never choose laziness. Even when the task spans many iters / LOC, dive in, restructure, fill gaps — the user sees your iter / LOC estimations in STRATEGY.md and expects effort that matches them.
 
@@ -242,7 +242,7 @@ python3 .claude/tools/archon-subagent.py \
 
 The wrapper prints a one-line status and exits 0 on success. `ARCHON_ITER_NUM` is set by the loop — no need to pass `--iter-num`.
 
-**Dispatch synchronously** (foreground, not `run_in_background`). Background dispatch leaves the parent session stuck in "running in background" state on the dashboard.
+**Treat each dispatch as blocking.** Don't deliberately pass `run_in_background: true`. The wrapper is genuinely synchronous (it returns only once the child finishes and its report is written), but a dispatch is long-running, so the harness may auto-background it and hand you a task ID immediately — that's expected. Either way, await the task / poll for the report at `.archon/task_results/<name>-<slug>.md` before you act on the result; never continue planning as if a still-running dispatch had already returned.
 
 **Directives must be fully self-contained.** Subagents do not read `PROGRESS.md` / `STRATEGY.md` / phase-agent state; they read what you tell them to. Each descriptor's prompt body documents the directive format for that subagent.
 
@@ -316,6 +316,18 @@ What's left for you: spot-check inconsistent prover self-reports; act on every e
 ## Decomposition strategy
 
 When a prover is stuck on a large theorem: read the chapter for sub-lemma structure (L1, L2, …); read related `references/` to align with the original proof; expand the chapter if too thin (dispatch a blueprint-writing or literature-fetching subagent from the catalog, or use `WebSearch`/`WebFetch` directly); assign one sub-lemma at a time; verify, then assign the next; record each sub-lemma's status in `PROGRESS.md`.
+
+## Soundness check before spending budget
+
+**Churning and unsoundness are different signals — the critic catches the first, only you catch the second.** A recurring blocker is not always a hard-but-true gap; sometimes the target `sorry` is a statement that is simply **false as written** (a missing hypothesis, a wrong quantifier, an unstated connectedness/finiteness assumption). Pouring prover budget into a false statement burns iterations forever — the prover correctly cannot close it, the progress-critic reports CHURNING, and everyone treats it as a Mathlib gap when the real fix is one word in the statement.
+
+So **before committing more than one iter of prover budget to a hard or recurring `sorry`** (a target the progress-critic flags as a repeated blocker, or any target you estimate at multiple iters / >~100 LOC), first spend a cheap pass trying to **DISPROVE** the statement:
+
+- Instantiate it on the smallest non-trivial models — finite, degenerate, or boundary cases (e.g. for an algebra claim: `B = k × k`, `B = ℚ(√2)`, the zero ring, a one-point space). Does any satisfy the hypotheses but violate the conclusion?
+- If you can't see it yourself, dispatch the informal / mathlib-analogist subagent from your catalog with a directive that asks specifically for a **counterexample or a satisfiability sketch**, not a proof.
+- Check whether the source the statement claims to follow actually states it with the same hypotheses (cite-and-read discipline applies — read the local source file).
+
+If a counterexample turns up, the statement (or a missing hypothesis) is the bug: fix the blueprint statement, mark the Lean declaration with a `% NOTE:` for review, and do NOT assign a prover to formalize the false version. If the disproof attempt fails, you've cheaply raised your confidence that the target is true — now spend the budget. Record the disproof attempt and its outcome in the iter sidecar so the next planner doesn't repeat it.
 
 ## Multi-agent coordination
 

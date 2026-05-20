@@ -202,7 +202,7 @@ Conditions for dispatch:
 - The required content is in a known textbook (Hartshorne, Vakil, Stacks Project, etc.) but the project hasn't summarized the relevant chapter.
 - You need a Mathlib-adjacent source (nLab, math overflow, Stacks Project) the directive didn't anticipate.
 
-Dispatch (Bash, foreground, in your write-domain only if it includes `references/**`):
+Dispatch (Bash; treat as blocking and await the report; in your write-domain only if it includes `references/**`):
 
 ```
 python3 .claude/tools/archon-subagent.py \

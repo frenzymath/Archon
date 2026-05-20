@@ -112,7 +112,7 @@ Lean file  Core.lean            →  chapter  blueprint/src/chapters/Core.tex
 
 For large refactors that naturally decompose into independent file-level pieces, you may dispatch child subagents via the generic wrapper. To discover what is available this iteration: `ls .archon/subagents/` and read each descriptor's frontmatter.
 
-Dispatch pattern (Bash, foreground):
+Dispatch pattern (Bash; treat as blocking — await each child's report before acting on it):
 
 ```
 python3 .claude/tools/archon-subagent.py \

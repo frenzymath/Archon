@@ -52,15 +52,28 @@ dispatcher_notes: |
   - Otherwise (C is `partial | false` on either axis, OR a must-fix
     finding names C, OR a broken `\uses{}` in C points at a label F's
     blueprint depends on):
-    1. DROP F from this iter's objectives. Defer the prover round on F
-       to the next iter.
+    1. DROP F from this iter's objectives (by default — but see the
+       same-iter fast path below).
     2. Dispatch the catalog's blueprint-writing subagent for C THIS
        iter with a directive targeting the specific must-fix items I
        flagged.
-    3. Record in iter/iter-NNN/plan.md why F was deferred (cite the
-       reviewer findings).
-  - Re-dispatching me after the writer returns is optional within the
-    same iter — the next iter's mandatory dispatch of me will confirm.
+    3. Record in iter/iter-NNN/plan.md why F was at risk and what the
+       writer was asked to fix.
+  - **Same-iter fast path (sanctioned — removes a wasted iter).** After
+    the writer returns AND `lake build` is green, you MAY re-dispatch me
+    scoped to C alone — a fresh slug, a directive naming only C and the
+    must-fix items I flagged. If that scoped re-review returns C as
+    `complete: true` AND `correct: true` with no must-fix finding, the
+    gate is satisfied for C: add F to THIS iter's objectives and send a
+    prover. No need to burn an iter waiting. If the scoped re-review
+    still fails, F stays deferred.
+  - If you do NOT take the fast path, F simply waits: the next iter's
+    mandatory dispatch of me re-confirms C before any prover runs on F.
+    The fast path is purely a latency optimization — it never weakens
+    the gate. F enters objectives ONLY on a fresh `complete + correct`
+    verdict with no must-fix, whether that verdict arrives this iter (via
+    the fast path) or next (via the mandatory dispatch). A green build
+    alone is NOT sufficient; the re-review is what clears the gate.
 
   ### Strategy / multi-route handling
 
