@@ -226,6 +226,14 @@ def _decl_has_sorry(lean_file: Path, decl_name: str) -> bool | None:
         return None
 
     bare = decl_name.rsplit('.', 1)[-1]
+    # sorry_analyzer.extract_declaration_name emits "<keyword> <name>"
+    # (e.g. "theorem foo"). Strip the keyword before comparing — otherwise
+    # bare/qualified comparisons never match and proof-block \leanok on
+    # sorry-bodied decls is wrongly preserved.
+    _DECL_KEYWORDS = {
+        'theorem', 'lemma', 'def', 'abbrev',
+        'instance', 'example', 'structure', 'class',
+    }
     saw_unattributed = False
     for s in sorries:
         in_decl = s.get('in_declaration') if isinstance(s, dict) else None
@@ -235,6 +243,9 @@ def _decl_has_sorry(lean_file: Path, decl_name: str) -> bool | None:
             # not return a confident "no sorry" below.
             saw_unattributed = True
             continue
+        head, _, tail = in_decl.partition(' ')
+        if tail and head in _DECL_KEYWORDS:
+            in_decl = tail.strip()
         if in_decl == decl_name or in_decl == bare:
             return True
         if in_decl.endswith('.' + bare) or decl_name.endswith('.' + in_decl):

@@ -155,6 +155,33 @@ class DeclHasSorryAttributionTest(unittest.TestCase):
         self._patch_analyzer([{"in_declaration": None}])
         self.assertIsNone(self.mod._decl_has_sorry(Path("X.lean"), "foo"))
 
+    def test_keyword_prefixed_attribution_matches_bare(self):
+        # sorry_analyzer.extract_declaration_name emits "<keyword> <name>"
+        # (e.g. "theorem foo"). The bare-name comparison must still match.
+        # Regression for the iter-162/163 false-`\leanok` bug.
+        for kw in ("theorem", "lemma", "def", "abbrev",
+                   "instance", "example", "structure", "class"):
+            with self.subTest(kw=kw):
+                self._patch_analyzer([{"in_declaration": f"{kw} foo"}])
+                self.assertIs(
+                    self.mod._decl_has_sorry(Path("X.lean"), "foo"), True,
+                )
+
+    def test_keyword_prefixed_attribution_matches_qualified(self):
+        # `decl_name` may be the namespace-qualified form while the analyzer
+        # emits "theorem <bare>"; the suffix match must still fire.
+        self._patch_analyzer([{"in_declaration": "theorem foo"}])
+        self.assertIs(
+            self.mod._decl_has_sorry(Path("X.lean"), "Ns.Inner.foo"), True,
+        )
+
+    def test_keyword_prefixed_attribution_on_other_decl_is_false(self):
+        # The keyword strip must not over-match: `theorem bar` ≠ `foo`.
+        self._patch_analyzer([{"in_declaration": "theorem bar"}])
+        self.assertIs(
+            self.mod._decl_has_sorry(Path("X.lean"), "foo"), False,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
