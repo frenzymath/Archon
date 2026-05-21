@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from archon import log
+from archon.commands.tooling.git import Git
 from archon.commands.tooling.inner_git import InnerGit
 
 from .base import InitStep
@@ -22,6 +23,19 @@ class InnerGitStep(InitStep):
     def run(self) -> None:
         ctx = self.ctx
         log.phase(self.number, self.name)
+
+        # ``BootstrapStep`` already does this on the full-init path, but
+        # the "keep" reinit mode skips bootstrap entirely. A v0.1.0 → v0.2.0
+        # upgrade that picks "keep" then leaves the outer ``.gitignore``
+        # without a ``.archon/`` rule, so every phase commit dirties the
+        # outer working tree (and ``archon branch`` then refuses to switch).
+        # Ensuring it here makes the rule land in every init mode.
+        outer = Git(ctx.project_path, auto_init=False)
+        if outer.is_repo():
+            if outer.ensure_gitignore_entry(
+                ".archon/", comment="Archon state directory",
+            ):
+                log.step("Added '.archon/' to outer .gitignore")
 
         if not InnerGit.available():
             log.warn("`git` not on PATH — skipping inner-git setup. Run: archon setup")
