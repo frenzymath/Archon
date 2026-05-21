@@ -21,6 +21,14 @@ export function useProgress() {
   return useQuery<ProgressData>({ queryKey: ['progress'], queryFn: () => fetchJson('/api/progress'), refetchInterval: 10000 });
 }
 
+export function useStrategy() {
+  return useQuery<{ content: string }>({
+    queryKey: ['strategy'],
+    queryFn: () => fetchJson('/api/strategy'),
+    refetchInterval: 30000,
+  });
+}
+
 export function useTasks() {
   return useQuery<Task[]>({ queryKey: ['tasks'], queryFn: () => fetchJson('/api/tasks'), refetchInterval: 10000 });
 }
@@ -109,5 +117,18 @@ export function useIterationProver(iterationId: string, file: string) {
     queryKey: ['iterationProver', iterationId, file],
     queryFn: () => fetchJson(`/api/iterations/${iterationId}/provers/${file}`),
     enabled: !!iterationId && !!file,
+  });
+}
+
+export function useToUserAlert() {
+  return useQuery({
+    queryKey: ['toUserAlert'],
+    queryFn: async () => {
+      const res = await fetch('/api/to-user');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.content as string | null;
+    },
+    refetchInterval: 5000, 
   });
 }

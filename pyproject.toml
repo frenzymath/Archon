@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archon"
-version = "0.1.0"
+version = "0.2.0"
 description = "Autonomous Lean 4 formalization system"
 requires-python = ">=3.10"
 dependencies = [
     "typer",
     "pydantic",
+    "PyYAML",
 ]
 
 [project.scripts]
@@ -23,3 +24,8 @@ include = ["archon*"]
 "archon" = [".archon-src/**/*",
             ".archon-src/**/.*",
             "ui/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

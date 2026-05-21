@@ -1,5 +1,13 @@
 # Well-known methods and theorems that are hard to implement in Mathlib
 
+> **This file is a hint, not ground truth.** Mathlib evolves; entries below may
+> already be available in your project's Mathlib. Always verify a "not
+> available" claim with `mcp__archon-lean-lsp__lean_local_search` /
+> `lean_leansearch` before using it as a reason to abandon a proof
+> route. The Lean LSP is authoritative; this document is advisory.
+>
+> Last verified against: **Mathlib master @ b80f227 (2026-04-20), Lean v4.30.0-rc2**
+
 The items below are not merely "currently absent from Mathlib". The point is stronger: they are typically poor default choices in autoformalization because invoking them often drags in large missing or immature infrastructure, rather than requiring only a few local lemmas.
 
 For each topic, we first give a short explanation, then list classical "big hammer" dependencies that should generally be avoided as default routes.
@@ -8,58 +16,58 @@ For each topic, we first give a short explanation, then list classical "big hamm
 
 | # | Area | Line |
 |---|------|------|
-| 1 | Riemannian / differential geometry | 51 |
-| 2 | Complex analysis | 66 |
-| 3 | Algebraic topology | 81 |
-| 4 | Differentiable manifolds and Lie groups | 101 |
-| 5 | Number theory | 120 |
-| 6 | Algebraic / arithmetic geometry | 136 |
-| 7 | Partial differential equations | 154 |
-| 8 | Distribution theory and harmonic analysis | 179 |
-| 9 | Spectral theory and operator theory | 199 |
-| 10 | Probability and stochastic processes | 223 |
-| 11 | Ergodic theory | 246 |
-| 12 | Homological algebra | 265 |
-| 13 | Advanced commutative algebra | 281 |
-| 14 | Higher category theory / homotopical algebra | 299 |
-| 15 | Geometric measure theory | 316 |
-| 16 | Convex geometry and optimization | 332 |
-| 17 | Advanced combinatorics | 352 |
-| 18 | Set theory and model theory | 369 |
-| 19 | Finite group theory | 386 |
-| 20 | Infinite group theory | 401 |
-| 21 | Representation theory of finite groups | 417 |
-| 22 | Noncommutative ring theory | 434 |
-| 23 | Galois theory | 451 |
-| 24 | Algebraic number theory | 464 |
-| 25 | Analytic number theory | 479 |
-| 26 | Modular forms and automorphic forms | 496 |
-| 27 | Algebraic topology (expanded) | 515 |
-| 28 | Point-set topology (advanced) | 533 |
-| 29 | Topological algebra | 546 |
-| 30 | Linear algebra (advanced) | 558 |
-| 31 | Dynamical systems | 574 |
-| 32 | Combinatorial game theory | 592 |
-| 33 | Special functions | 606 |
-| 34 | Real analysis (advanced) | 621 |
-| 35 | Coding theory and information theory | 635 |
-| 36 | Universal algebra | 651 |
-| 37 | Elliptic curves | 665 |
-| 38 | Nonstandard analysis | 682 |
-| 39 | Several complex variables | 695 |
-| 40 | Hyperbolic geometry | 711 |
-| 41 | Knot theory | 724 |
-| 42 | Tropical geometry | 737 |
-| 43 | Graph theory (advanced) | 750 |
-| 44 | Algebraic K-theory | 767 |
-| 45 | Perfectoid spaces / condensed mathematics | 780 |
-| 46 | p-adic Hodge theory / derived algebraic geometry | 794 |
-| 47 | Design theory | 808 |
-| 48 | Enumerative geometry / singularity theory | 822 |
-| 49 | Numerical analysis | 835 |
-| 50 | Control theory / operations research | 851 |
-| 51 | Synthetic differential / non-commutative geometry | 865 |
-| 52 | Well-quasi-orders (advanced) | 879 |
+| 1 | Riemannian / differential geometry | 78 |
+| 2 | Complex analysis | 93 |
+| 3 | Algebraic topology | 108 |
+| 4 | Differentiable manifolds and Lie groups | 128 |
+| 5 | Number theory | 147 |
+| 6 | Algebraic / arithmetic geometry | 163 |
+| 7 | Partial differential equations | 181 |
+| 8 | Distribution theory and harmonic analysis | 206 |
+| 9 | Spectral theory and operator theory | 226 |
+| 10 | Probability and stochastic processes | 250 |
+| 11 | Ergodic theory | 272 |
+| 12 | Homological algebra | 290 |
+| 13 | Advanced commutative algebra | 304 |
+| 14 | Higher category theory / homotopical algebra | 322 |
+| 15 | Geometric measure theory | 337 |
+| 16 | Convex geometry and optimization | 353 |
+| 17 | Advanced combinatorics | 373 |
+| 18 | Set theory and model theory | 390 |
+| 19 | Finite group theory | 406 |
+| 20 | Infinite group theory | 421 |
+| 21 | Representation theory of finite groups | 437 |
+| 22 | Noncommutative ring theory | 455 |
+| 23 | Galois theory | 471 |
+| 24 | Algebraic number theory | 484 |
+| 25 | Analytic number theory | 499 |
+| 26 | Modular forms and automorphic forms | 516 |
+| 27 | Algebraic topology (expanded) | 534 |
+| 28 | Point-set topology (advanced) | 551 |
+| 29 | Topological algebra | 564 |
+| 30 | Linear algebra (advanced) | 576 |
+| 31 | Dynamical systems | 592 |
+| 32 | Combinatorial game theory | 610 |
+| 33 | Special functions | 625 |
+| 34 | Real analysis (advanced) | 640 |
+| 35 | Coding theory and information theory | 651 |
+| 36 | Universal algebra | 667 |
+| 37 | Elliptic curves | 681 |
+| 38 | Nonstandard analysis | 698 |
+| 39 | Several complex variables | 711 |
+| 40 | Hyperbolic geometry | 727 |
+| 41 | Knot theory | 740 |
+| 42 | Tropical geometry | 753 |
+| 43 | Graph theory (advanced) | 766 |
+| 44 | Algebraic K-theory | 782 |
+| 45 | Perfectoid spaces / condensed mathematics | 795 |
+| 46 | p-adic Hodge theory / derived algebraic geometry | 808 |
+| 47 | Design theory | 822 |
+| 48 | Enumerative geometry / singularity theory | 836 |
+| 49 | Numerical analysis | 849 |
+| 50 | Control theory / operations research | 863 |
+| 51 | Synthetic differential / non-commutative geometry | 879 |
+| 52 | Well-quasi-orders (advanced) | 893 |
 
 ---
 
@@ -150,14 +158,14 @@ Mathlib contains meaningful number-theoretic infrastructure, but several famous 
 
 ## Algebraic geometry / arithmetic geometry
 
-Mathlib has real algebraic-geometry infrastructure, including schemes and some important higher-level constructions, so one should not describe the area as absent. However, many classical cohomological and birational "big hammer" tools remain far from being routine defaults. In particular, arguments that depend on sheaf cohomology or major classification machinery should be treated as high-risk.
+Mathlib has real algebraic-geometry infrastructure, including schemes, some important higher-level constructions, an abstract **sheaf cohomology on sites** as Ext from the constant sheaf (see §12), and a definition of **ℓ-adic cohomology of schemes** via the pro-étale site (`Mathlib.AlgebraicGeometry.Sites.ElladicCohomology.AlgebraicGeometry.Scheme.EllAdicCohomology`, checked 2026-05-14). The étale topos on a scheme is set up (`Mathlib.AlgebraicGeometry.Sites.Etale`, `Sites.Proetale`). However, the *computational* cohomology toolbox (vanishing theorems, base change, comparison theorems) and the major classification machinery remain absent. Arguments that depend on actually *computing* sheaf or étale cohomology should still be treated as high-risk.
 
 ### Not recommended as default dependencies
 
 - Riemann–Roch theorem
 - Serre duality
-- Sheaf cohomology on schemes as a routine black box
-- Étale cohomology as a routine black box
+- Sheaf cohomology *computations* on schemes as a routine black box (the definition is in Mathlib; vanishing theorems, base change, and the comparison with derived functors are not yet wired up at scheme level)
+- Étale cohomology as a routine *computational* black box (the definition is in Mathlib via the pro-étale site, but base change, Poincaré duality, and the proper/smooth/finite-field comparison theorems are not)
 - Birational classification of surfaces
 - MMP-style theorems (cone theorem, contraction theorem, flip existence)
 - Hirzebruch–Riemann–Roch theorem
@@ -168,7 +176,7 @@ Mathlib has real algebraic-geometry infrastructure, including schemes and some i
 
 ## Partial differential equations
 
-Mathlib has some PDE-adjacent building blocks—Picard–Lindelöf for ODEs, Lax–Milgram, a Gagliardo–Nirenberg–Sobolev inequality for smooth compactly-supported functions, and a divergence theorem on rectangular boxes—but no actual PDE theory. Sobolev spaces (W^{k,p}) with weak derivatives are not defined, and there are no existence, uniqueness, or regularity results for any class of PDE. Any project that assumes PDE infrastructure would need to build virtually everything from scratch.
+Mathlib has some PDE-adjacent building blocks—Picard–Lindelöf for ODEs, Lax–Milgram, a Gagliardo–Nirenberg–Sobolev inequality for smooth compactly-supported functions, a divergence theorem on rectangular boxes, and **Sobolev / Bessel-potential spaces `H^{s,p}` defined via the Fourier transform of tempered distributions** (`Mathlib.Analysis.Distribution.Sobolev.TemperedDistribution.memSobolev`, checked 2026-05-14) — but no actual PDE theory. Classical W^{k,p} defined via weak derivatives is not yet available, and there are no existence, uniqueness, or regularity results for any class of PDE. Any project that assumes PDE infrastructure would need to build virtually everything from scratch.
 
 ### Not recommended as default dependencies
 
@@ -213,7 +221,7 @@ Mathlib has Schwartz space, tempered distributions, and the Fourier transform on
 
 ## Spectral theory and operator theory
 
-Mathlib has well-developed continuous functional calculus (CFC) for C\*-algebras, Gelfand duality, compact operator theory, and spectral results for self-adjoint operators in finite dimensions and the compact case (diagonalization, orthogonal eigenspaces). However, the full measure-theoretic spectral theorem, unbounded operators, Fredholm theory, and operator semigroups are entirely absent.
+Mathlib has well-developed continuous functional calculus (CFC) for C\*-algebras, Gelfand duality, compact operator theory, and spectral results for self-adjoint operators in finite dimensions and the compact case (diagonalization, orthogonal eigenspaces). The Fredholm alternative for compact operators is available (`Mathlib.Analysis.Normed.Operator.FredholmAlternative`, checked 2026-05-14). However, the full measure-theoretic spectral theorem, unbounded operators, general Fredholm theory (Fredholm index for arbitrary bounded operators), and operator semigroups are still absent.
 
 ### Not recommended as default dependencies
 
@@ -237,20 +245,19 @@ Mathlib has well-developed continuous functional calculus (CFC) for C\*-algebras
 
 ## Probability theory and stochastic processes
 
-Mathlib has solid discrete-time martingale theory (optional stopping, Doob's inequalities, convergence theorems), the strong law of large numbers (via Etemadi's proof), Markov kernel infrastructure with Ionescu–Tulcea, and several named distributions (Gaussian, Poisson, Exponential, Gamma, etc.). However, continuous-time theory, stochastic calculus, and many classical probabilistic tools are absent. The central limit theorem is not formalized.
+Mathlib has solid discrete-time martingale theory (optional stopping, Doob's inequalities, convergence theorems), the strong law of large numbers (via Etemadi's proof), Markov kernel infrastructure with Ionescu–Tulcea, and several named distributions (Gaussian, Poisson, Exponential, Gamma, etc.). The 1-dimensional **central limit theorem** is now formalized (`Mathlib.Probability.CentralLimitTheorem.tendstoInDistribution_inv_sqrt_mul_sum_sub`, checked 2026-05-14), and **Lévy's continuity theorem** for finite-dimensional inner product spaces (`Mathlib.MeasureTheory.Measure.LevyConvergence.ProbabilityMeasure.tendsto_iff_tendsto_charFun`, checked 2026-05-14) is also available — relying on these in autoformalization is now reasonable. Sub-Gaussian random variables are formalised (`Mathlib.Probability.Moments.SubGaussian`), but specific named concentration inequalities (Hoeffding, McDiarmid, Talagrand, …) are not exported as theorems. Continuous-time theory, stochastic calculus, and CLTs in higher dimensions remain absent.
 
 ### Not recommended as default dependencies
 
-- Central limit theorem
+- Central limit theorem in dimensions ≥ 2 (1-D CLT is in Mathlib; multidimensional version still missing)
 - Brownian motion / Wiener process (exists in an external unmerged project only)
 - Stochastic integrals, Itô calculus, Itô's formula
 - Stochastic differential equations
 - Girsanov theorem
 - Large deviations (Cramér's theorem, Sanov's theorem)
-- Hoeffding's inequality, Azuma–Hoeffding inequality, McDiarmid's inequality
+- Hoeffding's inequality, Azuma–Hoeffding inequality, McDiarmid's inequality (sub-Gaussian framework exists, named inequalities do not)
 - Bernstein's inequality, Talagrand's concentration inequality, Chernoff bound
 - Continuous-time martingale theory
-- Lévy's continuity theorem (characteristic functions and convergence in distribution)
 - Lévy's inversion formula
 - Bochner's theorem (positive definite functions as Fourier transforms of measures)
 - Cramér–Wold theorem
@@ -260,12 +267,11 @@ Mathlib has solid discrete-time martingale theory (optional stopping, Doob's ine
 
 ## Ergodic theory
 
-Mathlib has definitions for ergodic, measure-preserving, and conservative maps, Poincaré recurrence, and ergodicity of circle maps. However, the fundamental convergence theorems of ergodic theory are absent, as are mixing, entropy, and symbolic dynamics.
+Mathlib has definitions for ergodic, measure-preserving, and conservative maps, Poincaré recurrence, and ergodicity of circle maps. The **Von Neumann mean ergodic theorem** is now formalised in Hilbert space (`Mathlib.Analysis.InnerProductSpace.MeanErgodic.ContinuousLinearMap.tendsto_birkhoffAverage_orthogonalProjection`, checked 2026-05-14). However, Birkhoff's pointwise ergodic theorem, mixing, entropy, and symbolic dynamics remain absent.
 
 ### Not recommended as default dependencies
 
 - Birkhoff's pointwise ergodic theorem
-- Von Neumann's mean ergodic theorem
 - Mixing (weak mixing, strong mixing)
 - Kolmogorov–Sinai measure-theoretic entropy
 - Topological entropy
@@ -279,13 +285,11 @@ Mathlib has definitions for ergodic, measure-preserving, and conservative maps, 
 
 ## Homological algebra
 
-Mathlib has chain/cochain complexes with functorial homology, homotopy categories, derived categories (with triangulated structure and long exact homology sequences, due to Riou's work), and basic Ext/Tor functors. Local cohomology is defined. However, spectral sequences are entirely absent, sheaf cohomology is not yet connected to derived functors, and many Ext/Tor computations remain incomplete.
+Mathlib has chain/cochain complexes with functorial homology, homotopy categories, derived categories (with triangulated structure and long exact homology sequences, due to Riou's work), and basic Ext/Tor functors. Local cohomology is defined. As of 2026, abstract **spectral sequence** infrastructure (`Mathlib.Algebra.Homology.SpectralSequence.*`, `Mathlib.Algebra.Homology.SpectralObject.*`) and **sheaf cohomology** defined as Ext from the constant sheaf (`Mathlib.CategoryTheory.Sites.SheafCohomology.Basic.Sheaf.H`) exist, with a Mayer–Vietoris exact sequence (`Mathlib.CategoryTheory.Sites.SheafCohomology.MayerVietoris`) and the **long exact sequence for Ext** (`Mathlib.Algebra.Homology.DerivedCategory.Ext.ExactSequences`). However, the *named* spectral sequences (Leray, Lyndon–Hochschild–Serre, Grothendieck), and most Tor/Ext computations beyond the long exact sequence remain to be built on top of this scaffolding.
 
 ### Not recommended as default dependencies
 
-- Spectral sequences (Grothendieck, Leray, Lyndon–Hochschild–Serre, etc.)
-- Sheaf cohomology as right-derived functor of global sections
-- Long exact sequence for Ext (not yet proven)
+- Named spectral sequences (Grothendieck composition, Leray, Lyndon–Hochschild–Serre, …) — the abstract framework exists but specific named instances are not constructed
 - Tor = Tor' isomorphism (explicitly incomplete)
 - Koszul complex and Koszul homology
 - Delta functors / universal delta functors
@@ -313,18 +317,16 @@ Mathlib has Noetherian/Artinian rings and modules, localization, local rings, ad
 
 ## Higher category theory and homotopical algebra
 
-Mathlib has abelian categories (with Freyd–Mitchell embedding), triangulated categories, monoidal/braided/symmetric monoidal categories, localization of categories, basic bicategories, enriched categories, simplicial sets, Kan complexes, and Dold–Kan correspondence. However, model categories, infinity-categories, t-structures, and topos theory are absent.
+Mathlib has abelian categories (with Freyd–Mitchell embedding), triangulated categories, monoidal/braided/symmetric monoidal categories, localization of categories, basic bicategories, enriched categories, simplicial sets, Kan complexes, and Dold–Kan correspondence. **Model categories** are now defined and developed (`Mathlib.AlgebraicTopology.ModelCategory.Basic`, with cylinder/path objects, Brown's lemma, fundamental lemma, fibrant/cofibrant homotopy theory; checked 2026-05-14). **Quasi-categories** are defined (`Mathlib.AlgebraicTopology.Quasicategory.Basic`, with strict Segal, nerve, two-truncated, strict bicategory variants). The **subobject classifier** is formalized (`Mathlib.CategoryTheory.Subobject.Classifier.Defs`), and there is t-structure work in the derived category (`Mathlib.Algebra.Homology.DerivedCategory.TStructure`, `Mathlib.Algebra.Homology.DerivedCategory.Ext.TStructure`). However, the *higher* homotopy theory built on these foundations — stable ∞-categories, perverse sheaves, full topos-theoretic logic — remains absent.
 
 ### Not recommended as default dependencies
 
-- Model categories (no definitions exist)
-- Quasi-categories / infinity-categories
 - Stable infinity-categories
-- t-structures on triangulated or derived categories
 - Perverse sheaves
-- Operads
-- Topos theory (subobject classifier, internal logic)
-- Higher categories beyond bicategories
+- Operads (no general framework)
+- Topos theory beyond subobject classifier — internal logic / Kripke–Joyal semantics / Mitchell–Bénabou language
+- Higher categories beyond bicategories (no general (∞,n)-category framework)
+- Quillen equivalences / model-category-style transfer theorems (the model-category definitions exist but the structural classification results are still being built)
 
 ---
 
@@ -366,12 +368,12 @@ Mathlib has convex sets/functions, Jensen's inequality, Carathéodory's theorem,
 
 ## Advanced combinatorics
 
-Mathlib has Turán's theorem, Szemerédi regularity lemma, Van der Waerden's and Hales–Jewett theorems, Roth's theorem on 3-term APs, Cauchy–Davenport, Hall's marriage theorem, and basic matroid definitions (independence axioms, duality, closure, rank). However, symmetric functions, Young tableaux, matroid minors, Ramsey numbers, and probabilistic-method tools are absent.
+Mathlib has Turán's theorem, Szemerédi regularity lemma, Van der Waerden's and Hales–Jewett theorems, Roth's theorem on 3-term APs, Cauchy–Davenport, Hall's marriage theorem, basic matroid definitions (independence axioms, duality, closure, rank), Young diagrams, and semistandard Young tableaux (`Mathlib.Combinatorics.Young.SemistandardTableau`, checked 2026-05-14). However, the algebraic and probabilistic-method theory built on these objects remains absent.
 
 ### Not recommended as default dependencies
 
 - Symmetric functions (Schur functions, power sums, ring of symmetric functions)
-- Young tableaux and Robinson–Schensted–Knuth correspondence
+- Standard Young tableaux and Robinson–Schensted–Knuth correspondence (semistandard tableaux are defined, but RSK and standard tableaux beyond basic shape are not)
 - Specht modules and representation theory of symmetric groups
 - Lovász Local Lemma and probabilistic method tools
 - Ramsey numbers and explicit Ramsey bounds
@@ -383,7 +385,7 @@ Mathlib has Turán's theorem, Szemerédi regularity lemma, Van der Waerden's and
 
 ## Set theory and model theory
 
-Mathlib has ordinal and cardinal arithmetic, basic ZFC sets, Polish spaces with analytic sets and Lusin's separation/Souslin theorems, first-order languages with completeness and compactness. However, forcing, large cardinals, advanced model theory, and deeper descriptive set theory are absent. The Flypitch project (independence of CH via Boolean-valued models) was done in Lean 3 and has not been ported.
+Mathlib has ordinal and cardinal arithmetic, basic ZFC sets, Polish spaces with analytic sets and Lusin's separation/Souslin theorems, first-order languages with completeness and compactness, **model-theoretic ultraproducts with Łoś's theorem** (`Mathlib.ModelTheory.Ultraproducts.FirstOrder.Language.Ultraproduct.sentence_realize`, checked 2026-05-14), Fraïssé limits (`Mathlib.ModelTheory.Fraisse`), and Presburger arithmetic with definability/semilinear decompositions. However, forcing, large cardinals, advanced classification model theory, and deeper descriptive set theory remain absent. The Flypitch project (independence of CH via Boolean-valued models) was done in Lean 3 and has not been ported.
 
 ### Not recommended as default dependencies
 
@@ -392,7 +394,6 @@ Mathlib has ordinal and cardinal arithmetic, basic ZFC sets, Polish spaces with 
 - Large cardinal axioms (inaccessible, measurable, Woodin, etc.)
 - Inner models (L, core models)
 - Model-theoretic stability theory, Morley's theorem, o-minimality
-- Ultraproducts (model-theoretic)
 - Borel determinacy, projective determinacy
 - Wadge hierarchy, effective descriptive set theory
 
@@ -435,7 +436,6 @@ Mathlib has representations (`Representation k G V`), finite-dimensional represe
 
 ### Not recommended as default dependencies
 
-- Artin–Wedderburn theorem (semisimple Artinian ring ≅ product of matrix rings over division rings)
 - Brauer theory / modular representation theory (blocks, defect groups, decomposition matrices)
 - Number of irreducibles = number of conjugacy classes
 - Character tables as a computational framework
@@ -444,15 +444,16 @@ Mathlib has representations (`Representation k G V`), finite-dimensional represe
 - Mackey's irreducibility criterion
 - Projective representations
 
+*Note: Artin–Wedderburn for semisimple Artinian rings is now in Mathlib — see §22.*
+
 ---
 
 ## Noncommutative ring theory
 
-Mathlib has simple modules and semisimple modules/rings (with Schur's lemma), Jacobson radical (as intersection of maximal ideals), Artinian ring theory (including "prime = maximal" and "reduced Artinian = product of fields"), Ore localization, and Jacobson rings. However, the fundamental structure theorem and several core tools are missing.
+Mathlib has simple modules and semisimple modules/rings (with Schur's lemma), Jacobson radical (as intersection of maximal ideals), Artinian ring theory (including "prime = maximal" and "reduced Artinian = product of fields"), Ore localization, Jacobson rings, and the **Wedderburn–Artin theorem** (`Mathlib.RingTheory.SimpleModule.WedderburnArtin.IsSemisimpleRing.exists_algEquiv_pi_matrix_end_mulOpposite`, checked 2026-05-14). However, several core noncommutative tools are still missing.
 
 ### Not recommended as default dependencies
 
-- Wedderburn–Artin theorem (structure of semisimple Artinian rings)
 - Morita equivalence
 - Density theorem (Jacobson/Chevalley)
 - Goldie's theorem
@@ -478,14 +479,14 @@ Mathlib has splitting fields, algebraic closures, the fundamental theorem of Gal
 
 ## Algebraic number theory
 
-Mathlib has Dedekind domains (with three equivalent characterizations), class groups, finiteness of class number for global fields, Dirichlet's unit theorem, class number formula, p-adic numbers with Hensel's lemma, completions of number fields at infinite places, and partial adele ring infrastructure. However, ramification theory and explicit computational tools are largely absent.
+Mathlib has Dedekind domains (with three equivalent characterizations), class groups, finiteness of class number for global fields, Dirichlet's unit theorem, class number formula, p-adic numbers with Hensel's lemma, completions of number fields at infinite places, and the **adele ring** of a number field (`Mathlib.NumberTheory.NumberField.AdeleRing`, checked 2026-05-14). The **product formula** for number fields is now formalized (`Mathlib.NumberTheory.NumberField.ProductFormula`). Basic ramification/inertia is available (`Mathlib.NumberTheory.RamificationInertia.*`, `Mathlib.RingTheory.Valuation.RamificationGroup`). However, higher ramification and explicit computational tools are largely absent.
 
 ### Not recommended as default dependencies
 
-- Hilbert's ramification theory (decomposition/inertia/higher ramification groups)
 - Hasse–Arf theorem (upper numbering jumps at integers for abelian extensions)
+- Higher ramification groups beyond basic definitions
 - Different-discriminant theorem, conductor-discriminant formula
-- Full adeles/ideles with product formula and strong approximation (partial port from Lean 3 still in progress)
+- Strong approximation theorem (adele ring is in Mathlib but strong approximation is not yet)
 - Explicit class number computations for specific fields
 - Local/global class field theory
 
@@ -510,11 +511,10 @@ Mathlib has arithmetic functions (Euler's totient, Möbius, von Mangoldt), the L
 
 ## Modular forms and automorphic forms
 
-Mathlib has modular forms and cusp forms (as extensions of slash-invariant forms), Eisenstein series for weight k and level Γ(N), the upper half-plane with SL(2,ℤ) action and fundamental domain, and the graded ring of modular forms. However, the computational and structural heart of the theory is absent.
+Mathlib has modular forms and cusp forms (as extensions of slash-invariant forms), Eisenstein series for weight k and level Γ(N), the upper half-plane with SL(2,ℤ) action and fundamental domain, the graded ring of modular forms, and **q-expansions** for modular forms of level Γ(n) as analytic functions on the open unit disc and as power series (`Mathlib.NumberTheory.ModularForms.QExpansion.ModularFormClass.qExpansion`, checked 2026-05-14). The q-expansion of weight-k Eisenstein series in terms of divisor sums and Bernoulli numbers is also formalized (`Mathlib.NumberTheory.ModularForms.EisensteinSeries.QExpansion`). However, Hecke operators, the structural dimension theory, and most of the Hecke-eigenform-based theory remain absent.
 
 ### Not recommended as default dependencies
 
-- q-expansions (Fourier expansions of modular forms)
 - Hecke operators and Hecke eigenforms
 - Petersson inner product
 - Dimension formula for M_k(Γ) (via Riemann–Roch on modular curves)
@@ -529,16 +529,15 @@ Mathlib has modular forms and cusp forms (as extensions of slash-invariant forms
 
 ## Algebraic topology (expanded)
 
-Beyond the items listed above (Jordan curve, Brouwer, etc.), Mathlib has the fundamental groupoid and fundamental group, singular homology with homology of spheres, and basic covering space definitions. However, the broader computational apparatus of algebraic topology remains absent.
+Beyond the items listed above (Jordan curve, Brouwer, etc.), Mathlib has the fundamental groupoid and fundamental group, singular homology with homology of spheres and homotopy invariance (`Mathlib.AlgebraicTopology.SingularHomology.HomotopyInvariance`, checked 2026-05-14), basic covering space definitions, **higher homotopy groups** `π_n X x` for all `n` with the group structure (`Mathlib.Topology.Homotopy.HomotopyGroup.HomotopyGroup.Pi`), and **CW complexes** in both abstract and classical formulations (`Mathlib.Topology.CWComplex.Abstract.Basic`, `Mathlib.Topology.CWComplex.Classical.Basic`/`Finite`/`Graph`/`Subcomplex`). However, the global theorems built on this scaffolding remain absent.
 
 ### Not recommended as default dependencies
 
-- Higher homotopy groups (π_n for n ≥ 2)
 - Singular cohomology
-- CW complexes and cellular homology
-- Mayer–Vietoris sequence
+- Cellular homology of CW complexes (CW complexes are defined, cellular homology is not derived)
+- Mayer–Vietoris sequence for singular homology (a Mayer–Vietoris sequence for sheaf cohomology exists separately; see §12)
 - Hurewicz theorem
-- Eilenberg–Steenrod axioms
+- Eilenberg–Steenrod axioms as a structural theorem
 - Galois correspondence for covering spaces (connected covers ↔ conjugacy classes of subgroups of π₁)
 - Whitehead's theorem (weak homotopy equivalence between CW complexes is a homotopy equivalence)
 - Freudenthal suspension theorem
@@ -560,11 +559,11 @@ Mathlib has paracompactness, Lindelöf spaces, Urysohn metrization theorem, Ston
 
 ## Topological algebra
 
-Mathlib has Haar measure (existence and uniqueness on locally compact Hausdorff groups), the Pontryagin dual (definition as continuous homomorphisms to the circle), locally convex spaces with seminorm-based topologies and Banach–Steinhaus, profinite spaces, and topological group completions. However, the main duality theorem is absent.
+Mathlib has Haar measure (existence and uniqueness on locally compact Hausdorff groups), the Pontryagin dual (definition as continuous homomorphisms to the circle), locally convex spaces with seminorm-based topologies and Banach–Steinhaus, profinite spaces, and topological group completions. **Pontryagin duality** is proved in the **finite abelian** case (`Mathlib.Analysis.Fourier.FiniteAbelian.PontryaginDuality`, checked 2026-05-14). The full duality theorem for general locally compact abelian groups is still absent.
 
 ### Not recommended as default dependencies
 
-- Pontryagin duality theorem (G ≅ G^∧∧ for locally compact abelian groups)
+- Pontryagin duality theorem for general locally compact abelian groups (finite-abelian case is in Mathlib)
 - Profinite completion functor for groups
 - Peter–Weyl theorem (also listed under Lie groups)
 
@@ -572,7 +571,7 @@ Mathlib has Haar measure (existence and uniqueness on locally compact Hausdorff 
 
 ## Linear algebra (advanced)
 
-Mathlib has eigenvalues/eigenvectors, spectral decomposition for self-adjoint operators (finite-dimensional), bilinear and quadratic forms, Clifford algebras, determinants, Cayley–Hamilton, minimal polynomial, the structure theorem for finitely generated modules over PIDs (via Smith normal form), Jordan–Chevalley–Dunford decomposition, tensor products, exterior algebra/powers, and symmetric powers. However, several canonical form results and structural tools are absent.
+Mathlib has eigenvalues/eigenvectors, spectral decomposition for self-adjoint operators (finite-dimensional), bilinear and quadratic forms, Clifford algebras, determinants, Cayley–Hamilton, minimal polynomial, the structure theorem for finitely generated modules over PIDs (via Smith normal form), Jordan–Chevalley–Dunford decomposition, tensor products, exterior algebra/powers, symmetric powers, and **Grassmannians** parametrising locally-free quotients (`Mathlib.RingTheory.Grassmannian.Module.Grassmannian`, checked 2026-05-14). However, several canonical form results and structural tools are absent.
 
 ### Not recommended as default dependencies
 
@@ -581,7 +580,7 @@ Mathlib has eigenvalues/eigenvectors, spectral decomposition for self-adjoint op
 - Schur decomposition theorem (every matrix is unitarily triangularizable)
 - Simultaneous diagonalization theorem (commuting diagonalizable matrices)
 - Witt groups of quadratic forms
-- Grassmannians as geometric objects
+- Geometric structure of Grassmannians (the underlying set/module is defined, but smooth/projective-variety structure and the Schubert decomposition are not)
 - Polar decomposition in GL(n)
 
 ---
@@ -606,11 +605,12 @@ Mathlib has rotation numbers for circle homeomorphisms, omega-limit sets, fixed/
 
 ## Combinatorial game theory
 
-Mathlib has pre-games (`PGame`) following Conway, Conway induction, ordering and arithmetic on games, and surreal numbers as a linearly ordered commutative group with dyadic rationals embedded. However, surreal multiplication and the field structure are still incomplete, and classical game theory is absent.
+Combinatorial game theory has been **removed from core Mathlib** (`PGame`/`Surreal`/`Game`/`Nim` no longer appear in `Mathlib/` as of the 2026-04-20 master; the surviving file is `Mathlib.Order.GameAdd`, an order-theoretic well-foundedness helper). The infrastructure now lives in a separate downstream project (combinatorial-games). Classical zero-sum and equilibrium-style game theory is also absent. (checked 2026-05-14, grep for `Surreal`/`PGame`/`IGame` returned empty inside Mathlib.)
 
 ### Not recommended as default dependencies
 
-- Surreal numbers as a complete ordered field (multiplication not yet complete)
+- Surreal numbers, surreal arithmetic, surreal-as-ordered-field (no longer in Mathlib core)
+- Pre-games (`PGame`), Conway induction, game arithmetic (no longer in Mathlib core)
 - Sprague–Grundy theorem (impartial games are equivalent to nimbers)
 - Von Neumann's minimax theorem (two-player zero-sum games)
 - Nash's existence theorem (Nash equilibria in finite games)
@@ -620,14 +620,14 @@ Mathlib has pre-games (`PGame`) following Conway, Conway induction, ordering and
 
 ## Special functions
 
-Mathlib has a thorough Gamma function formalization (Euler's integral, recurrence, reflection formula, Legendre duplication, Bohr–Mollerup uniqueness), Beta function, Riemann zeta function (with functional equation), and Bernstein polynomials. However, most other classical special functions are absent.
+Mathlib has a thorough Gamma function formalization (Euler's integral, recurrence, reflection formula, Legendre duplication, Bohr–Mollerup uniqueness), Beta function, Riemann zeta function (with functional equation), Hurwitz zeta function (`Mathlib.NumberTheory.LSeries.HurwitzZeta`), Bernstein polynomials, and the **ordinary (Gaussian) hypergeometric function ₂F₁** in Banach algebras (`Mathlib.Analysis.SpecialFunctions.OrdinaryHypergeometric.ordinaryHypergeometric`, checked 2026-05-14). However, most other classical special functions are absent.
 
 ### Not recommended as default dependencies
 
 - Bessel functions
 - Spherical harmonics
 - Elliptic functions and elliptic integrals
-- Hypergeometric functions
+- Generalised hypergeometric functions ₚFq for `(p, q) ≠ (2, 1)`
 - Airy functions, Whittaker functions
 - Legendre's relation for elliptic integrals
 
@@ -635,21 +635,18 @@ Mathlib has a thorough Gamma function formalization (Euler's integral, recurrenc
 
 ## Real analysis (advanced)
 
-Mathlib has monotone/dominated convergence, Fatou's lemma, bounded variation with a.e. differentiability, Egorov's theorem, Vitali and Besicovitch covering theorems, Lebesgue differentiation theorem (with density points), and Vitali convergence theorem. However, some classical function-space concepts are absent.
+Mathlib has monotone/dominated convergence, Fatou's lemma, bounded variation with a.e. differentiability, Egorov's theorem, Vitali and Besicovitch covering theorems, Lebesgue differentiation theorem (with density points), Vitali convergence theorem, the **Vitali–Carathéodory theorem** (`Mathlib.MeasureTheory.Integral.Bochner.VitaliCaratheodory`, checked 2026-05-14), the **Lebesgue FTC for absolutely continuous functions** (`Mathlib.MeasureTheory.Integral.IntervalIntegral.AbsolutelyContinuousFun.AbsolutelyContinuousOnInterval.integral_deriv_eq_sub`), and **Stirling's formula** (`Mathlib.Analysis.SpecialFunctions.Stirling`). Some classical function-space concepts remain absent.
 
 ### Not recommended as default dependencies
 
 - Banach–Zaretsky theorem (BV + maps null sets to null sets ↔ absolutely continuous)
-- Lebesgue's fundamental theorem of calculus for absolutely continuous functions
-- Lusin's theorem (measurable functions are continuous on large sets)
-- Vitali–Carathéodory theorem (approximation of integrable functions by semicontinuous functions)
-- Stirling's formula
+- Lusin's theorem (measurable functions are continuous on large sets) (checked 2026-05-14, confirmed absent)
 
 ---
 
 ## Coding theory and information theory
 
-Mathlib has Hamming distance and Hamming norm with full metric space structure. However, essentially no coding theory or information theory exists beyond this.
+The `Mathlib.InformationTheory` directory now exists. Mathlib has Hamming distance and Hamming norm (`Mathlib.InformationTheory.Hamming`), the **Kraft–McMillan inequality** for uniquely decodable codes (`Mathlib.InformationTheory.Coding.KraftMcMillan.kraft_mcmillan_inequality`, checked 2026-05-14), uniquely decodable codes (`Mathlib.InformationTheory.Coding.UniquelyDecodable`), and **Kullback–Leibler divergence** with basic chain-rule lemmas (`Mathlib.InformationTheory.KullbackLeibler.*`). However, the bulk of classical coding theory and Shannon information theory is still absent.
 
 ### Not recommended as default dependencies
 
@@ -658,7 +655,7 @@ Mathlib has Hamming distance and Hamming norm with full metric space structure. 
 - Gilbert–Varshamov bound
 - MacWilliams identity (weight enumerator duality)
 - Shannon's noisy channel coding theorem
-- Shannon's source coding theorem
+- Shannon's source coding theorem (the Kraft–McMillan inequality is a prerequisite that exists; the full theorem does not)
 - Reed–Solomon code construction and minimum distance
 
 ---
@@ -764,7 +761,7 @@ Mathlib has the tropical semiring (`Mathlib.Algebra.Tropical.Basic`) where addit
 
 ## Graph theory (advanced)
 
-Mathlib has `SimpleGraph` with extensive basic theory (connectivity, subgraphs, matchings, coloring, Hamiltonian paths, Turán's theorem, regularity lemma). However, planarity, graph minors, and advanced structural theory are absent.
+Mathlib has `SimpleGraph` with extensive basic theory (connectivity, subgraphs, matchings, coloring, Hamiltonian paths, Turán's theorem, regularity lemma), and now also **Tutte's theorem** characterising graphs with perfect matchings via Tutte violators (`Mathlib.Combinatorics.SimpleGraph.Tutte.SimpleGraph.tutte`, checked 2026-05-14). However, planarity, graph minors, and several advanced structural theorems are absent.
 
 ### Not recommended as default dependencies
 
@@ -775,7 +772,6 @@ Mathlib has `SimpleGraph` with extensive basic theory (connectivity, subgraphs, 
 - Menger's theorem (disjoint paths = min vertex cut)
 - Brooks' theorem (χ(G) ≤ Δ(G) unless complete or odd cycle)
 - Vizing's theorem (edge chromatic number is Δ or Δ+1)
-- Tutte's theorem (characterization of graphs with perfect matchings)
 
 ---
 
@@ -794,28 +790,27 @@ Completely absent from Mathlib. No K₀, K₁, higher K-groups, or Quillen's con
 
 ## Perfectoid spaces and condensed mathematics
 
-The perfectoid spaces project (Buzzard–Commelin–Massot) was completed in Lean 3 but has not been ported to Lean 4 or Mathlib4. The Liquid Tensor Experiment (condensed mathematics) was also a standalone Lean 3 project. Neither is available in Mathlib4.
+Mathlib now has a substantial **`Mathlib.Condensed`** namespace with condensed sets and abelian groups (`Mathlib.Condensed.Basic`-style files in `Discrete`, `Light`, `Module`, `Solid`, `TopComparison`, `Functors`, `Limits`, `Equivalence`, etc.; checked 2026-05-14). **Solid abelian groups** (`Mathlib.Condensed.Solid`), light condensed objects, and condensed modules are formalised. On the perfectoid side, `Mathlib.RingTheory.Perfectoid` exists with the **untilt function** (`Mathlib.RingTheory.Perfectoid.Untilt.PreTilt.untilt`), the **Fontaine theta map** (`Mathlib.RingTheory.Perfectoid.FontaineTheta`), and the **de Rham period ring** `B_dR⁺`/`B_dR` (`Mathlib.RingTheory.Perfectoid.BDeRham`). The big classification theorems still depend on additional structure that isn't there yet.
 
 ### Not recommended as default dependencies
 
-- Scholze's tilting equivalence (perfectoid spaces over K ≃ perfectoid spaces over K♭)
+- Scholze's tilting equivalence as a theorem (perfectoid spaces over K ≃ perfectoid spaces over K♭) — the untilt map exists, the equivalence does not
 - Almost purity theorem (Faltings/Scholze)
 - Fontaine–Winterberger theorem (isomorphism of absolute Galois groups)
-- Condensed sets and condensed abelian groups
 - Clausen–Scholze main theorem on liquid modules
 
 ---
 
 ## p-adic Hodge theory and derived algebraic geometry
 
-Mathlib has p-adic numbers and basic valuation theory, but the deeper p-adic and derived frameworks are entirely absent.
+Mathlib has p-adic numbers, basic valuation theory, the **de Rham period ring** `B_dR⁺` and `B_dR` (`Mathlib.RingTheory.Perfectoid.BDeRham`, checked 2026-05-14), and the Fontaine theta map (`Mathlib.RingTheory.Perfectoid.FontaineTheta`). However, the crystalline and semistable period rings, comparison theorems, derived frameworks, and motivic theory are absent. Quasi-categories are defined (see §14), but the rest of derived algebraic geometry is not.
 
 ### Not recommended as default dependencies
 
-- Fontaine's period rings (B_dR, B_cris, B_st)
-- p-adic comparison theorems
+- Fontaine's crystalline and semistable period rings B_cris and B_st (B_dR is in Mathlib)
+- p-adic comparison theorems (Hodge–Tate, crystalline, de Rham)
 - Derived schemes and derived stacks
-- ∞-categories (no framework exists in Mathlib)
+- Stable ∞-categories (only basic quasi-categories are in Mathlib)
 - Motivic cohomology and motivic homotopy theory
 
 ---

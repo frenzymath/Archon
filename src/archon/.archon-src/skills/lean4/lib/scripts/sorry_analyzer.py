@@ -164,8 +164,8 @@ def find_sorries_in_file(filepath: Path) -> List[Sorry]:
             continue
 
         if SORRY_TOKEN_PATTERN.search(code_part):
-            context_before = [l.rstrip() for l in lines[max(0, i-3):i]]
-            context_after = [l.rstrip() for l in lines[i+1:min(len(lines), i+4)]]
+            context_before = [ln.rstrip() for ln in lines[max(0, i-3):i]]
+            context_after = [ln.rstrip() for ln in lines[i+1:min(len(lines), i+4)]]
 
             sorry = Sorry(
                 file=str(filepath),
@@ -185,25 +185,44 @@ def find_sorries(target: Path, include_deps: bool = False) -> List[Sorry]:
     Args:
         target: File or directory to search
         include_deps: If False (default), exclude .lake/ directories (dependencies)
+
+    Always excludes ``.archon/`` (Archon project-state directory holding
+    iteration logs and per-step Lean snapshots — counting sorries in
+    snapshots double-counts every sorry the project has by the number
+    of times each file was snapshotted, inflating the total wildly).
     """
+    # Pruned directory names that are NEVER counted as project source:
+    # - `.lake`: Lake's dependency cache (toggled by --include-deps).
+    # - `.archon`: Archon's project-state dir (logs/iter-NNN/snapshots
+    #   contain per-step .lean copies — counting them inflates totals).
+    # - `.git`: should never contain .lean files in practice but guards
+    #   against pathological repos.
+    _NEVER_DESCEND = {'.archon', '.git'}
+    def _excluded(parts: tuple) -> bool:
+        if any(p in _NEVER_DESCEND for p in parts):
+            return True
+        if not include_deps and '.lake' in parts:
+            return True
+        return False
+
     if target.is_file():
-        # Guard: Also exclude .lake/ files unless --include-deps
-        if not include_deps and '.lake' in target.parts:
-            print(f"Skipping dependency file: {target} (use --include-deps to include)", file=sys.stderr)
+        if _excluded(target.parts):
+            print(f"Skipping excluded file: {target}", file=sys.stderr)
             return []
         return find_sorries_in_file(target)
     elif target.is_dir():
-        # Guard: Exclude .lake directory or any subpath unless --include-deps
-        if not include_deps and '.lake' in target.parts:
-            print(f"Skipping dependency directory: {target} (use --include-deps to include)", file=sys.stderr)
+        if _excluded(target.parts):
+            print(f"Skipping excluded directory: {target}", file=sys.stderr)
             return []
         sorries = []
-        # Use os.walk for early termination of .lake/ directories (performance)
+        # Use os.walk for early termination (performance).
         import os
         for root, dirs, files in os.walk(target):
-            # Prune .lake directories from traversal (don't descend into them)
+            # Prune excluded directories from traversal.
+            prune = set(_NEVER_DESCEND)
             if not include_deps:
-                dirs[:] = [d for d in dirs if d != '.lake']
+                prune.add('.lake')
+            dirs[:] = [d for d in dirs if d not in prune]
             for filename in files:
                 if filename.endswith('.lean'):
                     lean_file = Path(root) / filename

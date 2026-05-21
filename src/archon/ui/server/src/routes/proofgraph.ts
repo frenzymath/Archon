@@ -10,6 +10,8 @@ import fs from 'fs';
 import path from 'path';
 import type { FastifyInstance } from 'fastify';
 import { countSorryInLean } from '../utils/sorryCount.js';
+import { mapIterToCommit, lsLeanFilesAtCommit, showFileAtCommit, hasInnerGit } from '../utils/innerGit.js';
+import { latestFileLaneStatus } from '../utils/multilane.js';
 import type { ProjectPaths } from './project.js';
 
 const DECL_RE = /^(noncomputable\s+)?(private\s+)?(protected\s+)?(theorem|lemma|def|instance|class|structure|inductive|abbrev|example)\s+([^\s:(\[{]+)/;
@@ -33,8 +35,26 @@ function parseContent(content: string, rel: string): LD[] {
       if (j > i && bd <= 0 && j + 1 < lines.length && lines[j + 1].trim() && DECL_RE.test(lines[j + 1].trim())) { e = j + 1; break; }
       e = j + 1;
     }
+    // Trim trailing whitespace + leading docstring of the *next* decl from
+    // the current decl's body. Without this, the body includes the start of
+    // the next /-- ... -/ block, which makes the UI show an unfinished
+    // comment that visually looks like truncated content.
+    let bodyEnd = e;
+    while (bodyEnd > i + 1 && !lines[bodyEnd - 1].trim()) bodyEnd--;
+    if (bodyEnd > i + 1 && lines[bodyEnd - 1].trim().endsWith('-/')) {
+      let k = bodyEnd - 1;
+      // single-line `/-- ... -/` block
+      if (lines[k].trim().startsWith('/--') || lines[k].trim().startsWith('/-')) {
+        bodyEnd = k;
+      } else {
+        // multi-line block: walk back to its `/-` opener
+        while (k > i && !lines[k].trim().startsWith('/--') && !lines[k].trim().startsWith('/-')) k--;
+        if (k > i) bodyEnd = k;
+      }
+      while (bodyEnd > i + 1 && !lines[bodyEnd - 1].trim()) bodyEnd--;
+    }
     let sc = 0; for (let l = s; l <= e; l++) if (sl.has(l)) sc++;
-    const body = lines.slice(i, i + (e - s)).join('\n');
+    const body = lines.slice(i, bodyEnd).join('\n');
     ds.push({ kind, name, file: rel, line: s, endLine: e, hasSorry: sc > 0, sorryCount: sc, signature: lines[i].trim(), body, usedNames: refs(body) });
     i = e;
   }
@@ -102,55 +122,59 @@ function getMilestonesForNode(ap: string, file: string, theorem: string, maxIter
   return out;
 }
 
-function snapIters(lp: string): string[] {
-  if (!fs.existsSync(lp)) return [];
-  return fs.readdirSync(lp).filter(d => {
-    if (!d.startsWith('iter-')) return false;
-    const sd = path.join(lp, d, 'snapshots'); if (!fs.existsSync(sd)) return false;
-    for (const s of fs.readdirSync(sd)) { const p = path.join(sd, s); if (fs.statSync(p).isDirectory() && fs.readdirSync(p).some(f => f.startsWith('step-') && f.endsWith('.lean'))) return true; }
-    return false;
-  }).sort();
-}
-
-function resolveState(lp: string, targetIter: string): Map<string, { content: string; dn: string }> {
-  const all = fs.readdirSync(lp).filter(d => d.startsWith('iter-') && d <= targetIter && fs.existsSync(path.join(lp, d, 'snapshots'))).sort();
-  const best = new Map<string, { content: string; dn: string }>();
-  for (const iter of all) {
-    const sd = path.join(lp, iter, 'snapshots'); if (!fs.existsSync(sd)) continue;
-    for (const slug of fs.readdirSync(sd)) {
-      const slugDir = path.join(sd, slug); if (!fs.statSync(slugDir).isDirectory()) continue;
-      const files = fs.readdirSync(slugDir).filter(f => f.endsWith('.lean')).sort();
-      const latest = files[files.length - 1]; if (!latest) continue;
-      try { best.set(slug, { content: fs.readFileSync(path.join(slugDir, latest), 'utf-8'), dn: slug.replace(/_/g, '/') + '.lean' }); } catch { /* */ }
-    }
+/**
+ * Load every .lean file tracked in the inner archon git at a given commit
+ * — same approach the diff section uses. Returns a `file → content` map.
+ *
+ * Files that can't be read (rare: git object corruption) are skipped silently.
+ * Returns an empty map when no inner git exists.
+ */
+function loadFilesAtCommit(gitDir: string, pp: string, sha: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!hasInnerGit(gitDir)) return out;
+  for (const file of lsLeanFilesAtCommit(gitDir, pp, sha)) {
+    const content = showFileAtCommit(gitDir, pp, sha, file);
+    if (content !== null) out.set(file, content);
   }
-  return best;
+  return out;
 }
 
-function bodyMap(state: Map<string, { content: string; dn: string }>): Map<string, string> {
+/** List iteration IDs present in the logs folder (any iter-NNN dir counts). */
+function allIters(lp: string): string[] {
+  if (!fs.existsSync(lp)) return [];
+  return fs.readdirSync(lp)
+    .filter(d => d.startsWith('iter-') && fs.statSync(path.join(lp, d)).isDirectory())
+    .sort();
+}
+
+function bodyMapFromFiles(files: Map<string, string>): Map<string, string> {
   const m = new Map<string, string>();
-  for (const [, { content, dn }] of state) {
+  for (const [dn, content] of files) {
     for (const d of parseContent(content, dn)) m.set(`${dn}::${d.name}`, d.body);
   }
   return m;
 }
 
-function buildTimeline(lp: string, pp: string) {
-  const iters = snapIters(lp);
+function buildTimeline(lp: string, pp: string, gitDir: string) {
+  const iters = allIters(lp);
+  const commitByIter = mapIterToCommit(gitDir, pp);
   let prevBodies = new Map<string, string>();
-  return iters.map((iterDir, idx) => {
+  return iters.map(iterDir => {
     let timestamp: string | undefined;
     try { const m = JSON.parse(fs.readFileSync(path.join(lp, iterDir, 'meta.json'), 'utf-8')); timestamp = m.completedAt || m.startedAt; } catch { /* */ }
-    const state = resolveState(lp, iterDir);
+    // Prefer the git tree at the iter's commit; it's authoritative about which
+    // files existed at that point.
+    const commit = commitByIter.get(iterDir);
+    const files = commit ? loadFilesAtCommit(gitDir, pp, commit.sha) : new Map<string, string>();
     const perFile: Record<string, number> = {};
     const perDecl: Record<string, { hasSorry: boolean; sorryCount: number }> = {};
     let total = 0;
-    for (const [, { content, dn }] of state) {
+    for (const [dn, content] of files) {
       const sc = countSorryInLean(content).length;
       perFile[dn] = sc; total += sc;
       for (const d of parseContent(content, dn)) perDecl[`${dn}::${d.name}`] = { hasSorry: d.hasSorry, sorryCount: d.sorryCount };
     }
-    const curBodies = bodyMap(state);
+    const curBodies = bodyMapFromFiles(files);
     const changed: string[] = [];
     for (const [id, body] of curBodies) {
       const prev = prevBodies.get(id);
@@ -161,13 +185,18 @@ function buildTimeline(lp: string, pp: string) {
   });
 }
 
-function buildGraphAt(lp: string, pp: string, iteration: string) {
-  const state = resolveState(lp, iteration);
-  const allD: LD[] = []; const covered = new Set<string>();
-  for (const [, { content, dn }] of state) { allD.push(...parseContent(content, dn)); covered.add(dn); }
-  (function walk(dir: string) {
-    try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) { if (!['_lake','.lake','.archon','node_modules','.git'].includes(e.name)) walk(f); } else if (e.isFile() && e.name.endsWith('.lean')) { const rel = path.relative(pp, f); if (!covered.has(rel)) allD.push(...parseFile(f, rel)); } } } catch { /* */ }
-  })(pp);
+/**
+ * Build the graph at a given iteration by reading the files tracked in the
+ * inner git at that iteration's commit. This is the same source of truth the
+ * diff section uses, so file creations/deletions across iterations are
+ * reflected correctly.
+ */
+function buildGraphAt(lp: string, pp: string, gitDir: string, iteration: string) {
+  const commitByIter = mapIterToCommit(gitDir, pp);
+  const commit = commitByIter.get(iteration);
+  const files = commit ? loadFilesAtCommit(gitDir, pp, commit.sha) : new Map<string, string>();
+  const allD: LD[] = [];
+  for (const [dn, content] of files) allD.push(...parseContent(content, dn));
   const ed = edges(allD);
   const fg: Record<string, { file: string; declarations: string[] }> = {};
   for (const d of allD) { if (!fg[d.file]) fg[d.file] = { file: d.file, declarations: [] }; fg[d.file].declarations.push(d.name); }
@@ -177,11 +206,17 @@ function buildGraphAt(lp: string, pp: string, iteration: string) {
   };
 }
 
-function findDeclAt(lp: string, pp: string, iter: string, file: string, name: string): LD | undefined {
-  const state = resolveState(lp, iter);
-  const slug = file.replace(/\.lean$/, '').replace(/\//g, '_');
-  const entry = state.get(slug);
-  if (entry) { const d = parseContent(entry.content, file).find(d => d.name === name); if (d) return d; }
+function findDeclAt(lp: string, pp: string, gitDir: string, iter: string, file: string, name: string): LD | undefined {
+  const commitByIter = mapIterToCommit(gitDir, pp);
+  const commit = commitByIter.get(iter);
+  if (commit) {
+    const content = showFileAtCommit(gitDir, pp, commit.sha, file);
+    if (content !== null) {
+      const d = parseContent(content, file).find(d => d.name === name);
+      if (d) return d;
+    }
+  }
+  // Fallback to on-disk file for legacy projects with no inner git.
   return parseFile(path.join(pp, file), file).find(d => d.name === name);
 }
 
@@ -227,13 +262,21 @@ function fileToSlug(file: string): string {
 
 export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   const { projectPath: pp, archonPath: ap, logsPath: lp } = paths;
+  const gitDir = path.join(ap, 'git-dir');
 
   fastify.get('/api/proofgraph/declarations', async () => {
     const allD: LD[] = [];
     (function walk(dir: string) { try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) { if (!['_lake','.lake','.archon','node_modules','.git'].includes(e.name)) walk(f); } else if (e.isFile() && e.name.endsWith('.lean')) allD.push(...parseFile(f, path.relative(pp, f))); } } catch { /* */ } })(pp);
     const ed = edges(allD); const ms = getAllMilestones(ap);
-    const fg: Record<string, { file: string; declarations: string[] }> = {};
-    for (const d of allD) { if (!fg[d.file]) fg[d.file] = { file: d.file, declarations: [] }; fg[d.file].declarations.push(d.name); }
+    const laneStatus = latestFileLaneStatus(ap);
+    const fg: Record<string, { file: string; declarations: string[]; laneStatus?: string }> = {};
+    for (const d of allD) {
+      if (!fg[d.file]) {
+        fg[d.file] = { file: d.file, declarations: [] };
+        if (laneStatus[d.file]) fg[d.file].laneStatus = laneStatus[d.file];
+      }
+      fg[d.file].declarations.push(d.name);
+    }
     return {
       declarations: allD.map(d => {
         const id = `${d.file}::${d.name}`; let mi = ms.get(id); if (!mi) { for (const [k, v] of ms) { if (k.split('::')[1] === d.name) { mi = v; break; } } }
@@ -242,16 +285,16 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     };
   });
 
-  fastify.get('/api/proofgraph/timeline', async () => buildTimeline(lp, pp));
+  fastify.get('/api/proofgraph/timeline', async () => buildTimeline(lp, pp, gitDir));
 
   fastify.get<{ Params: { iteration: string } }>('/api/proofgraph/snapshot/:iteration', async (req, reply) => {
     if (!req.params.iteration.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid' });
-    return buildGraphAt(lp, pp, req.params.iteration);
+    return buildGraphAt(lp, pp, gitDir, req.params.iteration);
   });
 
   fastify.get<{ Params: { file: string; name: string }; Querystring: { iteration?: string } }>('/api/proofgraph/node/:file/:name', async (req) => {
     const file = decodeURIComponent(req.params.file), { name } = req.params, iter = req.query.iteration;
-    const decl = iter ? findDeclAt(lp, pp, iter, file, name) : parseFile(path.join(pp, file), file).find(d => d.name === name);
+    const decl = iter ? findDeclAt(lp, pp, gitDir, iter, file, name) : parseFile(path.join(pp, file), file).find(d => d.name === name);
     return {
       declaration: decl ? { id: `${decl.file}::${decl.name}`, kind: decl.kind, name: decl.name, file: decl.file, line: decl.line, endLine: decl.endLine, hasSorry: decl.hasSorry, sorryCount: decl.sorryCount, signature: decl.signature, body: decl.body } : null,
       milestones: getMilestonesForNode(ap, file, name, iter),

@@ -46,3 +46,4 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     return calculateStats(allLogs);
   });
 }
+

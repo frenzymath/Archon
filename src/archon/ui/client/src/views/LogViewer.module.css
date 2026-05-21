@@ -1,186 +1,404 @@
 .root { display: flex; height: calc(100vh - 80px); gap: 0; }
 
-/* --- Sidebar --- */
+/* ═══ Sidebar ═════════════════════════════════════════════════════════
+ * Wider than before (260px instead of 220px) — the iter labels +
+ * commit hashes + phase dots were getting cramped, which is half of
+ * what made it feel dated. Light bg-secondary surface separates it
+ * from the main panel without a hard divider. */
 .sidebar {
-  width: 220px;
-  min-width: 180px;
+  width: 260px;
+  min-width: 220px;
   border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 10px 0;
   flex-shrink: 0;
 }
 
-.group { margin-bottom: 2px; }
+.group { margin-bottom: 4px; }
 
+/* Iter group header — bigger, more confident. Active iter (one with a
+ * selected file inside) is implicitly indicated by being expanded; we
+ * don't need additional emphasis. */
 .groupHeader {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  user-select: none;
-}
-.groupHeader:hover { background: var(--bg-secondary); }
-
-.toggle { font-size: 10px; color: var(--text-muted); width: 12px; flex-shrink: 0; }
-.groupTitle { font-weight: 600; font-size: 12px; }
-.groupStage { color: var(--text-secondary); font-size: 10px; }
-.groupMode { color: var(--purple); font-size: 10px; font-weight: 700; }
-.groupDone { color: var(--green); font-size: 10px; }
-.groupLive { color: var(--blue); font-size: 10px; animation: pulse 1.5s infinite; }
-.groupElapsed { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-.groupBody { padding-left: 8px; }
-
-/* Phase summary */
-.metaBar {
-  display: flex; flex-wrap: wrap; gap: 6px;
-  padding: 4px 10px 6px;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.phase { display: flex; align-items: center; gap: 3px; }
-.phaseDot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.phaseSecs { color: var(--text-muted); }
-
-.proverBar { display: flex; gap: 4px; font-size: 10px; font-weight: 600; }
-.proverTotal { color: var(--text-muted); font-weight: 400; }
-
-/* File list items */
-.fileItem {
-  display: flex; align-items: center; gap: 5px;
-  padding: 3px 10px 3px 18px;
-  cursor: pointer;
-  font-size: 11px;
-  color: var(--text-secondary);
-  border-radius: 3px;
-  margin: 0 4px;
-}
-.fileItem:hover { background: var(--bg-secondary); color: var(--text-primary); }
-.fileItemActive { background: rgba(3,102,214,0.08); color: var(--blue); font-weight: 500; }
-
-.fileStatus { font-size: 8px; flex-shrink: 0; }
-.fileRole { font-size: 10px; font-weight: 500; color: var(--text-muted); text-transform: capitalize; min-width: 40px; }
-.fileName { font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.emptyHint { padding: 16px; color: var(--text-muted); font-size: 12px; text-align: center; }
-
-/* --- Main content --- */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-
-.toolbar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.backBtn {
-  padding: 3px 8px; font-size: 11px; font-weight: 500; border: 1px solid var(--blue);
-  border-radius: 4px; background: rgba(3,102,214,0.06); color: var(--blue);
-  cursor: pointer; white-space: nowrap;
-}
-.backBtn:hover { background: rgba(3,102,214,0.12); }
-.selectedLabel { font-weight: 500; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
-.roleTag {
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  padding: 1px 6px; border-radius: 3px;
-  background: rgba(0,0,0,0.04);
-}
-
-.filterBar {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  margin: 0 6px;
+  transition: background 0.08s ease;
+}
+.groupHeader:hover { background: rgba(99, 102, 241, 0.06); }
+
+.toggle {
+  font-size: 9px;
+  color: #94a3b8;
+  width: 12px;
+  flex-shrink: 0;
+  transition: transform 0.12s ease;
+}
+.groupTitle {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: #1e293b;
+  flex-shrink: 0;
+  letter-spacing: -0.005em;
+}
+.groupStage {
+  color: #64748b;
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.groupMode { color: var(--purple); font-size: 10px; font-weight: 700; }
+.groupDone { color: var(--green); font-size: 11px; }
+.groupLive {
+  color: #6366f1;
+  font-size: 9px;
+  animation: pulse 1.5s infinite;
+}
+.groupElapsed {
+  color: #94a3b8;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.groupBody { padding-left: 4px; padding-top: 2px; }
+
+/* Commit badge (in iter header) — pill, mono, low-key. */
+.commitBadge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  color: #64748b;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.commitRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 5px 28px;
+  font-size: 10px;
+  color: #64748b;
+  max-width: 100%;
+  overflow: hidden;
+}
+.commitSha {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #475569;
+  flex-shrink: 0;
+}
+.commitSubject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* Phase summary inside an expanded iter */
+.metaBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 5px 12px 7px;
+  font-size: 10px;
+  color: #475569;
+}
+.phase { display: flex; align-items: center; gap: 4px; }
+.phaseDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.phaseSecs { color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+.proverBar {
+  display: flex;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.proverTotal { color: #94a3b8; font-weight: 400; }
+
+/* ─── File list items inside an iter group ──────────────────────────
+ * The big change: active file gets a strong indigo left bar (4px) and
+ * tinted background. Hover state is just a faint bg tint. */
+.fileItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 22px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: #475569;
+  border-radius: 0 6px 6px 0;
+  margin: 1px 6px 1px 0;
+  position: relative;
+  /* Reserve space for the active accent bar so the row doesn't shift
+   * when it becomes active. */
+  border-left: 3px solid transparent;
+  transition: background 0.08s ease, color 0.08s ease;
+}
+.fileItem:hover {
+  background: rgba(99, 102, 241, 0.06);
+  color: #1e293b;
+}
+.fileItemActive {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4338ca;
+  font-weight: 600;
+  border-left-color: #6366f1;
+}
+.fileItemActive .fileName { color: #4338ca; }
+.fileItemActive .fileRole { color: #6366f1; }
+
+.fileStatus { font-size: 9px; flex-shrink: 0; }
+.fileRole {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: capitalize;
+  min-width: 42px;
+  letter-spacing: 0.01em;
+}
+.fileSubagentRole {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  min-width: 42px;
+  flex-shrink: 0;
+  letter-spacing: 0.01em;
+}
+.fileItemSubagent { padding-left: 30px; }
+.fileName {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fileCommit {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: #94a3b8;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.emptyHint {
+  padding: 16px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ═══ Main content ════════════════════════════════════════════════════ */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Toolbar — taller, more breathing room. The PLAN role tag now reads
+ * as a pill instead of competing with the filter chips. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+}
+.backBtn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid #c7d2fe;
+  border-radius: 5px;
+  background: rgba(99, 102, 241, 0.06);
+  color: #4338ca;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s ease;
+}
+.backBtn:hover { background: rgba(99, 102, 241, 0.12); }
+
+.selectedLabel {
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: #475569;
+}
+
+/* The blue commit chip beside the selected file. Lower contrast than
+ * the role pill so the role reads first. */
+.selectedCommit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #4338ca;
+  padding: 3px 8px;
+  background: rgba(99, 102, 241, 0.08);
+  border-radius: 5px;
+  max-width: 50%;
+  overflow: hidden;
+}
+.selectedCommitSubject {
+  font-weight: 400;
+  color: #64748b;
+  font-family: var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Role tag (PLAN / PROVER / REVIEW chip at the toolbar). Pill, tinted
+ * by the inline `color` style from ROLE_COLORS. Matches the event-pill
+ * pattern in LogEntryLine. */
+.roleTag {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent);
+}
+
+/* Filter chips */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .filterLabel {
-  color: var(--text-muted);
+  color: #64748b;
   font-size: 11px;
   font-weight: 500;
 }
-
 .filterChips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
-
 .filterChip {
   border: 1px solid var(--border);
   background: var(--bg-primary);
-  color: var(--text-secondary);
+  color: #64748b;
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
-
 .filterChip:hover {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  background: #f1f5f9;
+  color: #1e293b;
+  border-color: #cbd5e1;
 }
-
 .filterChipActive {
-  background: rgba(3,102,214,0.08);
-  border-color: rgba(3,102,214,0.28);
-  color: var(--blue);
+  background: rgba(99, 102, 241, 0.10);
+  border-color: rgba(99, 102, 241, 0.30);
+  color: #4338ca;
+  font-weight: 600;
 }
 
 .resetFiltersBtn {
   border: none;
   background: transparent;
-  color: var(--blue);
+  color: #6366f1;
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   padding: 0;
 }
+.resetFiltersBtn:hover { text-decoration: underline; }
 
-.resetFiltersBtn:hover {
-  text-decoration: underline;
+.live {
+  color: #10b981;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.count {
+  color: #94a3b8;
+  font-size: 11px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
-.live { color: var(--green); font-size: 11px; font-weight: 600; }
-.count { color: var(--text-muted); font-size: 11px; margin-left: auto; }
-
 .sessionSummary {
-  padding: 6px 12px;
+  padding: 7px 16px;
   font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-secondary);
+  color: #475569;
+  background: #f8fafc;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.container { flex: 1; overflow-y: auto; padding: 4px 8px; }
+/* The scrolling container for log rows. */
+.container { flex: 1; overflow-y: auto; padding: 4px 0; }
 
+/* Summary block at the top of the panel. Card-like surface — replaces
+ * the previous tight box with rounded corners + a subtle accent rail
+ * to signal "this is meta, not a regular log entry". Markdown content
+ * inside is styled by MarkdownBlock.module.css — we no longer override
+ * h2/h3/p/code/table/pre here. */
 .summaryBlock {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: var(--bg-secondary);
+  margin: 12px 16px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-left: 3px solid #6366f1;
+  border-radius: 6px;
   font-size: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 .summaryLabel {
-  font-weight: 600; font-size: 10px; text-transform: uppercase;
-  color: var(--text-muted);
-  margin-right: 8px;
+  display: inline-block;
+  font-weight: 700;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6366f1;
+  margin-bottom: 8px;
 }
-.summaryText { color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
-.summaryText h2 { font-size: 14px; color: var(--text-primary); margin: 8px 0 4px; }
-.summaryText h3 { font-size: 13px; color: var(--text-primary); margin: 6px 0 3px; }
-.summaryText h4 { font-size: 12px; color: var(--text-primary); margin: 4px 0 2px; }
-.summaryText strong { color: var(--text-primary); }
-.summaryText code { background: var(--bg-tertiary); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-.summaryText ul { padding-left: 18px; margin: 4px 0; }
-.summaryText li { margin: 2px 0; }
-.summaryText table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: auto; }
-.summaryText th, .summaryText td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; }
-.summaryText th { background: var(--bg-tertiary); font-weight: 600; }
-.summaryText pre { background: var(--bg-tertiary); padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 12px; margin: 4px 0; }
 
-.emptyContent { padding: 32px; text-align: center; color: var(--text-muted); font-size: 12px; }
+.emptyContent {
+  padding: 32px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+}

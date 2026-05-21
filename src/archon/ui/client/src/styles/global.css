@@ -1,74 +1,201 @@
 :root {
+  /* ─── Surfaces ─────────────────────────────────────────────────────
+   * Warmer-than-pure white with slate-tinted grays instead of the
+   * yellowish github grays. The tint matches the indigo accents used
+   * elsewhere — surfaces, text, and accents all share a slate/indigo
+   * cool-cast palette so nothing reads as "from a different era". */
   --bg-primary: #ffffff;
-  --bg-secondary: #f8f9fa;
-  --bg-tertiary: #f0f1f3;
-  --border: #e2e4e8;
-  --text-primary: #24292e;
-  --text-secondary: #586069;
-  --text-muted: #959da5;
-  --blue: #0366d6;
-  --green: #28a745;
-  --orange: #e36209;
-  --red: #cb2431;
-  --purple: #6f42c1;
-  --font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --bg-secondary: #f8fafc;   /* slate-50 */
+  --bg-tertiary:  #f1f5f9;   /* slate-100 */
+  --border:       #e2e8f0;   /* slate-200 */
+  --border-strong:#cbd5e1;   /* slate-300, for stronger dividers */
+
+  /* ─── Text ─────────────────────────────────────────────────────────
+   * Slate scale instead of GitHub's #24292e black. Less contrast at
+   * the top end = less "pressed onto the screen" feel. */
+  --text-primary:   #0f172a; /* slate-900 */
+  --text-secondary: #475569; /* slate-600 */
+  --text-muted:     #94a3b8; /* slate-400 */
+
+  /* ─── Semantic colors ──────────────────────────────────────────────
+   * Softer than the originals — desaturated, lower-luminance variants
+   * that read as the same color family without shouting. The previous
+   * #0366d6 GitHub blue and #cb2431 GitHub red both came from circa-
+   * 2018 brand palettes and look heavy alongside slate surfaces. */
+  --blue:   #2563eb; /* indigo-tinted blue (blue-600), reads as "link" */
+  --green:  #10b981; /* emerald-500, less primary-school than #28a745 */
+  --orange: #ea580c; /* orange-600 */
+  --red:    #dc2626; /* red-600 */
+  --purple: #7c3aed; /* violet-600 */
+
+  /* ─── Accent (content emphasis) ────────────────────────────────────
+   * Indigo is the "modern" color we use for selected states, code
+   * pills, summary block accents, etc. Distinct from --blue (which is
+   * the link/nav color) but in the same cool family so they coexist. */
+  --accent:        #6366f1; /* indigo-500 */
+  --accent-strong: #4f46e5; /* indigo-600 */
+  --accent-text:   #4338ca; /* indigo-700 */
+  --accent-bg:     rgba(99, 102, 241, 0.10);
+  --accent-bg-soft:rgba(99, 102, 241, 0.06);
+  --accent-ring:   rgba(99, 102, 241, 0.28);
+
+  /* ─── Typography ──────────────────────────────────────────────────
+   * Inter as primary, falls back to system stack. Inter has better
+   * digit alignment and a more contemporary feel than -apple-system
+   * alone. If you haven't loaded the font, the fallback chain is
+   * identical to what you had before so nothing breaks. */
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; width: 100%; }
+
 body {
   font-family: var(--font-sans);
   background: var(--bg-primary);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.5;
+  /* Inter stylistic alternates — tabular figures everywhere, slashed
+   * zero, disambiguated `1` and `I`. No-op if Inter isn't loaded. */
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
 a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
 code, pre { font-family: var(--font-mono); }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbars — slightly more visible thumb than before. The previous
+ * 6px on transparent track was too subtle on light surfaces. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: content-box; border: 2px solid transparent; }
 
 .app { display: flex; flex-direction: column; height: 100%; }
 
+/* ─── Header ───────────────────────────────────────────────────────
+ * Subtle bottom-shadow instead of a hard border to add depth without
+ * adding visual weight. Slightly taller (10px → 12px vertical) for
+ * breathing room. */
 .header {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 8px 16px;
-  background: var(--bg-secondary);
+  gap: 20px;
+  padding: 10px 20px;
+  background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
   font-size: 13px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
 }
-.header h1 { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
 
+.header h1 {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: -0.015em;
+}
+
+/* ─── Version badge ────────────────────────────────────────────────
+ * Sits immediately after the H1, before the project badge — version
+ * is part of app identity, project is current context, so they're
+ * visually separated. Indigo to tie chrome to content emphasis. */
+.version-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
+  letter-spacing: -0.005em;
+  /* Slight vertical alignment fix — mono digits sit a touch higher
+   * than the H1 baseline without this. */
+  transform: translateY(-0.5px);
+  user-select: none;
+}
+
+/* ─── Project badge ────────────────────────────────────────────────
+ * Soft gray pill — context, not identity. Distinct in shape and
+ * weight from the version badge so they don't visually compete. */
 .project-badge {
-  font-size: 11px; font-weight: 500; font-family: var(--font-mono);
-  padding: 2px 8px; border-radius: 3px;
-  background: rgba(3,102,214,0.08); color: var(--blue);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   cursor: default;
+  letter-spacing: -0.01em;
 }
 
-.header-nav { display: flex; gap: 2px; }
+/* ─── Nav ──────────────────────────────────────────────────────────
+ * Active state uses indigo accent — matches the rest of the modern
+ * surfaces. Hover is a subtle gray tint, not a color shift. */
+.header-nav {
+  display: flex;
+  gap: 2px;
+}
+
 .nav-link {
   padding: 6px 12px;
-  border-radius: 4px;
-  color: var(--text-muted);
+  border-radius: 6px;
+  color: var(--text-secondary);
   font-size: 13px;
+  font-weight: 500;
+  transition: background 0.1s ease, color 0.1s ease;
 }
-.nav-link:hover { color: var(--text-primary); }
-.nav-link.active { color: var(--blue); background: rgba(3,102,214,0.06); }
+.nav-link:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  text-decoration: none;
+}
+.nav-link.active {
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  font-weight: 600;
+}
 
-.main-content { flex: 1; overflow: auto; padding: 16px; }
+.main-content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-primary);
+}
+
+/* ─── Form controls ────────────────────────────────────────────────
+ * Slightly larger hit target, indigo focus ring for consistency with
+ * the accent system. */
+select, input, button {
+  font-family: var(--font-sans);
+}
 
 select {
   background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
+  border-radius: 5px;
+  padding: 5px 10px;
   color: var(--text-primary);
   font-size: 12px;
-  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+select:hover { border-color: var(--border-strong); }
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }

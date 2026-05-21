@@ -66,7 +66,6 @@ def find_let_have_exact(file_path: Path, lines: List[str], filter_multi_use: boo
 
             # Check if followed by have and exact within next 15 lines
             has_have = False
-            has_exact = False
             end_idx = min(i + 15, len(lines))
 
             for j in range(i + 1, end_idx):
@@ -75,8 +74,6 @@ def find_let_have_exact(file_path: Path, lines: List[str], filter_multi_use: boo
                 if re.match(r'have\s+\w+\s*(?::|:=)', next_line):
                     has_have = True
                 if next_line.startswith('exact '):
-                    has_exact = True
-
                     if has_have:
                         # Check if this is a false positive (multiple uses)
                         if filter_multi_use:
@@ -310,7 +307,7 @@ def find_have_calc(file_path: Path, lines: List[str]) -> List[GolfablePattern]:
                 if calc_uses == 1 and after_calc_uses == 0:
                     # Get proof term length (rough estimate)
                     have_full_text = lines[have_line:calc_line]
-                    proof_length = sum(len(l.strip()) for l in have_full_text)
+                    proof_length = sum(len(line.strip()) for line in have_full_text)
 
                     # Determine priority based on proof length
                     if proof_length > 80:
@@ -487,7 +484,7 @@ def find_apply_exact_chains(file_path: Path, lines: List[str]) -> List[GolfableP
             i += 1
             continue
 
-        snippet = '\n'.join(l.rstrip() for l in lines[block_start:block_end])
+        snippet = '\n'.join(line.rstrip() for line in lines[block_start:block_end])
 
         patterns.append(GolfablePattern(
             pattern_type="apply-exact-chain",

@@ -11,7 +11,6 @@ from archon import log
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
 
 
 class _BannerGroup(typer.core.TyperGroup):
@@ -21,18 +20,18 @@ class _BannerGroup(typer.core.TyperGroup):
         log.banner(__version__)
         super().format_help(ctx, formatter)
 
-        # ── Examples panel ────────────────────────────────────
+        # ── Remark panel ──────────────────────────────────────
         
         console = Console()
 
-        # ── Remark panel ──────────────────────────────────────
         remark = (
             "If you don't know where to start, the typical workflow is:\n\n"
             "  [bold cyan]1.[/bold cyan] archon setup       → install system dependencies\n"
             "  [bold cyan]2.[/bold cyan] cd project/dir     → navigate to your project directory\n"
             "  [bold cyan]3.[/bold cyan] archon init .      → create a project and initialize it with Lean 4\n"
             "  [bold cyan]4.[/bold cyan] archon loop        → run autonomous formalization\n"
-            "  [bold cyan]5.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
+            "  [bold cyan]5.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
+            "  [bold cyan]6.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
             "[dim]Run [bold]archon <command> -h[/bold] for details on any command.[/dim]"
         )
         console.print(Panel(
@@ -72,6 +71,12 @@ def main(
 ) -> None:
     """Autonomous Lean 4 Formalization."""
     log.banner(__version__)
+    # Load .archon/.env from the current working directory if it exists.
+    # Cheap (idempotent, no-op when file missing) so doing it on every
+    # command keeps "I just edited .env" working without an extra step.
+    from pathlib import Path as _Path
+    from archon.commands.tooling.env_loader import load_env_file as _load_env
+    _load_env(_Path.cwd())
 
 
 # ── register commands ─────────────────────────────────────────────────
@@ -83,6 +88,12 @@ from archon.commands.dashboard import dashboard  # noqa: E402
 from archon.commands.setup import setup  # noqa: E402
 from archon.commands.prove import prove  # noqa: E402
 from archon.commands.update import update  # noqa: E402
+from archon.commands.discuss import discuss  # noqa: E402
+from archon.commands.refactor import app as refactor_app  # noqa: E402
+from archon.commands.branch import branch, inner_log  # noqa: E402
+from archon.commands.version import version as version_cmd  # noqa: E402
+from archon.commands.subagent import subagent_command  # noqa: E402
+from archon.commands.migrate import app as migrate_app  # noqa: E402
 
 app.command()(init)
 app.command()(loop)
@@ -91,6 +102,13 @@ app.command()(dashboard)
 app.command()(prove)
 app.command()(setup)
 app.command()(update)
+app.command()(discuss)
+app.command("branch")(branch)
+app.command("log")(inner_log)
+app.command("version")(version_cmd)
+app.add_typer(refactor_app, name="refactor")
+app.command("subagent")(subagent_command)
+app.add_typer(migrate_app, name="migrate")
 
 if __name__ == "__main__":
     app()

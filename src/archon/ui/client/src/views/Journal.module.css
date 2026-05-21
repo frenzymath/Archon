@@ -1,58 +1,161 @@
-.root { max-width: 960px; display: flex; flex-direction: column; gap: 12px; }
-.empty { color: var(--text-muted); font-size: 13px; padding: 32px 0; }
-.empty code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+/* Page-level container — centered and capped for a focused reading
+ * width. Matches Overview.module.css. */
+.root {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 
-.sessionBar { display: flex; gap: 4px; flex-wrap: wrap; }
-.sessionBtn {
-  padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
-  border: 1px solid var(--border); border-radius: 4px;
-  background: var(--bg-primary); color: var(--text-secondary);
+/* ─── Commit banner ──────────────────────────────────────────────── */
+.commitBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
 }
-.sessionBtn:hover { color: var(--text-primary); }
-.sessionBtnActive { background: var(--blue); color: #fff; border-color: var(--blue); }
+.commitBanner .commitSha { font-weight: 700; color: var(--text-primary); }
+.commitBanner .commitBranch { color: var(--blue); font-weight: 600; }
+.commitBanner .commitSubject {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  font-family: var(--font-sans);
+}
+.commitBanner .commitSessionHint {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
 
+/* ─── Empty state ────────────────────────────────────────────────── */
+.empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 32px 0;
+}
+.empty code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* ─── Session selector pills ─────────────────────────────────────────
+ * Grid (not flex-wrap) so every button gets an equal-width cell. The
+ * `auto-fill` track sizing means columns adapt to container width while
+ * preserving uniform widths within a row — fixing the ragged-right look
+ * you get with flex-wrap when labels have different lengths. */
+.sessionBar {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 4px;
+}
+.sessionBtn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  /* Center the label inside the cell — without this, short labels like
+   * "#1" hug the left edge of their wider cell. */
+  text-align: center;
+  /* Prevent labels from wrapping inside a too-narrow cell on very small
+   * viewports; the auto-fill min of 110px already guarantees enough room
+   * for "Session #999", but be defensive. */
+  white-space: nowrap;
+}
+.sessionBtn:hover { color: var(--text-primary); }
+.sessionBtnActive {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+
+/* ─── Tabs ───────────────────────────────────────────────────────── */
 .tabs { display: flex; gap: 2px; }
 .tab {
-  padding: 5px 12px; font-size: 12px; cursor: pointer;
-  border: none; border-bottom: 2px solid transparent;
-  background: none; color: var(--text-muted);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
 }
 .tab:hover { color: var(--text-primary); }
-.tabActive { color: var(--blue); border-bottom-color: var(--blue); }
+.tabActive {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
 
+/* ─── Section + cards ─────────────────────────────────────────────
+ * The .card wraps a <MarkdownBlock> for Summary / Recommendations.
+ * Markdown typography is now owned by MarkdownBlock.module.css; the
+ * card only provides the surface chrome. */
 .content { display: flex; flex-direction: column; gap: 12px; }
 .section { display: flex; flex-direction: column; gap: 6px; }
 .sectionLabel { font-size: 11px; color: var(--text-muted); }
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  /* No overflow-x: auto here — wide tables and code blocks inside
+   * markdown already scroll independently via MarkdownBlock styles.
+   * Two nested scrollers create the confusing "which one scrolled"
+   * UX problem. */
+}
 
-.card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; overflow-x: auto; }
-
-/* Target aggregation card */
+/* ─── Target aggregation card (Targets tab) ──────────────────────── */
 .targetCard {
   border-left: 3px solid var(--border);
   padding: 8px 12px;
   background: var(--bg-secondary);
   border-radius: 0 4px 4px 0;
 }
-.targetHeader { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.targetHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .targetFile { font-size: 11px; color: var(--text-muted); }
 .targetTheorem { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .badge { font-size: 11px; font-weight: 600; margin-left: auto; }
-.targetMeta { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px; }
-.attempts { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-.sessionTag { font-size: 11px; color: var(--text-muted); margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.targetMeta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+.attempts {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sessionTag {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
 .sessionFlow { color: var(--text-muted); margin-left: 4px; }
-
-/* Markdown */
-.markdown { font-size: 13px; line-height: 1.4; color: var(--text-secondary); }
-.markdown h2 { font-size: 14px; color: var(--text-primary); margin: 8px 0 2px; }
-.markdown h3 { font-size: 13px; color: var(--text-primary); margin: 6px 0 2px; }
-.markdown h4 { font-size: 12px; color: var(--text-primary); margin: 4px 0 2px; }
-.markdown strong { color: var(--text-primary); }
-.markdown code { background: var(--bg-tertiary); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-.markdown ul { padding-left: 18px; margin: 2px 0; }
-.markdown li { margin: 1px 0; }
-.markdown table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: auto; }
-.markdown th, .markdown td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; }
-.markdown th { background: var(--bg-tertiary); font-weight: 600; }
-.markdown pre { background: var(--bg-tertiary); padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 12px; margin: 4px 0; }

@@ -1,4 +1,99 @@
-.root { max-width: 960px; display: flex; flex-direction: column; gap: 20px; }
+/* The Overview is prose-heavy. Cap at ~900px and center so long lines
+ * don't run edge-to-edge on wide monitors. Markdown typography lives
+ * in components/MarkdownBlock.module.css — do NOT duplicate it here. */
+.root {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 16px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+.alertBanner {
+  /* Soft red background (using the app's standard red RGB: 203, 36, 49) */
+  background: rgba(203, 36, 49, 0.08);
+  border: 1px solid rgba(203, 36, 49, 0.25);
+  padding: 12px 16px;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+.alertBanner strong {
+  color: var(--red, #cb2431);
+}
+
+/* The alert banner intentionally overrides the centralized markdown
+ * styling — code pills are red-tinted to match the banner, not indigo.
+ * These selectors compose with `.markdown` (passed via className), and
+ * tied specificity means stylesheet order decides the winner. The .root
+ * import order in Overview.tsx imports this file AFTER MarkdownBlock,
+ * so these win. If you ever see indigo pills here, re-check imports. */
+.alertText {
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.alertText p { margin: 0 0 6px 0; }
+.alertText p:last-child { margin-bottom: 0; }
+
+.alertText ul, .alertText ol {
+  margin: 4px 0 0 0;
+  padding-left: 20px;
+}
+
+.alertText li { margin-bottom: 4px; }
+
+.alertText code {
+  background: rgba(203, 36, 49, 0.15);
+  border: 1px solid rgba(203, 36, 49, 0.2);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  /* Kill the indigo inset ring from MarkdownBlock.module.css. */
+  box-shadow: none;
+}
+
+.alertText pre {
+  background: rgba(203, 36, 49, 0.1);
+  border: 1px solid rgba(203, 36, 49, 0.2);
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+  /* Kill the dark slate slab from MarkdownBlock.module.css. */
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.alertText pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.commitBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  max-width: 100%;
+}
+.commitBanner .commitSha { font-weight: 700; color: var(--text-primary); }
+.commitBanner .commitBranch { color: var(--blue); font-weight: 600; }
+.commitBanner .commitSubject { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-family: var(--font-sans); }
 
 .stages { font-family: var(--font-mono); font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sep { color: var(--text-muted); }
@@ -19,6 +114,42 @@
 .list li { padding: 3px 0; color: var(--text-secondary); font-size: 13px; }
 .checkDone { color: var(--green) !important; }
 
+.strategyPlaceholder {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.strategyBox {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+}
+.strategyBox[open] { padding-bottom: 12px; }
+.strategySummary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  list-style: none;
+  padding: 4px 0;
+  user-select: none;
+}
+.strategySummary::-webkit-details-marker { display: none; }
+.strategySummary::before {
+  content: '▸';
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.1s;
+}
+.strategyBox[open] .strategySummary::before { transform: rotate(90deg); }
+
+/* Sessions table — this is the compact native HTML table rendered at
+ * the bottom of Overview, NOT a markdown-rendered table. Markdown tables
+ * are styled by MarkdownBlock.module.css. */
 .table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--font-mono); }
 .table th { text-align: left; padding: 6px 8px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
 .table td { padding: 6px 8px; color: var(--text-secondary); border-bottom: 1px solid var(--bg-tertiary); }

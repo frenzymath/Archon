@@ -1,0 +1,141 @@
+"""Tests for the loop's auto-capture + auto-clear of USER_HINTS.md.
+
+The plan-phase helpers must:
+
+* read the file at plan-start (capture) — returning ``None`` when the
+  file is missing rather than raising;
+* reset the file to the bundled template after the plan phase succeeds
+  (so the init state and the cleared state match — a clean cycle that
+  doesn't pollute the next planner's "user hints" view with stale
+  content from the iter we just consumed);
+* leave the file alone when the captured content was empty.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from archon.commands.loop.phases.plan import (
+    _capture_user_hints,
+    _clear_user_hints,
+    _read_user_hints_template,
+)
+
+
+class CaptureUserHintsTest(unittest.TestCase):
+    def test_missing_file_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(_capture_user_hints(Path(d)))
+
+    def test_empty_file_returns_empty_string(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            (state / "USER_HINTS.md").write_text("", encoding="utf-8")
+            got = _capture_user_hints(state)
+            self.assertEqual(got, "")
+
+    def test_returns_full_content_including_whitespace(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            text = "  \n- [ts] hint with leading whitespace\n\n"
+            (state / "USER_HINTS.md").write_text(text, encoding="utf-8")
+            got = _capture_user_hints(state)
+            self.assertEqual(got, text)
+
+
+class ClearUserHintsTest(unittest.TestCase):
+    """After clear, USER_HINTS.md content must equal the bundled template.
+
+    The bundled template ships empty so the init state and the cleared
+    state match — but the contract is "matches the template", not
+    "is empty". Tests assert the contract so a future template tweak
+    (a brief discoverability comment, say) propagates without breaking
+    the test suite.
+    """
+
+    def test_clears_non_empty_file_to_template(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            hints = state / "USER_HINTS.md"
+            hints.write_text("- some hint", encoding="utf-8")
+            _clear_user_hints(state)
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                _read_user_hints_template(),
+            )
+
+    def test_idempotent_when_already_at_template(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            hints = state / "USER_HINTS.md"
+            hints.write_text(_read_user_hints_template(), encoding="utf-8")
+            _clear_user_hints(state)
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                _read_user_hints_template(),
+            )
+
+    def test_creates_file_when_missing(self):
+        # Clear creates the file if it didn't exist — the post-condition
+        # is "file matches template", regardless of prior state.
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            _clear_user_hints(state)
+            hints = state / "USER_HINTS.md"
+            self.assertTrue(hints.is_file())
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                _read_user_hints_template(),
+            )
+
+    def test_template_ships_with_html_comment_preamble(self):
+        # The template ships with an HTML-comment preamble explaining
+        # the hint format to the user. The preamble is stripped by
+        # _user_hints_block in prompts.py before injection, so a
+        # template-only file renders as "no hints" to the planner.
+        # The preamble is the format guide; if you remove it, also
+        # update _user_hints_block's comment-stripping contract.
+        tmpl = _read_user_hints_template()
+        self.assertTrue(tmpl.lstrip().startswith("<!--"))
+        self.assertIn("USER_HINTS.md", tmpl)
+        # No actual hint bullets — the preamble must contain zero
+        # `- [<timestamp>]` lines that are NOT inside the comment.
+        # We check this by confirming the only content outside the
+        # HTML comment is whitespace.
+        from archon.prompts import _strip_html_comments  # type: ignore
+        self.assertEqual(_strip_html_comments(tmpl).strip(), "")
+
+
+class TemplateConsistencyTest(unittest.TestCase):
+    """The init state and the post-clear state must match.
+
+    Init copies the bundled template into ``.archon/USER_HINTS.md`` on
+    fresh projects; the loop clears the same file back to the template
+    after each plan consumes hints. Drift between the two would mean
+    the very first plan-phase capture sees different content than every
+    subsequent one — a confusing inconsistency.
+    """
+
+    def test_init_state_matches_cleared_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            # Simulate init: copy the template into the state dir.
+            template_content = _read_user_hints_template()
+            (state / "USER_HINTS.md").write_text(
+                template_content, encoding="utf-8",
+            )
+            init_state = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            # Simulate iter cycle: user adds a hint, planner consumes,
+            # loop clears.
+            (state / "USER_HINTS.md").write_text(
+                template_content + "- [ts] some live hint\n", encoding="utf-8",
+            )
+            _clear_user_hints(state)
+            cleared_state = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            self.assertEqual(init_state, cleared_state)
+
+
+if __name__ == "__main__":
+    unittest.main()

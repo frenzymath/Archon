@@ -1,6 +1,6 @@
 export interface LogEntry {
   ts: string;
-  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot';
+  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt';
   level?: 'info' | 'warn' | 'error';
   message?: string;
   content?: string;
@@ -15,6 +15,11 @@ export interface LogEntry {
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
   session_id?: string;
+  // prompt event fields — see client types.
+  prompt?: string;
+  length?: number;
+  attempt?: number;
+  resume_session_id?: string;
 }
 
 export interface ProgressData {
@@ -29,6 +34,28 @@ export interface Task {
   file: string;
   status: 'pending' | 'in-progress' | 'done';
   proofSketch?: string;
+}
+
+/** Per-phase status as stored in meta.json */
+export interface PhaseStatus {
+  status: string;
+  durationSecs?: number;
+}
+
+/** Full iteration meta.json shape */
+export interface IterationMeta {
+  iteration?: number;
+  stage?: string;
+  mode?: string;
+  startedAt?: string;
+  completedAt?: string;
+  wallTimeSecs?: number;
+  plan?: PhaseStatus;
+  refactor?: PhaseStatus;
+  prover?: PhaseStatus;
+  review?: PhaseStatus;
+  provers?: Record<string, { file: string; status: string }>;
+  sorry_count?: number;
 }
 
 export interface SessionSummary {

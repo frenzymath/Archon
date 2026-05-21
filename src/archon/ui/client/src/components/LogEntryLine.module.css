@@ -1,17 +1,120 @@
-.line { padding: 1px 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.line:hover { background: rgba(0,0,0,0.02); }
-.ts { color: var(--text-muted); flex-shrink: 0; user-select: none; }
-.event { flex-shrink: 0; min-width: 85px; font-weight: 500; }
-.text { color: var(--text-secondary); word-break: break-word; white-space: pre-wrap; }
-.toolName { font-weight: 700; color: var(--text-primary); }
+/* Log row layout: timestamp · event pill · content · (expanded detail).
+ *
+ * Two things matter for correct layout:
+ *
+ * 1. `flex-wrap: wrap` on .line + `flex-basis: 100%` on the detail row
+ *    pushes the detail onto its own line. WITHOUT this, the detail
+ *    becomes a flex sibling of the headline and competes for width;
+ *    the .text column then shrinks until long unbreakable tokens (like
+ *    `mcp__archon__loogle`) wrap one character per line.
+ *
+ * 2. `align-items: flex-start` aligns timestamp + pill + text to the
+ *    TOP of the row. The previous `align-items: baseline` worked when
+ *    rows were single-line, but multi-line content made the pill drift
+ *    to the middle of the row while the timestamp stayed at the top. */
+.line {
+  padding: 7px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+  border-bottom: 1px solid transparent;
+}
+
+.line:nth-child(even) {
+  background: rgba(99, 102, 241, 0.025);
+}
+
+.line:last-child { border-bottom: none; }
+
+/* Timestamp — pinned to the first line via tiny padding-top so it
+ * baselines with the headline text below the pill. */
+.ts {
+  width: 62px;
+  flex-shrink: 0;
+  color: #94a3b8;
+  user-select: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  padding-top: 2px;
+}
+
+/* Event badge — pill, tinted via `color-mix` from the inline `color`
+ * style. Padding-top: 0 so it sits ALIGNED with the timestamp + first
+ * line of content, not centered in a multi-line row. */
+.event {
+  width: 96px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 22%, transparent);
+  height: 20px;
+  line-height: 1;
+}
+
+/* Content column — gets the remaining width on the first row. */
+.text {
+  color: #1e293b;
+  /* `overflow-wrap: anywhere` (modern, well-supported) lets very long
+   * unbreakable tokens like file paths or `mcp__archon__loogle` wrap
+   * at any character instead of forcing the whole flex item to grow.
+   * `word-break: break-word` is the legacy fallback for older Safari. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding-top: 1px;
+}
+
+.toolName {
+  font-weight: 600;
+  color: #4338ca;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .expandable { cursor: pointer; }
-.expandable:hover { color: var(--text-primary); }
-.expandHint { color: var(--text-muted); font-size: 10px; }
+.expandable:hover { color: #0f172a; }
+
+.expandHint {
+  color: #94a3b8;
+  font-size: 10px;
+  margin-left: 4px;
+  user-select: none;
+}
+
+/* Expanded detail — full-width row beneath the headline. The
+ * `flex-basis: 100%` triggers a wrap, so the detail occupies its own
+ * row instead of competing for horizontal space with the headline. */
 .detail {
-  width: 100%;
-  padding: 6px 8px; margin: 2px 0 4px 0;
-  background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 3px;
-  font-size: 11px; color: var(--text-secondary);
-  overflow-x: auto; white-space: pre-wrap; word-break: break-word;
-  max-height: 400px; overflow-y: auto;
+  flex-basis: 100%;
+  padding: 10px 14px;
+  margin: 4px 0 0 76px; /* indent to align with the .text column */
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #6366f1;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #334155;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 400px;
+  overflow-y: auto;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }

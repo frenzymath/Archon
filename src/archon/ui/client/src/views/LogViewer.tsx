@@ -4,7 +4,7 @@ import { useLogs } from '../hooks/useApi';
 import { useLogDeepLink } from '../hooks/useLogDeepLink';
 import { useLogStream } from '../hooks/useLogStream';
 import type { LogEntry, LogGroup } from '../types';
-import { fmtDuration } from '../utils/format';
+import { fmtDuration, truncateSubject } from '../utils/format';
 import LogEntryLine from '../components/LogEntryLine';
 import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './LogViewer.module.css';
@@ -64,18 +64,31 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
 
   const isComplete = !!meta?.completedAt;
   const canShowRunning = isLatest && !isComplete;
-  const runningElapsed = canShowRunning
-    && (meta?.prover?.status === 'running' || meta?.plan?.status === 'running' || meta?.review?.status === 'running')
+  const isAnyRunning =
+    meta?.prover?.status === 'running'
+    || meta?.plan?.status === 'running'
+    || meta?.review?.status === 'running'
+    || meta?.refactor?.status === 'running';
+  const runningElapsed = canShowRunning && isAnyRunning
     ? fmtElapsedMinutes(meta?.startedAt, nowMs)
     : '';
 
-  // Only the latest iteration may present a running/live state.
+  // Active phase detection — order reflects loop execution (plan → refactor → prover → review)
   const activePhase = canShowRunning && meta
     ? (meta.review?.status === 'running' ? 'review'
       : meta.prover?.status === 'running' ? 'prover'
+      : meta.refactor?.status === 'running' ? 'refactor'
       : meta.plan?.status === 'running' ? 'plan'
       : meta.stage)
     : undefined;
+  // ``meta.stage`` is read literally from PROGRESS.md's "## Current
+  // Stage" line, which is sometimes a single word (`prover`, `polish`)
+  // and sometimes a free-form sentence. Cap the visible width so the
+  // sidebar header doesn't grow to the whole subject when the stage
+  // line is verbose. Full text remains in the title attribute below.
+  const activePhaseDisplay = activePhase
+    ? truncateSubject(activePhase, 14)
+    : '';
 
   return (
     <div className={styles.group}>
@@ -86,45 +99,168 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
         </span>
         {meta?.mode === 'parallel' && <span className={styles.groupMode}>∥</span>}
         {isComplete && <span className={styles.groupDone}>✓</span>}
-        {canShowRunning && activePhase && <span className={styles.groupStage}>{activePhase}</span>}
-        {canShowRunning && (meta?.prover?.status === 'running' || meta?.plan?.status === 'running' || meta?.review?.status === 'running') && <span className={styles.groupLive}>●</span>}
+        {canShowRunning && activePhase && (
+          <span className={styles.groupStage} title={activePhase}>
+            {activePhaseDisplay}
+          </span>
+        )}
+        {canShowRunning && isAnyRunning && <span className={styles.groupLive}>●</span>}
         {runningElapsed && <span className={styles.groupElapsed}>{runningElapsed}</span>}
+        {meta?.commit && (
+          <span
+            className={styles.commitBadge}
+            title={meta.commit.subject}
+          >
+            {meta.commit.shortSha}
+          </span>
+        )}
       </div>
 
       {expanded && (
         <div className={styles.groupBody}>
+          {meta?.commit && (
+            <div className={styles.commitRow} title={meta.commit.subject}>
+              <span className={styles.commitSha}>{meta.commit.shortSha}</span>
+              <span className={styles.commitSubject}>
+                {truncateSubject(meta.commit.subject, 32)}
+              </span>
+            </div>
+          )}
           {meta && (
             <div className={styles.metaBar}>
               <PhaseTag label="plan" status={canShowRunning ? meta.plan?.status : (meta.plan?.status === 'done' ? 'done' : undefined)} secs={meta.plan?.durationSecs} />
+              <PhaseTag label="refactor" status={canShowRunning ? meta.refactor?.status : (meta.refactor?.status === 'done' ? 'done' : undefined)} secs={meta.refactor?.durationSecs} />
               <PhaseTag label="prover" status={canShowRunning ? meta.prover?.status : (meta.prover?.status === 'done' ? 'done' : undefined)} secs={meta.prover?.durationSecs} />
               <PhaseTag label="review" status={canShowRunning ? meta.review?.status : (meta.review?.status === 'done' ? 'done' : undefined)} secs={meta.review?.durationSecs} />
               <ProverStatusBar provers={canShowRunning ? meta.provers : Object.fromEntries(Object.entries(meta.provers || {}).map(([k, v]) => [k, { ...v, status: v.status === 'done' ? 'done' : 'stale' }]))} />
             </div>
           )}
 
-          {group.files.map(f => {
+          {(() => {
+            // A subagent report is shown INSIDE its parent stream's
+            // view (rendered at the top of the main panel when the
+            // stream is selected). Hide the report's own sidebar row
+            // when a matching stream exists, so the sidebar lists one
+            // entry per dispatch, not two. Orphan reports (no parent
+            // stream — legacy archives from older Archon versions)
+            // still render as standalone rows.
+            const streamKeys = new Set<string>();
+            for (const f of group.files) {
+              const role = f.role || '';
+              if (!isSubagentStreamRole(role)) continue;
+              const inner = role.slice('subagent-'.length);
+              streamKeys.add(subagentPairKey(inner, f.subagentSlug || ''));
+            }
+            return group.files.filter(f => {
+              const role = f.role || '';
+              if (!isSubagentReportRole(role, f.subagentSlug)) return true;
+              const inner = role.slice(0, -'-report'.length);
+              return !streamKeys.has(subagentPairKey(inner, f.subagentSlug || ''));
+            });
+          })().map(f => {
             const isProver = f.role === 'prover' && f.path.includes('/provers/');
-            const displayName = isProver
-              ? f.name.replace('.jsonl', '').replace(/_/g, '/')
-              : f.role || f.name.replace('.jsonl', '');
+            const isArtifact = f.name.endsWith('.md');
+            const isSubagentStream = isSubagentStreamRole(f.role || '');
+            const isSubagentReport = isSubagentReportRole(f.role || '', f.subagentSlug);
+            const isSubagent = isSubagentStream || isSubagentReport;
+            // Server attaches `subagentSlug` for subagent files; fall
+            // back to the legacy filename match so the sidebar still
+            // labels archived reports written by older Archon versions.
+            let subagentSlug = f.subagentSlug ?? '';
+            if (!subagentSlug && isArtifact) {
+              const m = f.name.replace(/\.md$/, '').match(SUBAGENT_REPORT_RE);
+              if (m) subagentSlug = m[2];
+            }
+            // The iter number is already in the group header above —
+            // repeating it in every row is noise. Strip a trailing
+            // ``[-]iter\d+(-<hex>)*`` so ``isiso-routes-iter139-0eb8963``
+            // collapses to ``isiso-routes`` and a slug that's *only*
+            // ``iter140`` renders as the empty string (just the role
+            // chip stays).
+            const displaySlug = isSubagent
+              ? subagentSlug.replace(/(?:^|-)iter\d+(?:-[^-]+)*$/, '')
+              : subagentSlug;
+
+            let displayName: string;
+            if (isProver) {
+              // Slug shape:
+              //   non-multilane:   "<dir>_<dir>_<filename>"
+              //   multilane lane:  "<file_slug>__<lane>"
+              //   multilane merge: "<file_slug>__merge"
+              // Display: "<lane>//<filename>.lean" for multilane,
+              // "<filename>.lean" otherwise. Full slug stays in the
+              // tooltip via the existing `title` attribute.
+              const base = f.name.replace('.jsonl', '');
+              const splitIdx = base.lastIndexOf('__');
+              let lane: string | null = null;
+              let fileSlug: string;
+              if (splitIdx >= 0) {
+                lane = base.slice(splitIdx + 2);
+                fileSlug = base.slice(0, splitIdx);
+              } else {
+                fileSlug = base;
+              }
+              const lastUnderscore = fileSlug.lastIndexOf('_');
+              const fileBase = lastUnderscore >= 0
+                ? fileSlug.slice(lastUnderscore + 1)
+                : fileSlug;
+              const fileName = fileBase ? `${fileBase}.lean` : '';
+              displayName = lane ? `${lane}//${fileName}` : fileName;
+            } else if (isSubagent) {
+              displayName = displaySlug;
+            } else if (isArtifact) {
+              displayName = displaySlug;
+            } else {
+              displayName = f.role || f.name.replace('.jsonl', '');
+            }
+
             if (f.name === 'provers-combined.jsonl') return null;
 
             const proverSlug = f.name.replace('.jsonl', '');
             const proverStatus = isProver && meta?.provers?.[proverSlug]?.status;
+            const subagentRoleLabel = isSubagent
+              ? subagentDisplayRole(f.role || '')
+              : '';
+            // Subagent stream icon: ▶ to read as "running invocation"
+            // versus ◆ for the archived report (same family color).
+            const subagentColor = ROLE_COLORS[f.role || ''] || '#888';
 
             return (
               <div
                 key={f.path}
-                className={`${styles.fileItem} ${f.path === selectedFile ? styles.fileItemActive : ''}`}
+                className={`${styles.fileItem} ${f.path === selectedFile ? styles.fileItemActive : ''} ${isSubagent ? styles.fileItemSubagent : ''}`}
                 onClick={() => onSelect(f.path)}
+                title={f.commit ? `${f.name}\n${f.commit.shortSha} · ${f.commit.subject}` : f.name}
               >
                 {isProver && (
                   <span className={styles.fileStatus} style={{
                     color: proverStatus === 'done' ? 'var(--green)' : proverStatus === 'running' ? 'var(--blue)' : proverStatus === 'error' ? 'var(--red)' : 'var(--text-muted)'
                   }}>●</span>
                 )}
-                {!isProver && <span className={styles.fileRole}>{f.role}</span>}
-                <span className={styles.fileName}>{isProver ? displayName : ''}</span>
+                {isSubagentStream && (
+                  <span className={styles.fileStatus} style={{ color: subagentColor }}>▶</span>
+                )}
+                {isSubagentReport && (
+                  <span className={styles.fileStatus} style={{ color: subagentColor }}>◆</span>
+                )}
+                {isArtifact && !isSubagent && (
+                  <span
+                    className={styles.fileStatus}
+                    style={{ color: ROLE_COLORS[f.role || ''] || '#e36209' }}
+                  >◆</span>
+                )}
+                {isSubagent ? (
+                  <span
+                    className={styles.fileSubagentRole}
+                    style={{ color: subagentColor }}
+                  >{subagentRoleLabel}</span>
+                ) : (
+                  !isProver && <span className={styles.fileRole}>{f.role}</span>
+                )}
+                <span className={styles.fileName}>
+                  {isProver ? displayName : (displaySlug || '')}
+                </span>
+                {f.commit && <span className={styles.fileCommit}>{f.commit.shortSha}</span>}
               </div>
             );
           })}
@@ -137,9 +273,54 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
 // --- Role tag colors ---
 const ROLE_COLORS: Record<string, string> = {
   plan: 'var(--blue)',
+  'plan-post-refactor': 'var(--blue)',
+  refactor: '#e36209',
+  'refactor-manual': '#e36209',
+  'refactor-directive': '#e36209',
+  'refactor-report': '#e36209',
+  // Subagent JSONL streams (one entry per `archon subagent <role>` run).
+  // Same colors as the corresponding `<role>-report` so a stream and
+  // its archived report read as the same family.
+  'subagent-refactor': '#e36209',
+  'subagent-analogy': '#a371f7',
+  'subagent-challenger': '#cf222e',
+  // Subagent reports archived by the plan agent.
+  'analogy-report': '#a371f7',     // Mathlib-precedent analogies.
+  'challenger-report': '#cf222e',  // Challenges/<Name>.lean sanity checks.
   prover: 'var(--purple)',
   review: 'var(--orange)',
 };
+
+// Files generated by a subagent invocation: a JSONL stream + a final
+// report. Detected generically so any new subagent — blueprint-reviewer,
+// strategy-critic, progress-critic, mathlib-analogist, … — surfaces
+// without UI changes. The relationship to the parent dispatch is
+// inferred from the role+subagentSlug pair attached by the server.
+function isSubagentStreamRole(role: string): boolean {
+  return role.startsWith('subagent-');
+}
+// A `-report` role is a subagent report only when the server tagged
+// it with a subagentSlug. The legacy refactor-phase ``refactor-report.md``
+// artifact (no slug, no parent dispatch) is NOT a subagent report.
+function isSubagentReportRole(role: string, subagentSlug: string | undefined): boolean {
+  return role.endsWith('-report') && !!subagentSlug;
+}
+
+function subagentDisplayRole(role: string): string {
+  // "subagent-refactor" → "refactor"; "analogy-report" → "analogy".
+  if (role.startsWith('subagent-')) return role.slice('subagent-'.length);
+  if (role.endsWith('-report')) return role.slice(0, -'-report'.length);
+  return role;
+}
+
+// Pair a subagent stream with its report: both share the inner role
+// name (the slice between ``subagent-`` and ``-report``) plus the
+// same subagentSlug. The map key encodes both.
+function subagentPairKey(innerName: string, slug: string): string {
+  return `${innerName}|${slug}`;
+}
+
+const SUBAGENT_REPORT_RE = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-(.+)-report$/;
 
 const FILTER_OPTIONS = [
   { value: 'shell', label: 'shell' },
@@ -185,6 +366,8 @@ export default function LogViewer() {
   const { entries, streaming } = useLogStream(selectedFile);
   const highlightConsumedRef = useRef(false);
 
+  const selectedIsArtifact = selectedFile.endsWith('.md');
+
   const goBackToDiffs = () => {
     if (!backTarget) return;
     navigate(`${backTarget.pathname}${backTarget.search || ''}`);
@@ -210,14 +393,12 @@ export default function LogViewer() {
     return () => window.clearInterval(interval);
   }, []);
 
-  // Consume deep-link once on first load
   useEffect(() => {
     if (!selectedFile && initialSelectedFile) {
       setSelectedFile(initialSelectedFile);
     }
   }, [selectedFile, initialSelectedFile]);
 
-  // Scroll to highlighted timestamp only once, on the initial deep-linked file
   useEffect(() => {
     if (highlightConsumedRef.current) return;
     if (!selectedFile || !initialSelectedFile || selectedFile !== initialSelectedFile) return;
@@ -227,7 +408,6 @@ export default function LogViewer() {
     }
   }, [selectedFile, initialSelectedFile, entries]);
 
-  // Pre-compute closest entry ts only for the initial deep-linked file
   const closestHighlightTs = useMemo(() => {
     if (selectedFile !== initialSelectedFile) return '';
     if (!initialHighlightTs || entries.length === 0) return '';
@@ -241,9 +421,8 @@ export default function LogViewer() {
       if (dist < minDist) { minDist = dist; bestTs = e.ts; }
     }
     return bestTs;
-  }, [entries, initialHighlightTs]);
+  }, [entries, initialHighlightTs, selectedFile, initialSelectedFile]);
 
-  // Derive the role of the selected file
   const selectedRole = useMemo(() => {
     if (!logsData || !selectedFile) return '';
     for (const g of logsData.groups) {
@@ -253,7 +432,81 @@ export default function LogViewer() {
     return '';
   }, [logsData, selectedFile]);
 
-  // Auto-select first file only if deep-link didn't choose one
+  const selectedSubagentSlug = useMemo(() => {
+    if (!logsData || !selectedFile) return '';
+    for (const g of logsData.groups) {
+      const f = g.files.find(f => f.path === selectedFile);
+      if (f) return f.subagentSlug || '';
+    }
+    return '';
+  }, [logsData, selectedFile]);
+
+  // When a subagent STREAM is selected, locate the matching report
+  // file in the same iter group so we can render its markdown at the
+  // top of the main panel (cleaner than a separate sidebar row).
+  // The pairing key is the inner role name + the shared subagentSlug.
+  const matchingReportPath = useMemo(() => {
+    if (!logsData || !selectedFile || !isSubagentStreamRole(selectedRole)) return '';
+    const inner = selectedRole.slice('subagent-'.length);
+    for (const g of logsData.groups) {
+      const stream = g.files.find(f => f.path === selectedFile);
+      if (!stream) continue;
+      const report = g.files.find(f => {
+        const r = f.role || '';
+        return isSubagentReportRole(r, f.subagentSlug)
+          && f.subagentSlug === stream.subagentSlug
+          && r.slice(0, -'-report'.length) === inner;
+      });
+      return report?.path || '';
+    }
+    return '';
+  }, [logsData, selectedFile, selectedRole]);
+
+  // One-shot fetch of the report markdown. The report is final once
+  // the subagent finishes; no need for a WebSocket. The state stays
+  // empty until the report file exists on disk — at which point the
+  // top-of-panel block appears, exactly the "shows up when the agent
+  // finishes" behavior we want.
+  const [reportContent, setReportContent] = useState<string>('');
+  useEffect(() => {
+    setReportContent('');
+    if (!matchingReportPath) return;
+    let cancelled = false;
+    fetch(`/api/logs/${matchingReportPath}`)
+      .then(r => r.ok ? r.json() : [])
+      .then((rows: LogEntry[]) => {
+        if (cancelled) return;
+        const first = Array.isArray(rows) ? rows[0] : null;
+        const content = (first && first.content) || '';
+        setReportContent(content);
+      })
+      .catch(() => { /* report not landed yet — show nothing */ });
+    return () => { cancelled = true; };
+  }, [matchingReportPath]);
+
+  const selectedRoleLabel = useMemo(() => {
+    if (!selectedRole) return '';
+    const isSubagent = isSubagentStreamRole(selectedRole)
+      || selectedRole.endsWith('-report');
+    if (!isSubagent) return selectedRole;
+    const role = subagentDisplayRole(selectedRole);
+    const tag = isSubagentStreamRole(selectedRole)
+      ? 'subagent'
+      : 'report';
+    return selectedSubagentSlug
+      ? `${role} ${tag} · ${selectedSubagentSlug}`
+      : `${role} ${tag}`;
+  }, [selectedRole, selectedSubagentSlug]);
+
+  const selectedCommit = useMemo(() => {
+    if (!logsData || !selectedFile) return undefined;
+    for (const g of logsData.groups) {
+      const f = g.files.find(f => f.path === selectedFile);
+      if (f?.commit) return f.commit;
+    }
+    return undefined;
+  }, [logsData, selectedFile]);
+
   useEffect(() => {
     if (!logsData || selectedFile || initialSelectedFile) return;
     if (logsData.groups.length > 0) {
@@ -263,18 +516,32 @@ export default function LogViewer() {
     if (logsData.flat.length > 0) setSelectedFile(logsData.flat[0].path);
   }, [logsData, selectedFile, initialSelectedFile]);
 
-  // Filtered entries
   const filtered = useMemo(() => {
+    if (selectedIsArtifact) return entries;
     return entries.filter(e => selectedFilterSet.has(e.event as FilterEvent));
-  }, [entries, selectedFilterSet]);
+  }, [entries, selectedFilterSet, selectedIsArtifact]);
 
   const visibleEntries = useMemo(() => filtered.filter(e => e.event !== 'session_end'), [filtered]);
 
-  // Summary from session_end (shown at top when selected)
   const sessionEnd = useMemo(() => entries.find(e => e.event === 'session_end'), [entries]);
-  const showSessionSummary = !!sessionEnd && selectedFilterSet.has('session_end');
+  const showSessionSummary = !selectedIsArtifact && !!sessionEnd && selectedFilterSet.has('session_end');
+  // Prefer the LAST assistant text emitted over the session_end's
+  // ``summary`` field. When the agent dispatches subagents in parallel,
+  // it often emits a "Waiting for the N subagents…" text and *that*
+  // gets frozen into the session_end summary; the agent's real final
+  // message lands later. Walking the entries gives the user the most
+  // recent assistant output regardless of when session_end was sealed.
+  const summaryText = useMemo(() => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.event !== 'text') continue;
+      const t = (e.content || '').trim();
+      if (t) return e.content as string;
+    }
+    return sessionEnd?.summary || '';
+  }, [entries, sessionEnd]);
 
-  const selectedLabel = selectedFile.replace(/\.jsonl$/, '').replace(/\//g, ' / ');
+  const selectedLabel = selectedFile.replace(/\.jsonl$/, '').replace(/\.md$/, '').replace(/\//g, ' / ');
   const latestGroupId = useMemo(() => {
     if (!logsData?.groups?.length) return '';
     return logsData.groups.reduce((latest, group) => {
@@ -285,6 +552,9 @@ export default function LogViewer() {
       return latest;
     }).id;
   }, [logsData]);
+
+  // For .md artifacts the server returns a single entry with event="text"
+  const artifactContent = selectedIsArtifact && entries.length > 0 ? (entries[0].content || '') : '';
 
   return (
     <div className={styles.root}>
@@ -335,51 +605,83 @@ export default function LogViewer() {
           )}
           {selectedRole && (
             <span className={styles.roleTag} style={{ color: ROLE_COLORS[selectedRole] || 'var(--text-muted)' }}>
-              {selectedRole}
+              {selectedRoleLabel}
             </span>
           )}
           <span className={styles.selectedLabel}>{selectedLabel || 'Select a log'}</span>
-          <div className={styles.filterBar} aria-label="Event type filters">
-            <span className={styles.filterLabel}>Show</span>
-            <div className={styles.filterChips}>
-              {FILTER_OPTIONS.map(option => {
-                const active = selectedFilterSet.has(option.value);
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`${styles.filterChip} ${active ? styles.filterChipActive : ''}`}
-                    onClick={() => toggleFilter(option.value)}
-                    aria-pressed={active}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
+          {selectedCommit && (
+            <span
+              className={styles.selectedCommit}
+              title={`${selectedCommit.shortSha} · ${selectedCommit.subject}`}
+            >
+              {selectedCommit.shortSha}
+              <span className={styles.selectedCommitSubject}>
+                {truncateSubject(selectedCommit.subject, 80)}
+              </span>
+            </span>
+          )}
+          {!selectedIsArtifact && (
+            <div className={styles.filterBar} aria-label="Event type filters">
+              <span className={styles.filterLabel}>Show</span>
+              <div className={styles.filterChips}>
+                {FILTER_OPTIONS.map(option => {
+                  const active = selectedFilterSet.has(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`${styles.filterChip} ${active ? styles.filterChipActive : ''}`}
+                      onClick={() => toggleFilter(option.value)}
+                      aria-pressed={active}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {!allFiltersSelected && (
+                <button type="button" className={styles.resetFiltersBtn} onClick={resetFilters}>
+                  Reset
+                </button>
+              )}
             </div>
-            {!allFiltersSelected && (
-              <button type="button" className={styles.resetFiltersBtn} onClick={resetFilters}>
-                Reset
-              </button>
-            )}
-          </div>
-          {streaming && <span className={styles.live}>● live</span>}
-          <span className={styles.count}>{filtered.length} entries</span>
+          )}
+          {streaming && !selectedIsArtifact && <span className={styles.live}>● live</span>}
+          <span className={styles.count}>
+            {selectedIsArtifact ? `${artifactContent.length.toLocaleString()} chars` : `${filtered.length} entries`}
+          </span>
         </div>
 
         {showSessionSummary && <RunSummaryBar entries={entries} />}
 
         <div className={styles.container}>
-          {/* Summary block at top */}
-          {showSessionSummary && sessionEnd?.summary && (
+          {/* Render markdown artifacts inline */}
+          {selectedIsArtifact && artifactContent && (
             <div className={styles.summaryBlock}>
-              <span className={styles.summaryLabel}>Summary</span>
-              <MarkdownBlock content={sessionEnd.summary} className={styles.summaryText} />
+              <MarkdownBlock content={artifactContent} className={styles.summaryText} />
             </div>
           )}
 
-          {/* All entries, newest first */}
-          {(() => {
+          {/* JSONL logs: summary block + entries */}
+          {/* Subagent report inlined on top of its stream's view —
+              users read the dispatch's output without leaving the
+              stream's page. Empty until the report .md lands on
+              disk, which is exactly when the subagent finishes. */}
+          {!selectedIsArtifact && reportContent && (
+            <div className={styles.summaryBlock}>
+              <span className={styles.summaryLabel}>Report</span>
+              <MarkdownBlock content={reportContent} className={styles.summaryText} />
+            </div>
+          )}
+
+          {!selectedIsArtifact && showSessionSummary && summaryText && (
+            <div className={styles.summaryBlock}>
+              <span className={styles.summaryLabel}>Summary</span>
+              <MarkdownBlock content={summaryText} className={styles.summaryText} />
+            </div>
+          )}
+
+          {!selectedIsArtifact && (() => {
             let highlightAttached = false;
             return visibleEntries.slice().reverse().map((e, i) => {
               const isHighlighted = !!(closestHighlightTs && e.ts === closestHighlightTs);
@@ -395,12 +697,14 @@ export default function LogViewer() {
             });
           })()}
 
-          {selectedFile && filtered.length === 0 && (
+          {selectedFile && !selectedIsArtifact && filtered.length === 0 && (
             <div className={styles.emptyContent}>No entries match the current filters.</div>
           )}
 
           {entries.length === 0 && selectedFile && (
-            <div className={styles.emptyContent}>No entries in this log file yet.</div>
+            <div className={styles.emptyContent}>
+              {selectedIsArtifact ? 'Artifact is empty.' : 'No entries in this log file yet.'}
+            </div>
           )}
         </div>
       </div>

@@ -152,6 +152,25 @@
   padding: 2px 6px;
   background: var(--bg-tertiary);
   border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.iterCommit {
+  font-weight: 700;
+  color: var(--blue);
+  border-left: 1px solid var(--border);
+  padding-left: 6px;
+}
+.iterSynthetic {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(0,0,0,0.06);
+  border-radius: 2px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
 .compareControls {

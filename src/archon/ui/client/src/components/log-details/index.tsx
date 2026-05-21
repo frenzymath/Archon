@@ -10,6 +10,7 @@ import SnapshotDetail from './SnapshotDetail';
 import ToolResultDetail from './ToolResultDetail';
 import ThinkingDetail from './ThinkingDetail';
 import JsonDetail from './JsonDetail';
+import PromptDetail from './PromptDetail';
 
 interface Props {
   entry: LogEntry;
@@ -49,6 +50,18 @@ export default function DetailRenderer({ entry }: Props) {
 
     case 'code_snapshot': {
       return <SnapshotDetail entry={entry} />;
+    }
+
+    case 'prompt': {
+      const promptText = entry.prompt || '';
+      return (
+        <PromptDetail
+          prompt={promptText}
+          length={entry.length}
+          attempt={entry.attempt}
+          resumeSessionId={entry.resume_session_id}
+        />
+      );
     }
 
     case 'session_end': {

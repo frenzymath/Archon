@@ -1,7 +1,7 @@
 // --- Log types ---
 export interface LogEntry {
   ts: string;
-  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot';
+  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt';
   level?: 'info' | 'warn' | 'error';
   message?: string;
   content?: string;
@@ -21,9 +21,32 @@ export interface LogEntry {
   output_tokens?: number;
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
+  // prompt event fields — the initial prompt sent to claude (stamped right
+  // after session_start so users can verify hint injection, see what the
+  // continuation prompt was on --resume runs, etc.).
+  prompt?: string;
+  length?: number;
+  attempt?: number;
+  resume_session_id?: string;
 }
 
-export interface LogFile { name: string; path: string; size: number; modified: string; role?: string }
+export interface LogFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+  /** Server-computed first-event timestamp (first JSONL line's `ts`,
+   *  or mtime for .md artifacts). Used to render the iter file list
+   *  in execution order — server already sorts by this, so the
+   *  client only reads it for tooltips/diagnostics. */
+  startedAt?: string;
+  role?: string;
+  /** Slug of a subagent run (`<role>-<slug>.jsonl|.md`). Set by the
+   *  server when the file is a subagent JSONL stream or report. */
+  subagentSlug?: string;
+  /** Commit associated with this specific file/phase. */
+  commit?: { sha: string; shortSha: string; subject: string; date: string };
+}
 
 export interface LogGroup {
   id: string;
@@ -36,9 +59,11 @@ export interface LogGroup {
     completedAt?: string;
     wallTimeSecs?: number;
     plan?: { status: string; durationSecs?: number };
+    refactor?: { status: string; durationSecs?: number };
     prover?: { status: string; durationSecs?: number };
     review?: { status: string; durationSecs?: number };
     provers?: Record<string, { file: string; status: string }>;
+    commit?: { sha: string; shortSha: string; subject: string; date: string };
   };
 }
 
@@ -128,6 +153,7 @@ export interface IterationMeta {
   completedAt?: string;
   wallTimeSecs?: number;
   plan?: { status: string; durationSecs?: number };
+  refactor?: { status: string; durationSecs?: number };
   prover?: { status: string; durationSecs?: number };
   review?: { status: string; durationSecs?: number };
   provers?: Record<string, ProverMeta>;
@@ -177,6 +203,7 @@ export interface TimelineEntry {
   ts?: string;            // timestamp from code_snapshot event
   proverLog?: string;     // slug for log cross-reference
   sourceFile?: string;    // actual edited file recorded by code_snapshot event
+  synthetic?: boolean;    // content came from git / empty placeholder, not a real prover snapshot
   diff?: string;
   addedLines?: number;
   removedLines?: number;

@@ -1,6 +1,8 @@
-import { useProgress, useSummary, useSorryCount, useTasks } from '../hooks/useApi';
-import { fmtDuration, fmtTime } from '../utils/format';
+import { useProgress, useStrategy, useSummary, useSorryCount, useTasks, useToUserAlert } from '../hooks/useApi';
+import { useGitHead } from '../hooks/useGitLog';
+import { fmtDuration, fmtTime, truncateSubject } from '../utils/format';
 import { STATUS_COLORS } from '../utils/constants';
+import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './Overview.module.css';
 
 /** Render inline markdown: **bold** and `code` */
@@ -15,15 +17,32 @@ const STAGES = ['init', 'autoformalize', 'prover', 'polish', 'COMPLETE'];
 
 export default function Overview() {
   const { data: progress } = useProgress();
+  const { data: strategy } = useStrategy();
   const { data: summary } = useSummary();
   const { data: sorryData } = useSorryCount();
   const { data: tasks } = useTasks();
+  const { data: headData } = useGitHead();
+  const { data: toUserAlert } = useToUserAlert();
 
   const stage = progress?.stage || 'init';
   const stageIdx = STAGES.indexOf(stage);
+  const head = headData?.commit;
 
   return (
     <div className={styles.root}>
+      {toUserAlert && (
+        <div className={styles.alertBanner}>
+          <strong>Message from Archon to the user</strong> <br/>
+          <MarkdownBlock content={toUserAlert} className={styles.alertText} />
+        </div>
+      )}
+      {head && (
+        <div className={styles.commitBanner} title={head.subject}>
+          <span className={styles.commitSha}>{head.shortSha}</span>
+          <span className={styles.commitBranch}>{head.branch}</span>
+          <span className={styles.commitSubject}>{truncateSubject(head.subject, 100)}</span>
+        </div>
+      )}
       <div className={styles.stages}>
         {STAGES.map((s, i) => (
           <span key={s} className={i === stageIdx ? styles.current : i < stageIdx ? styles.done : styles.future}>
@@ -65,6 +84,29 @@ export default function Overview() {
           </ul>
         </div>
       )}
+
+      {/* Long-arc strategy. The plan agent owns this file; we render
+          whatever it has written. The shipped template is just
+          headings + HTML-comment guidance, so until the planner adds
+          actual content we show a placeholder rather than an empty
+          collapsible. */}
+      {(() => {
+        const raw = strategy?.content ?? '';
+        if (!raw.trim()) return null;
+        const stripped = raw.replace(/<!--[\s\S]*?-->/g, '');
+        const hasBody = stripped.split('\n').some(line => {
+          const t = line.trim();
+          return t.length > 0 && !t.startsWith('#');
+        });
+        return (
+          <details className={styles.strategyBox} open>
+            <summary className={styles.strategySummary}>Strategy</summary>
+            {hasBody
+              ? <MarkdownBlock content={raw} className={styles.strategyMd} />
+              : <div className={styles.strategyPlaceholder}>Plan agent hasn't drafted a strategy yet.</div>}
+          </details>
+        );
+      })()}
 
       {tasks && tasks.length > 0 && (
         <div className={styles.section}>

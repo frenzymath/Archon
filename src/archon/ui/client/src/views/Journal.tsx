@@ -3,11 +3,13 @@ import {
   useJournalSessions, useJournalMilestones, useJournalSummary,
   useJournalRecommendations, useJournalAllMilestones,
 } from '../hooks/useApi';
+import { useGitHead, useGitLog } from '../hooks/useGitLog';
 import { aggregateTargets } from '../utils/aggregate';
 import { STATUS_COLORS } from '../utils/constants';
 import MilestoneCard from '../components/MilestoneCard';
 import AttemptCard from '../components/AttemptCard';
 import MarkdownBlock from '../components/MarkdownBlock';
+import { truncateSubject } from '../utils/format';
 import styles from './Journal.module.css';
 
 type Tab = 'milestones' | 'targets';
@@ -25,6 +27,41 @@ export default function Journal() {
 
   // --- Targets tab data (cross-session) ---
   const { data: allMilestoneData } = useJournalAllMilestones();
+  const { data: headData } = useGitHead();
+  const { data: gitData } = useGitLog();
+  const head = headData?.commit;
+
+  // Commits reachable from the current HEAD — sessions from other branches
+  // must not pollute the Journal banner. Without this filter the view can
+  // pick up e.g. an iter-2 commit from `main` while you're forked at iter-1.
+  const reachableFromHead = useMemo(() => {
+    const reachable = new Set<string>();
+    if (!head || !gitData?.commits) return reachable;
+    const bySha = new Map(gitData.commits.map(c => [c.sha, c]));
+    const stack = [head.sha];
+    while (stack.length) {
+      const sha = stack.pop()!;
+      if (reachable.has(sha)) continue;
+      reachable.add(sha);
+      const c = bySha.get(sha);
+      if (c) for (const p of c.parents) stack.push(p);
+    }
+    return reachable;
+  }, [head, gitData]);
+
+  // Map the selected session_NNN to its iter-NNN review commit. Sessions are
+  // produced by the review agent once per iteration, so the numeric suffix
+  // lines up with the iter index.
+  const sessionCommit = useMemo(() => {
+    if (!currentSession || !gitData?.commits) return undefined;
+    const match = currentSession.match(/session_(\d+)/);
+    if (!match) return undefined;
+    const iterId = `iter-${String(parseInt(match[1], 10)).padStart(3, '0')}`;
+    const reachable = (c: typeof gitData.commits[number]) =>
+      reachableFromHead.size === 0 || reachableFromHead.has(c.sha);
+    return gitData.commits.find(c => reachable(c) && c.iteration === iterId && c.phase === 'review')
+      ?? gitData.commits.find(c => reachable(c) && c.iteration === iterId);
+  }, [currentSession, gitData, reachableFromHead]);
 
   const allAggregated = useMemo(() => {
     if (!allMilestoneData?.length) return [];
@@ -45,8 +82,25 @@ export default function Journal() {
     );
   }
 
+  // Show the session-specific commit when on the Milestones tab (it reflects the
+  // review commit behind the currently inspected session). Otherwise fall back to
+  // the repo HEAD so users still see where "now" is.
+  const bannerCommit = tab === 'milestones' && sessionCommit
+    ? { shortSha: sessionCommit.shortSha, branch: sessionCommit.branch ?? 'main', subject: sessionCommit.subject }
+    : head;
+
   return (
     <div className={styles.root}>
+      {bannerCommit && (
+        <div className={styles.commitBanner} title={bannerCommit.subject}>
+          <span className={styles.commitSha}>{bannerCommit.shortSha}</span>
+          <span className={styles.commitBranch}>{bannerCommit.branch}</span>
+          <span className={styles.commitSubject}>{truncateSubject(bannerCommit.subject, 100)}</span>
+          {tab === 'milestones' && sessionCommit && (
+            <span className={styles.commitSessionHint}>session {currentSession.replace('session_', '#')}</span>
+          )}
+        </div>
+      )}
       {/* Top-level tabs: Milestones (per-session) | Targets (global) */}
       <div className={styles.tabs}>
         <button className={`${styles.tab} ${tab === 'milestones' ? styles.tabActive : ''}`} onClick={() => setTab('milestones')}>Milestones</button>
