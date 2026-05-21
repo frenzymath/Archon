@@ -14,11 +14,18 @@ Touches the outer ``<project>/.git/hooks/`` only when the user already
 has an outer git repo. Never overwrites a non-Archon hook of the same
 name — surfaces a warning instead so the user can merge the logic by
 hand.
+
+The bundled hooks ship with ``#!/usr/bin/env python3``, but Archon may
+be installed via ``uv`` into a venv that only exposes ``python`` (no
+``python3``). Git's hook runner then aborts with ``env: python3: No
+such file or directory``. To avoid that, this step rewrites the
+shebang to ``#!{sys.executable}`` at install time so the hook always
+runs under the same interpreter Archon was installed under.
 """
 
 from __future__ import annotations
 
-import shutil
+import sys
 from pathlib import Path
 
 from archon import log
@@ -64,8 +71,7 @@ class GitHooksStep(InitStep):
                 dst = hooks_dir / hook_name
                 if dst.exists():
                     if self._is_archon_hook(dst, markers):
-                        shutil.copy2(hook_src, dst)
-                        dst.chmod(0o755)
+                        self._install_hook(hook_src, dst)
                         log.step(f"Refreshed {label} {hook_name} hook (Archon-managed)")
                         installed += 1
                     else:
@@ -75,8 +81,7 @@ class GitHooksStep(InitStep):
                             f"scrub manually or move yours aside and re-run."
                         )
                     continue
-                shutil.copy2(hook_src, dst)
-                dst.chmod(0o755)
+                self._install_hook(hook_src, dst)
                 log.step(f"Installed {label} {hook_name} hook at {dst}")
                 installed += 1
 
@@ -118,3 +123,29 @@ class GitHooksStep(InitStep):
         except OSError:
             return False
         return any(m in head for m in markers)
+
+    @staticmethod
+    def _install_hook(src: Path, dst: Path) -> None:
+        """Copy ``src`` to ``dst`` and stamp the shebang to the running
+        interpreter.
+
+        The bundled hooks ship with ``#!/usr/bin/env python3``, which
+        breaks under uv-managed venvs that only expose ``python`` (the
+        hook then aborts with ``env: python3: No such file or
+        directory``, which reads as "Git or your system is broken"
+        rather than "hook is misconfigured"). Rewriting the shebang at
+        install time pins the hook to the same Python ``archon`` itself
+        is running under.
+        """
+        text = src.read_text(encoding="utf-8")
+        # Replace only the first line if it's a shebang. Defensive: if the
+        # bundled file has been edited to drop the shebang, we leave it
+        # alone rather than synthesising one and risking double-shebang.
+        if text.startswith("#!"):
+            first_newline = text.find("\n")
+            if first_newline >= 0:
+                text = f"#!{sys.executable}" + text[first_newline:]
+        dst.write_text(text, encoding="utf-8")
+        # copy2 would also carry over mode; we wrote fresh content, so
+        # set the executable bit explicitly.
+        dst.chmod(0o755)
