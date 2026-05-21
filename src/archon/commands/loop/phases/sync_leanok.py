@@ -14,10 +14,19 @@ judgement.
 A single inner-git commit ``archon[NNN/marker-sync]`` captures the
 diff so the user can audit before proceeding to review. When the
 script finds nothing to change, no commit is made.
+
+The phase also writes ``{state_dir}/sync_leanok-state.json``: a small
+record of the last successful sync (iter, SHA, timestamp, change
+counts, chapters touched). The review prompt surfaces this file so
+read-only checkers can distinguish "this chapter's marker is stale,
+sync will strip it" from "genuine headline-laundering" — the failure
+mode the user flagged in iter-162/163 when sync_leanok had a
+keyword-prefix bug that left sorry-bodied decls falsely marked.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import subprocess
 import sys
@@ -26,8 +35,48 @@ from pathlib import Path
 
 from archon import log
 from archon.commands.tooling.iteration import commit_phase
+from archon.commands.tooling.inner_git import InnerGit
 
 from .base import Phase, PhaseResult
+
+
+def _write_state(
+    state_dir: Path,
+    *,
+    iter_num: int,
+    project_path: Path,
+    added: int,
+    removed: int,
+    chapters_touched: list[str],
+    secs: int,
+) -> None:
+    """Stamp the per-iter sync result so reviewers can attribute markers.
+
+    Best-effort; failure is silent (the sync itself already succeeded).
+    """
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        sha: str | None = None
+        try:
+            git = InnerGit(project_path)
+            if git.is_initialized():
+                sha = git.head_sha(short=True)
+        except Exception:
+            sha = None
+        payload = {
+            "iter": iter_num,
+            "sha": sha,
+            "timestamp": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "added": added,
+            "removed": removed,
+            "duration_secs": secs,
+            "chapters_touched": sorted(set(chapters_touched)),
+        }
+        (state_dir / "sync_leanok-state.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def _script_path() -> Path:
@@ -92,12 +141,33 @@ class SyncLeanokPhase(Phase):
         except json.JSONDecodeError:
             changes = []
 
-        if not isinstance(changes, list) or not changes:
-            log.success(f"sync_leanok: no marker changes ({secs}s)")
-            return PhaseResult()
+        if not isinstance(changes, list):
+            changes = []
 
         added = sum(1 for c in changes if c.get("action") == "add")
         removed = sum(1 for c in changes if c.get("action") == "remove")
+        chapters_touched = [
+            c.get("chapter") for c in changes
+            if c.get("action") in ("add", "remove") and c.get("chapter")
+        ]
+
+        # Always stamp the state file — even when 0 changes — so the
+        # review prompt can confirm "sync ran for iter N" rather than
+        # leaving reviewers to defensively flag any \leanok they see.
+        _write_state(
+            ctx.state_dir,
+            iter_num=ctx.iter_num,
+            project_path=ctx.project_path,
+            added=added,
+            removed=removed,
+            chapters_touched=chapters_touched,
+            secs=secs,
+        )
+
+        if not changes:
+            log.success(f"sync_leanok: no marker changes ({secs}s)")
+            return PhaseResult()
+
         log.success(
             f"sync_leanok: +{added} / -{removed} \\leanok markers ({secs}s)"
         )

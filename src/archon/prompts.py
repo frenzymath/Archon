@@ -931,6 +931,47 @@ def _blueprint_doctor_block(state_dir: Path, iter_num: int) -> str:
         means the doctor was either skipped or found nothing to flag.""")
 
 
+def _sync_leanok_block(state_dir: Path, iter_num: int) -> str:
+    """Surface the deterministic ``\\leanok`` sync's run record.
+
+    Before flagging a ``\\leanok`` marker as suspicious (e.g. proof-block
+    ``\\leanok`` on a sorry-bodied decl), check the state file:
+
+      ``{state_dir}/sync_leanok-state.json``
+
+    written by the ``sync_leanok`` phase between the prover and review.
+    Its ``iter`` field tells you which iteration's tree the sync last
+    ran against; ``sha`` pins the inner-git HEAD at that moment;
+    ``chapters_touched`` lists chapters whose markers were modified.
+
+    If ``iter`` equals the current review iteration, any ``\\leanok``
+    the sync left in place reflects the script's deterministic verdict
+    (file compiles, no attributable sorry under that decl) — flag it as
+    "genuine laundering" only after auditing the Lean source yourself.
+    If the file is missing or ``iter`` lags behind, the markers may
+    simply be stale; note that ambiguity in your summary rather than
+    raising a CRITICAL.
+    """
+    state_file = state_dir / "sync_leanok-state.json"
+    return dedent(f"""
+
+        ## ``\\leanok`` sync attribution
+
+        Before flagging any proof-block ``\\leanok`` on a sorry-bodied
+        decl as headline laundering, consult:
+
+          {state_file}
+
+        Schema: ``{{iter, sha, timestamp, added, removed, chapters_touched}}``.
+
+        - ``iter`` equals this iteration ({iter_num:03d}) ⇒ sync has run for
+          the current tree. Any remaining ``\\leanok`` is the script's
+          deterministic verdict; only flag genuine laundering after a
+          first-hand audit of the Lean source.
+        - ``iter`` is older or the file is missing ⇒ markers may be stale.
+          Note the ambiguity in ``summary.md`` instead of raising CRITICAL.""")
+
+
 def build_review_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     session_num: int, session_dir: Path, attempts_file: Path,
@@ -944,6 +985,7 @@ def build_review_prompt(
     )
     catalog_block = _subagent_catalog_block(project_path, role="review")
     doctor_block = _blueprint_doctor_block(state_dir, iter_num)
+    sync_block = _sync_leanok_block(state_dir, iter_num)
 
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
@@ -959,4 +1001,4 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + doctor_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
+          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + doctor_block + sync_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
