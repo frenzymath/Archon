@@ -39,6 +39,22 @@ def find_multilane_local_config(state_dir: Path) -> Path | None:
 
 
 def _read_config_file(path: Path) -> dict:
+    # Guard against pre-v0.2.0 callers that handed in ``state_dir``
+    # itself. ``load_multilane_config`` is now driven from
+    # ``.archon/config.json`` via ``multilane_config_from_simple``, but
+    # the legacy entrypoint stayed callable with a directory path —
+    # which then crashed deep inside ``read_text`` with a confusing
+    # ``IsADirectoryError``. Surface a clear error pointing at the new
+    # call site.
+    if path.is_dir():
+        raise ValueError(
+            f'Expected a multilane config file, got a directory: {path}. '
+            f'The pre-v0.2.0 .archon/multilane/ layout is gone; the loop '
+            f'now reads multilane settings from .archon/config.json via '
+            f'multilane_config_from_simple.'
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f'Multilane config not found: {path}')
     suffix = path.suffix.lower()
     text = path.read_text(encoding='utf-8')
     if suffix == '.json':
