@@ -76,6 +76,7 @@ _FALLBACK_OBJECTIVES_HEADINGS = (
     "## Current objectives",
     "## current objectives",
     "## CURRENT OBJECTIVES",
+    "## Current Strategy",
     "## Strategy",
     "## Targets",
     "## Plan",
