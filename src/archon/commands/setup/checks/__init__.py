@@ -15,6 +15,7 @@ from .graphviz import GraphvizCheck
 from .leanblueprint import LeanBlueprintCheck
 from .lean import LeanToolchainCheck
 from .node import NodeCheck
+from .poppler import PopplerCheck
 from .python import PythonCheck
 from .ripgrep import RipgrepCheck
 from .tex import TexToolchainCheck
@@ -35,4 +36,5 @@ __all__ = [
     "NodeCheck",
     "DashboardDepsCheck",
     "ApiKeysCheck",
+    "PopplerCheck",
 ]

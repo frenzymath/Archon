@@ -232,14 +232,16 @@ NOT_RETRIEVED — <date>. No local source file exists. DO NOT cite this as `(rea
 
 ## `references/summary.md` registration
 
-Append one bullet to the existing list. Make the retrieval outcome visible in the index itself, so a planner skimming `summary.md` sees at a glance which sources actually have a local file:
+Append one row to the `## File inventory` table. The template has three columns: `File`, `Description`, `How to read (confirmed working)`. Make the retrieval outcome visible in the index itself, so a planner skimming `summary.md` sees at a glance which sources actually have a local file AND which tool they should use to ingest each one:
 
 ```markdown
-- [`<slug>.md`](./<slug>.md) → `<slug>.pdf` / `<slug>.tex` — <one-line topic note>
-- [`<slug>.md`](./<slug>.md) → ⚠ NOT RETRIEVED (<short reason: paywalled / 404 / HTML-only>) — <topic note>
+| [`<slug>.md`](./<slug>.md) → `<slug>.pdf` / `<slug>.tex` | <one-line topic note> | `Read` (with `pages: "1-5"` if long); fallback `pdftotext <slug>.pdf -` |
+| [`<slug>.md`](./<slug>.md) → ⚠ NOT RETRIEVED (<short reason>) | <topic note> | n/a — no local file |
 ```
 
-If `references/summary.md` doesn't exist, create it with a minimal header before appending.
+For the `How to read` column, record what *actually worked* during your verification step (you opened the file to verify it isn't an HTML-paywall stub — write down the command you used). `Read` for PDFs assumes ``poppler-utils`` is installed (``archon setup`` handles it); if `Read` errors with a missing-`pdftoppm` message, record the exact `pdftotext` (or other) fallback you used. The column is a living log — later agents who ingest the same file should overwrite the entry with a better entry if they find one.
+
+If `references/summary.md` doesn't exist, create it with the standard header + the inventory table before appending.
 
 ## Rules
 

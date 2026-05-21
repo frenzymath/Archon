@@ -15,6 +15,8 @@ Read `archon-protected.yaml` at the project root. The declarations listed there 
 
 A paragraph-by-paragraph summary of every informal source is pasted into your prompt from `references/summary.md`. Read it to understand the context, and you might read the related source file in `references/` directly. Do not rely on memory or summaries alone.
 
+The summary's `How to read (confirmed working)` column is a living log other agents maintain. If you ingest a reference and the entry is missing or wrong, update it with the tool/command that actually worked (e.g. `Read` with `pages: "1-5"`, or a `pdftotext` fallback) so the next agent skips the rediscovery.
+
 ## Blueprint-based informal content
 
 This project uses a blueprint (plasTeX + `leanblueprint`). Informal proof sketches live in `blueprint/src/chapters/<slug>.tex`, one file per Lean source file. The slug mapping is:

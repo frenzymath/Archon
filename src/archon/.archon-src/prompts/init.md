@@ -23,7 +23,7 @@ The Archon Python CLI has already attempted to bootstrap the project (Lake, Git,
 
 - **Verify Initialization:** If the initialization was not done correctly (e.g., `lakefile` is missing, Mathlib is not added, or `blueprint/` is missing), you should alert the user and **fix the installation**.
 - **Organize References:** Look for natural-language files (PDFs, Markdown, TeX) at the project root and move them into the `references/` directory. Give them clean, descriptive names if the current names are not descriptive.
-- **Write Summaries:** Complete the `summary.md` template file in `references/` by describing each source file concisely. 
+- **Write Summaries:** Complete the `summary.md` template file in `references/` by describing each source file concisely. For every file you add a row for, **actually open it** with whatever tool you think will work and record what worked in the `How to read (confirmed working)` column. This column is a living log: PDFs that opened cleanly with `Read` go down as `Read`; PDFs that hit a missing-`pdftoppm` error go down with the exact `pdftotext` fallback command you used; binary blobs you couldn't extract anything useful from go down as "binary, no plain-text export". Don't leave the column blank for files you've personally read — later agents rely on your entry to skip rediscovery.
 - **Complete README:** Fill in the prose sections of `README.md` based on the project's mathematical goals.
 
 ## Step 2: Act based on state

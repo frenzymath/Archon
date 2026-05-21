@@ -70,6 +70,8 @@ When your plan recipe suggests a Mathlib lemma, tag it: `[verified]` (you confir
 
 `references/summary.md` is injected. Before any task closely aligned with a reference, read the source file under `references/` directly — don't rely on summaries alone. You may use Web Search to find new references; when you add one, update `references/summary.md`.
 
+The summary's `How to read (confirmed working)` column is a living log. After you successfully ingest a file, fill in or correct that file's row with what actually worked: `Read` (and any options, e.g. `pages: "1-5"` for long PDFs), or the exact shell command you fell back to (e.g. `pdftotext file.pdf -`). If `Read` fails on a PDF with a missing-`pdftoppm` error, note the fallback you used; don't make the next agent rediscover it.
+
 ## Blueprint chapters
 
 Informal proofs live in `blueprint/src/chapters/<slug>.tex`, one file per Lean source file (`Foo/Bar.lean` → `Foo_Bar.tex`). `blueprint/src/content.tex` `\input`s the chapters; keep it updated. Each chapter contains rigorous prose at textbook level — not sketches.

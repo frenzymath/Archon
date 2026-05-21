@@ -29,8 +29,9 @@ def setup(
     """Install system-level dependencies.
 
     Checks and installs (without silent sudo) git, Python 3.10+, curl,
-    elan/lean/lake, uv, ripgrep, Claude Code, Node.js (via nvm), dashboard
-    npm dependencies, and verifies external-model API keys.
+    elan/lean/lake, uv, ripgrep, poppler-utils (pdftoppm/pdftotext, needed
+    for the Read tool to ingest PDF references), Claude Code, Node.js (via
+    nvm), dashboard npm dependencies, and verifies external-model API keys.
 
     Also installs leanblueprint and its system-level prerequisites
     (graphviz + dev headers, TeX Live, ghostscript, dvisvgm, pdf2svg,

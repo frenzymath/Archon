@@ -16,6 +16,7 @@ from .checks import (
     LeanBlueprintCheck,
     LeanToolchainCheck,
     NodeCheck,
+    PopplerCheck,
     PythonCheck,
     RipgrepCheck,
     TexToolchainCheck,
@@ -63,6 +64,7 @@ class SetupCommand:
         log.rule("Python tooling & packages")
         UvCheck(self.installer).run()
         RipgrepCheck(self.installer).run()
+        PopplerCheck(self.installer).run()
 
     def _check_claude_code(self) -> None:
         log.rule("Claude Code")
