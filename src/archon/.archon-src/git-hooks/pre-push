@@ -43,6 +43,17 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("Anthropic sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("OpenAI sk-proj-",   re.compile(r"sk-proj-[A-Za-z0-9_\-]{30,}")),
     ("Google AIza",       re.compile(r"AIza[A-Za-z0-9_\-]{30,}")),
+    # GitHub PATs: classic / OAuth / server-to-server / refresh / user
+    # tokens all share the ``gh[pousr]_`` prefix; the fine-grained PATs
+    # use ``github_pat_`` with an 82-char body. GitLab's analogue is
+    # ``glpat-`` followed by ~20 base62 chars.
+    ("GitHub PAT",        re.compile(r"gh[pousr]_[A-Za-z0-9]{36,251}")),
+    ("GitHub fine PAT",   re.compile(r"github_pat_[A-Za-z0-9_]{82}")),
+    ("GitLab PAT",        re.compile(r"glpat-[A-Za-z0-9_\-]{20,}")),
+    # AWS access key IDs: ``AKIA`` (long-term) and ``ASIA`` (session).
+    ("AWS access key ID", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")),
+    # Slack bot/user/app/legacy tokens.
+    ("Slack token",       re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}")),
     # Generic sk- with a long opaque body (Moonshot, DeepSeek, others).
     ("Provider sk- key",  re.compile(r"sk-[A-Za-z0-9]{40,}")),
 ]
@@ -50,18 +61,22 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
 # Env-var assignment patterns: catch `KEY=value` even when the value
 # doesn't match a known provider prefix (e.g. an env-style block in a
 # JSON settings file). Negative lookahead excludes the redaction marker
-# so already-cleaned content doesn't re-trip the hook.
+# so already-cleaned content doesn't re-trip the hook. The value class
+# includes ``/+=`` so realistic base64-shaped secrets — e.g.
+# ``AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`` —
+# match through the slashes instead of being truncated at the first one.
 ENV_KEY_NAMES = (
     "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
     "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
-    "AWS_SECRET_ACCESS_KEY", "HUGGINGFACE_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "HUGGINGFACE_TOKEN",
 )
 ENV_ASSIGN = re.compile(
     r"(?P<key>" + "|".join(ENV_KEY_NAMES) + r")"
     r"\s*[=:]\s*['\"]?"
     r"(?!ARCHON_REDACTED_SECRET)"
-    r"(?P<val>[A-Za-z0-9_\-]{16,})"
+    r"(?P<val>[A-Za-z0-9_\-/+=]{16,})"
 )
 
 # Path-based file-type filter — most leaks happen in these. Other files
