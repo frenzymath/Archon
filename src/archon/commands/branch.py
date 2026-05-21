@@ -81,20 +81,30 @@ class BranchCommand:
         if not self.force:
             self._refuse_if_outer_dirty(resolved, force_hint)
 
-        if inner.is_dirty() and not self.force:
-            log.warn(
-                "Inner git has uncommitted agent work (e.g. a mid-iteration "
-                "Ctrl-C). Switching may refuse with a conflict or carry those "
-                "changes across.",
-            )
-            log.step(f"To plow through, re-run with --force: {force_hint}")
-            if not typer.confirm("Continue anyway?", default=False):
-                raise typer.Exit(0)
+        if inner.is_dirty():
+            self._gate_inner_dirty(force_hint)
 
+        # Capture the pre-fork ref so a failed checkout can be rolled
+        # back. ``current_branch`` is None on a detached HEAD; in that
+        # case ``head_sha`` is the only fallback. Either way, ``_switch``
+        # below restores this state on exception.
+        pre_branch = inner.current_branch()
+        pre_sha = inner.head_sha(short=False)
+        created_this_call = False
         if not existed:
             self._create_branch(inner, safe)
+            created_this_call = True
 
-        self._switch(inner, safe)
+        try:
+            self._switch(inner, safe)
+        except typer.Exit:
+            self._rollback(
+                inner, safe,
+                created=created_this_call,
+                pre_branch=pre_branch, pre_sha=pre_sha,
+            )
+            raise
+
         self._drop_stale_state_dirs(resolved, inner)
 
     # ── private ────────────────────────────────────────────────────────
@@ -121,6 +131,93 @@ class BranchCommand:
             + (f" --from {self.from_ref}" if self.from_ref else "")
             + " --force"
         )
+
+    def _gate_inner_dirty(self, force_hint: str) -> None:
+        """Block (or confirm-through) a branch switch on a dirty inner git.
+
+        Previously ``--force`` skipped this check entirely. That turned
+        out to be exactly the failure path the reviewer hit: an inner
+        git left with a partially-written ``index`` (e.g. SIGKILL during
+        the plan phase), ``--force`` bypassed every guard, and ``git
+        checkout -f`` ran against the corrupt index and trashed the
+        repo. Now both modes warn; ``--force`` requires a second
+        explicit confirmation rather than silently steamrolling.
+        """
+        if self.force:
+            log.warn(
+                "Inner git has uncommitted agent work AND --force was "
+                "passed. Forcing a switch onto a dirty inner tree has "
+                "been observed to corrupt the inner repo when the index "
+                "is in a partially-written state (e.g. SIGKILL during a "
+                "phase).",
+            )
+            log.step("Recommended recovery before retrying:")
+            log.step("  git --git-dir=.archon/git-dir status   # inspect")
+            log.step("  git --git-dir=.archon/git-dir reset --hard HEAD")
+            log.step("Then re-run WITHOUT --force.")
+            if not typer.confirm(
+                "Proceed with --force anyway (last chance to back out)?",
+                default=False,
+            ):
+                raise typer.Exit(1)
+            return
+
+        log.warn(
+            "Inner git has uncommitted agent work (e.g. a mid-iteration "
+            "Ctrl-C). Switching may refuse with a conflict or carry those "
+            "changes across.",
+        )
+        log.step(f"To plow through, re-run with --force: {force_hint}")
+        if not typer.confirm("Continue anyway?", default=False):
+            raise typer.Exit(0)
+
+    @staticmethod
+    def _rollback(
+        inner: InnerGit,
+        new_branch: str,
+        *,
+        created: bool,
+        pre_branch: str | None,
+        pre_sha: str | None,
+    ) -> None:
+        """Undo a partial fork after a failed checkout.
+
+        Without this, a failed ``_switch`` left the just-created
+        ``new_branch`` pointing at a commit that no other ref reached,
+        and HEAD potentially mid-move — the exact "branch alt at <sha>
+        but inner repo unreachable through archon" failure the reviewer
+        hit. We delete the new branch (if WE created it) and force HEAD
+        back to its pre-fork state.
+
+        Best-effort: every step swallows failures rather than masking
+        the original checkout error the caller is about to re-raise.
+        """
+        if created:
+            try:
+                inner.delete_branch(new_branch, force=True)
+                log.step(f"Rolled back: deleted branch {new_branch}")
+            except Exception as e:
+                log.warn(f"Could not delete partial branch {new_branch}: {e}")
+
+        # Restore HEAD. Prefer the symbolic ref (branch name) over a
+        # detached sha, since git users expect a branch name on HEAD.
+        if pre_branch:
+            try:
+                inner._run(
+                    ["symbolic-ref", "HEAD", f"refs/heads/{pre_branch}"],
+                    check=False,
+                )
+                log.step(f"Rolled back: HEAD → {pre_branch}")
+                return
+            except Exception:
+                pass
+        if pre_sha:
+            try:
+                inner._run(["update-ref", "--no-deref", "HEAD", pre_sha],
+                           check=False)
+                log.step(f"Rolled back: HEAD → {pre_sha[:8]}")
+            except Exception as e:
+                log.warn(f"Could not restore HEAD to {pre_sha[:8]}: {e}")
 
     @staticmethod
     def _refuse_if_outer_dirty(project_path: Path, force_hint: str) -> None:

@@ -417,6 +417,24 @@ class InnerGit:
     def has_branch(self, name: str) -> bool:
         return _safe_branch_name(name) in self.list_branches()
 
+    def delete_branch(self, name: str, *, force: bool = False) -> None:
+        """Delete the branch ``name``. Used to roll back a fork when the
+        subsequent checkout failed and left the branch dangling.
+
+        ``force=True`` passes ``-D`` so a branch pointing at a commit
+        unreachable from any other ref can still be removed (the common
+        case after a failed checkout — the new branch is the only ref
+        keeping its target alive). Without ``force`` git refuses to drop
+        an unmerged branch.
+        """
+        if not self.is_initialized():
+            raise InnerGitError(
+                ["branch", "-d", name], "", "inner repo not initialized", 1,
+            )
+        safe = _safe_branch_name(name)
+        flag = "-D" if force else "-d"
+        self._run(["branch", flag, safe], check=False)
+
     # ── worktrees (multilane) ─────────────────────────────────────────
 
     def worktree_add(
