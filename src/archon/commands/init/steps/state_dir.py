@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from archon import log
 
-from ..utils import copy_file, data_path, fail_permission
+from ..utils import _files_equal, copy_file, data_path, fail_permission
 from .base import InitStep
 
 
@@ -58,10 +58,18 @@ class StateDirStep(InitStep):
             copied += 1
 
         claude_src = template_dir / "CLAUDE.md"
+        claude_dst = ctx.state_dir / "CLAUDE.md"
         if claude_src.exists():
-            if (ctx.state_dir / "CLAUDE.md").exists() and not ctx.fresh:
+            # Only warn when the file is actually about to change. The
+            # previous warning fired even on a clean re-init where the
+            # user hadn't edited CLAUDE.md, which was misleading.
+            if (
+                claude_dst.exists()
+                and not ctx.fresh
+                and not _files_equal(claude_src, claude_dst)
+            ):
                 log.warn("CLAUDE.md will be overwritten with the latest bundled version.")
-            copy_file(claude_src, ctx.state_dir / "CLAUDE.md", overwrite=True)
+            copy_file(claude_src, claude_dst, overwrite=True)
         else:
             log.warn("Template not found: CLAUDE.md")
 

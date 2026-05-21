@@ -36,8 +36,30 @@ def data_path(sub_path: str = "") -> Path:
     return Path(str(root))
 
 
+def _files_equal(a: Path, b: Path) -> bool:
+    """True iff ``a`` and ``b`` exist and have byte-identical content.
+
+    Used by ``copy_file`` to avoid logging "Overwriting existing file"
+    when the destination is already a verbatim copy of the source. A
+    cheap mtime check would be faster but is unreliable across
+    filesystem operations (and tests that touch the file).
+    """
+    try:
+        if a.stat().st_size != b.stat().st_size:
+            return False
+        return a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
+
+
 def copy_file(src: Path, dst: Path, overwrite: bool = False) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # Identical content → silent no-op. The previous behavior warned
+    # "Overwriting existing file: <name>" for every bundled template
+    # the user hadn't touched, which made re-init logs noisy and falsely
+    # implied lossy mutations.
+    if dst.exists() and _files_equal(src, dst):
+        return
     if dst.exists() and overwrite:
         log.warn(f"Overwriting existing file: {dst.name}")
     if overwrite or not dst.exists():
