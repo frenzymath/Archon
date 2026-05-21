@@ -70,7 +70,7 @@ class ReinitController:
 
         typer.echo("")
         typer.echo("How would you like to proceed?")
-        typer.echo("  [k] keep       — do nothing, use the existing setup as-is")
+        typer.echo("  [k] keep       — preserve prompts/CLAUDE.md; refresh MCP, skills, hooks, version stamp")
         typer.echo("  [m] merge      — compare each file and let Claude help reconcile (recommended)")
         typer.echo("  [o] overwrite  — replace all Archon files with the bundled versions")
         typer.echo("  [a] abort      — cancel")
