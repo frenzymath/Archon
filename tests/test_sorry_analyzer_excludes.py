@@ -9,7 +9,6 @@ magnitude (e.g. 3826 vs 11 on a real project).
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile

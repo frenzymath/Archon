@@ -8,7 +8,6 @@ import subprocess
 from importlib import resources
 from pathlib import Path
 
-from archon import log
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:

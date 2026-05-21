@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
-from archon.prompts import build_parallel_prover_prompt
 from archon.state import parse_objective_files
 
 from .collect import summarize_assignments, write_runtime_jsonl

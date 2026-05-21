@@ -15,7 +15,6 @@ import typer
 
 from archon import log
 from archon.state import (
-    SessionRename,
     apply_session_renames,
     cleanup_empty_sessions,
     plan_session_renames,

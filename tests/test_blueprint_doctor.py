@@ -148,7 +148,7 @@ class RunBlueprintDoctorTest(unittest.TestCase):
         )
         r = run_blueprint_doctor(self.root)
         self.assertIsNotNone(r)
-        labels = {l for _, _, l in r.broken_refs}
+        labels = {label for _, _, label in r.broken_refs}
         self.assertEqual(labels, {"thm:bad"})
 
     def test_detects_empty_uses(self):

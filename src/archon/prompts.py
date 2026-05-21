@@ -380,8 +380,8 @@ def _references_summary(
 
     # Strip the template placeholder; if only placeholder text remains, skip.
     non_meta = [
-        l for l in content.splitlines()
-        if l.strip() and not l.strip().startswith("<!--")
+        line for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("<!--")
     ]
     if len(non_meta) <= 3:  # heading + table header + separator row
         return ""

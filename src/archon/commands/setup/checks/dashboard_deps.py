@@ -8,7 +8,7 @@ from pathlib import Path
 
 from archon import log
 
-from ..shell import data_path, has, run
+from ..shell import data_path, run
 from .base import DependencyCheck
 
 

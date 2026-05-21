@@ -176,7 +176,7 @@ class LoopCommand:
             "Subagents": subagent_status,
             "Multi-lane": (
                 f"enabled ({len(multilane_lanes)} lane{'s' if len(multilane_lanes) != 1 else ''}: "
-                f"{', '.join(str(l.get('lane_id', l.get('provider', '?'))) for l in multilane_lanes)})"
+                f"{', '.join(str(lane.get('lane_id', lane.get('provider', '?'))) for lane in multilane_lanes)})"
                 if opts.multilane_execute else "disabled"
             ),
         }

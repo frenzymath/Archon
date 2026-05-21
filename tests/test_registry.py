@@ -17,7 +17,6 @@ from pathlib import Path
 
 from archon.subagents.base import SubagentDescriptor
 from archon.subagents.registry import (
-    SubagentRegistry,
     build_registry,
     load_descriptors_from_dir,
     parse_descriptor_file,

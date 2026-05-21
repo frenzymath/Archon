@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import time
 from pathlib import Path
 from textwrap import dedent
 
@@ -63,10 +62,10 @@ def _read_directive(state_dir: Path) -> str | None:
     if not content:
         return None
     body_lines = [
-        l.strip() for l in content.splitlines()
-        if l.strip()
-        and not l.strip().startswith("#")
-        and not l.strip().startswith("<!--")
+        line.strip() for line in content.splitlines()
+        if line.strip()
+        and not line.strip().startswith("#")
+        and not line.strip().startswith("<!--")
     ]
     if not body_lines:
         return None
@@ -205,8 +204,8 @@ class RefactorRunCommand:
 
     def _show_preview(self, directive: str) -> None:
         preview_lines = [
-            l for l in directive.splitlines()
-            if l.strip() and not l.strip().startswith("<!--")
+            line for line in directive.splitlines()
+            if line.strip() and not line.strip().startswith("<!--")
         ][:8]
         for line in preview_lines:
             log.step(line)

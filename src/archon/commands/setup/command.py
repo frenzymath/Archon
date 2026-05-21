@@ -23,7 +23,6 @@ from .checks import (
     UvCheck,
 )
 from .installer import PackageInstaller, SudoMode
-from .shell import shell_rc
 
 
 class SetupCommand:
@@ -99,5 +98,4 @@ class SetupCommand:
 
     def _summarize(self) -> None:
         log.rule("Setup complete")
-        rc = shell_rc()
         log.success("All dependencies checked. You can now run: archon init")

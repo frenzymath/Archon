@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,8 +111,8 @@ class AppendHintFormatTest(unittest.TestCase):
             body = hints.read_text(encoding="utf-8")
             # Should contain a single discuss-format line `- [ts] ...`.
             lines = [
-                l for l in body.splitlines()
-                if l.strip().startswith("- [")
+                line for line in body.splitlines()
+                if line.strip().startswith("- [")
             ]
             self.assertEqual(len(lines), 1, f"expected one bullet line, got: {body!r}")
             # The line carries an ISO-8601 UTC timestamp in square brackets.

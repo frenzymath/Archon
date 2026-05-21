@@ -164,8 +164,8 @@ def find_sorries_in_file(filepath: Path) -> List[Sorry]:
             continue
 
         if SORRY_TOKEN_PATTERN.search(code_part):
-            context_before = [l.rstrip() for l in lines[max(0, i-3):i]]
-            context_after = [l.rstrip() for l in lines[i+1:min(len(lines), i+4)]]
+            context_before = [ln.rstrip() for ln in lines[max(0, i-3):i]]
+            context_after = [ln.rstrip() for ln in lines[i+1:min(len(lines), i+4)]]
 
             sorry = Sorry(
                 file=str(filepath),

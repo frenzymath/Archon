@@ -32,7 +32,7 @@ import sys
 import subprocess
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Set
+from typing import List, Tuple
 
 def extract_imports(content: str) -> List[Tuple[int, str]]:
     """Extract all import statements with their line numbers (1-indexed)"""

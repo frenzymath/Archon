@@ -566,7 +566,7 @@ def _looks_non_trivial(tex: str) -> bool:
     a handful of non-comment, non-blank lines as non-trivial.
     """
     real_lines = [
-        l for l in tex.splitlines()
-        if l.strip() and not l.strip().startswith("%")
+        line for line in tex.splitlines()
+        if line.strip() and not line.strip().startswith("%")
     ]
     return len(real_lines) > 5

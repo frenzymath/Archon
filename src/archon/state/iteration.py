@@ -121,7 +121,7 @@ def plan_session_renames(
         if not d.is_dir() or not d.name.startswith("session_"):
             continue
         try:
-            n = int(d.name.split("session_")[1])
+            int(d.name.split("session_")[1])
         except ValueError:
             continue
         files = [

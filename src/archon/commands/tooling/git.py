@@ -116,7 +116,7 @@ class Git:
         """
         gi = self.repo_path / ".gitignore"
         if gi.exists():
-            lines = [l.strip() for l in gi.read_text(encoding="utf-8").splitlines()]
+            lines = [line.strip() for line in gi.read_text(encoding="utf-8").splitlines()]
             if entry in lines:
                 return False
             with gi.open("a", encoding="utf-8") as f:

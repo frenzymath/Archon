@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import atexit
-import signal
 import subprocess
 import webbrowser
 from importlib import resources
@@ -15,7 +14,6 @@ from archon import log
 
 from .build import build_client, check_node, install_if_needed, needs_build
 from .pidfile import PidFileRegistry
-from .process import signal_pid_or_group, wait_for_exit
 from .server import ServerProcess
 
 

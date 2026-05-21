@@ -12,7 +12,6 @@ sections of README.md and summary.md, and propose initial objectives.
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 

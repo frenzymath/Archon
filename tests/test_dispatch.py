@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import threading
@@ -20,7 +19,6 @@ import unittest
 from pathlib import Path
 
 from archon.dispatch import (
-    MAX_PARALLEL_ENV_VAR,
     SLOTS_ENV_VAR,
     SlotPool,
 )
@@ -28,7 +26,6 @@ from archon.subagents.base import (
     ROOT_PARENT_SLUG,
     Subagent,
     SubagentDescriptor,
-    SubagentResult,
     WriteDomainViolation,
     _append_dispatch_jsonl,
     _domain_covers,
@@ -229,7 +226,6 @@ class WriteDomainValidationTest(unittest.TestCase):
 
     def test_child_in_domain_passes(self):
         sub = _make_fake_subagent(self.project)
-        log_base = self.iter_dir / "fake-child"
         # Triggers validation only (we patch out actual run to avoid claude).
         sub._validate_write_domain(
             self.dispatch_log, "parent", ["Algebra/Foo.lean"],
