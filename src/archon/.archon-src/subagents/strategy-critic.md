@@ -99,7 +99,25 @@ For each strategic route in `STRATEGY.md`:
 
 6. **Effort estimates.** If the strategy carries per-route LOC or iteration estimates, do they look honest given the scope of the route? Estimates that are wildly under-counted (e.g. "200 LOC for representability of Pic") indicate either underestimated effort or a misplanned route. The LOC cell carries two figures (`remaining · realized/it`); flag rows where they are internally inconsistent with `Iters left` — e.g. `≈250 · ~30/it` alongside `Iters left: 2` is arithmetically impossible (250 ÷ 30 ≈ 8), a dishonest-estimate signal — and rows reading `~0/it` that are still claimed as actively progressing.
 
-7. **Format compliance.** `STRATEGY.md` must follow the canonical skeleton documented in the plan prompt. Violations to flag:
+7. **Infrastructure-deferral patterns.** This is a distinct failure mode from sunk-cost and must be checked independently. An infrastructure-deferral pattern is present when any of the following hold:
+
+   - A route pivot changes the surface approach but the hardest prerequisite (a missing Mathlib construction, an unproven foundational lemma, a typeclass that doesn't exist) is the same before and after the pivot. The pivot renames the problem without solving it. To check: identify the hardest prerequisite in the current route and the hardest prerequisite in the route it replaced. If they are the same construction or the same gap, the pivot is avoidance.
+
+   - A required construction is described as "off-critical path", "future work", "deferred pending upstream Mathlib PR", "exceptional case", or similar language, while the project's stated goal provably requires it. The project's goal is not negotiable; if a construction is necessary for the final theorem, it is on the critical path by definition, regardless of what the strategy claims. Check by asking: does the final theorem statement in `## Goal` hold without the deferred construction? If no, the deferral is a goal weakening dressed as a strategic decision.
+
+   - The strategy splits the goal into a "main case" and one or more "exceptional cases", proves or plans to prove the main case, and defers the exceptional cases indefinitely. Unless the exceptional cases are genuinely independent theorems not required by `## Goal`, this is a goal weakening. Check the statement in `## Goal` — if it asserts something for ALL cases, each case is required.
+
+   - The strategy describes building infrastructure for a weaker or different statement than `## Goal` requires, with the intention of extending later. Plans requiring later extension of core infrastructure almost never complete the extension — flag as CHALLENGE.
+
+   - The strategy proposes huge phases and is reluctant to start working on them, without decomposing them into concrete sub-phases that it could have started on. This is a deferral pattern because it will always assume this phase it too difficult, but in pratice it should think like a mathlib contributor and decompose the phase into intermediate phases.
+
+   - A phase row in `## Phases & estimations` has `Iters left: ?` or `~0/it` velocity AND has been in that state without any active prover lane and without any concrete progress in the blueprints. Stagnant phases are infrastructure-deferral by inaction.
+
+   For each infrastructure-deferral finding: name the specific construction being deferred, confirm whether the stated goal requires it, and state whether any route in the strategy actually builds it with a concrete timeline. A construction deferred to "Mathlib upstream" with no project-side plan and no timeline is an unresolved gap in the project's strategy, not an accepted dependency.
+
+8. **Parallelism under-exploitation.** If the project has multiple independent files or proof obligations that are not sequentially dependent, but the strategy routes them through a single sequential phase, flag this as a throughput risk. Parallelism in prover dispatch is a planning obligation, not an optimization. A strategy that serializes independent work is implicitly estimating 2–3× the needed iter count.
+
+9. **Format compliance.** `STRATEGY.md` must follow the canonical skeleton documented in the plan prompt. Violations to flag:
 
    - **Size**: the file exceeds ~250 lines or ~12 KB.
    - **Headings**: the section list isn't exactly `## Goal`, `## Phases & estimations`, `## Routes`, `## Open strategic questions`, `## Mathlib gaps & new material` (in that order). Renamed or extra top-level sections (`## Project goal`, `## End-state`, `## Decomposition`, `## Roadmap`, `## Soundness rules`, etc.) are violations.
@@ -161,7 +179,7 @@ your audit.
 
 Write your report to `.archon/task_results/strategy-critic-<slug>.md` (or the parent-aware path when invoked nested — your invocation prompt names the exact path).
 
-**Omit-empty rule.** Every section below is optional except `## Slug`, `## Iteration`, `## Routes audited`, and `## Overall verdict`. If a section's right answer is "nothing to report", **OMIT the section entirely** — do NOT write "none", "N/A", "no findings detected", or "(omit if empty)" as filler content. The absence of a section IS the signal that nothing was found there; a `## Sunk-cost flags` heading with "(none detected)" underneath is bloat, not signal. Per-route blocks: when a route's verdict is SOUND with no flagged items, you may render the block as just the verdict line (e.g. `### Route: <name>\n- **Verdict**: SOUND — strategy is internally consistent and matches the project's goal`) and omit the bullet checklist above it. Filling templates with hollow content is exactly the failure mode this rule exists to avoid.
+**Omit-empty rule.** Every section below is optional except `## Slug`, `## Iteration`, `## Routes audited`, and `## Overall verdict`. If a section's right answer is "nothing to report", **OMIT the section entirely** — do NOT write "none", "N/A", "no findings detected", or "(omit if empty)" as filler content. The absence of a section IS the signal that nothing was found there. Per-route blocks: when a route's verdict is SOUND with no flagged items, render the block as just the verdict line and omit the bullet checklist above it.
 
 ```markdown
 # Strategy Critic Report
@@ -181,8 +199,10 @@ For each strategic route in STRATEGY.md, one block:
 - **Goal-alignment**: PASS | PARTIAL | FAIL — <one line>
 - **Mathematical soundness**: PASS | PARTIAL | FAIL — <one line>
 - **Sunk-cost reasoning detected**: yes | no — <if yes, name the sunk-cost claim verbatim>
+- **Infrastructure-deferral detected**: yes | no — <if yes: name the deferred construction; state whether the goal requires it; state whether any route in the strategy builds it with a concrete timeline>
 - **Phantom prerequisites**: <list any Mathlib infra the strategy assumes exists that you couldn't verify>
 - **Effort honesty**: <reasonable | under-counted | over-counted> — <one line>
+- **Parallelism under-exploited**: yes | no — <if yes, name the independent obligations being serialized>
 - **Verdict**: SOUND | CHALLENGE | REJECT
   - SOUND: the route makes sense and the planner should proceed.
   - CHALLENGE: the route has issues the planner must address (in STRATEGY.md or via an explicit rebuttal in plan.md) before this iter ends.
@@ -190,66 +210,72 @@ For each strategic route in STRATEGY.md, one block:
 
 ## Format compliance
 
-A separate block from "Routes audited" — this audits the *document* against the canonical skeleton, regardless of whether the strategic content is sound. Format and content are orthogonal: a strategy can be sound but poorly formatted, or well-formatted but unsound.
+A separate block from "Routes audited" — this audits the *document* against the canonical skeleton, regardless of whether the strategic content is sound.
 
 - **Size**: <line count> / <bytes> — within budget | over budget (~250 lines / ~12 KB).
-- **Headings**: PASS | FAIL — <if FAIL, list the headings that violate the canonical set, e.g. "extra `## Roadmap`, missing `## Phases & estimations`, renamed `## Goal` → `## Project goal`">.
+- **Headings**: PASS | FAIL — <if FAIL, list the violating headings>.
 - **Per-iter narrative detected**: yes | no — <if yes, quote one or two representative phrases verbatim>.
 - **Accumulation detected**: yes | no — <if yes, name the completed phases / excised routes still present>.
-- **Table discipline**: PASS | FAIL — <if FAIL, describe how `## Phases & estimations` deviates from the table-with-named-columns shape>.
-- **Appendix sections**: <list any "Historical", "Considered alternatives", "Past summary", etc. sections detected; omit if none>.
+- **Table discipline**: PASS | FAIL — <if FAIL, describe the deviation>.
+- **Appendix sections**: <list any detected; omit field if none>.
 - **Format verdict**: COMPLIANT | DRIFTED | NON-COMPLIANT
-  - COMPLIANT: minor or no deviations.
-  - DRIFTED: multiple deviations but core skeleton intact; planner should clean up this iter without a full restructure.
-  - NON-COMPLIANT: the document doesn't follow the skeleton. The planner MUST restructure STRATEGY.md in-place this iter, moving any per-iter narrative or appendix content to iter sidecars. This is a CHALLENGE-level finding; do not under-classify.
+
+## Infrastructure-deferral findings <!-- omit entire section if no deferral patterns detected -->
+
+Each infrastructure-deferral finding gets one block. Default severity CHALLENGE; escalate to REJECT when the deferral makes the stated goal unprovable without the deferred item.
+
+### Deferred: <construction name>
+
+- **Required by goal**: yes | no | partially — <one line>
+- **Current plan for building it**: <what STRATEGY.md says, or "none — deferred with no project-side plan">
+- **Timeline**: <concrete (iter estimate) | vague ("future work") | absent>
+- **Verdict**: CHALLENGE | REJECT — <one line>
 
 ## Alternative routes (suggested) <!-- omit entire section if no fresh alternatives -->
-
-For each suggested alternative the strategy doesn't mention, one block:
 
 ### Alternative: <name>
 
 - **What it looks like**: <one paragraph>
 - **Why it might be cheaper or sounder**: <one paragraph>
-- **What the current strategy may have rejected**: <if guessable from prose; otherwise "unclear, planner should clarify">
+- **What the current strategy may have rejected**: <if guessable; otherwise "unclear">
 - **Severity of the omission**: critical | major | minor
 
-## Sunk-cost flags <!-- omit entire section if no sunk-cost reasoning detected -->
+## Sunk-cost flags <!-- omit entire section if none -->
 
-For every instance of "we have already X, so we should continue with Y" reasoning in the strategy:
+- `<verbatim quote>` — Why this is sunk-cost: <one sentence>. Recommendation: <reframe on merits>.
 
-- `<verbatim quote>` — Why this is sunk-cost: <one sentence>. Recommendation: <reframe the decision on its merits, not its history>.
+## Prerequisite verification <!-- omit entire section if no Mathlib infrastructure to verify -->
 
-## Prerequisite verification <!-- omit entire section if strategy named no specific Mathlib infrastructure to verify -->
+- `<Mathlib name>`: VERIFIED | MISSING | RENAMED (as X)
 
-Each Mathlib infrastructure piece the strategy named:
+## Must-fix-this-iter <!-- omit entire section if zero CHALLENGE/REJECT verdicts AND format COMPLIANT AND no infrastructure-deferral findings -->
 
-- `<Mathlib name>`: VERIFIED (exists) | MISSING (couldn't locate) | RENAMED (exists under different name X)
-
-## Must-fix-this-iter <!-- omit entire section if zero CHALLENGE/REJECT verdicts AND format is COMPLIANT -->
-
-Every CHALLENGE and every REJECT verdict lands here, and every NON-COMPLIANT format verdict lands here. Apply verbatim, no under-classification:
+Every CHALLENGE, every REJECT, every NON-COMPLIANT format verdict, and every infrastructure-deferral CHALLENGE/REJECT lands here automatically. No under-classification.
 
 - Route <name>: CHALLENGE — <what the planner must address>.
-- Alternative <name>: critical — strategy ignored a cheaper / sounder route. Planner must address.
-- Phantom prerequisite <name>: strategy depends on a Mathlib piece I couldn't verify.
-- Format: NON-COMPLIANT — STRATEGY.md must be restructured in-place this iter. <list the two or three most impactful deviations>. Move per-iter narrative and appendix content to `iter/iter-NNN/plan.md`.
+- Route <name>: infrastructure-deferral CHALLENGE — <construction> required by goal, no concrete timeline. Planner must either build it this iter or produce a concrete plan with an iter estimate.
+- Alternative <name>: critical omission — <one line>.
+- Phantom prerequisite <name>: <one line>.
+- Format: NON-COMPLIANT — <two or three most impactful deviations>. Restructure STRATEGY.md in-place this iter.
 
 ## Overall verdict
 
-One paragraph: would a fresh mathematician approve this strategy as-is, or are there material concerns?
+One paragraph. If infrastructure-deferral findings exist, name them explicitly — "the strategy defers X, which is required for the stated goal" must appear verbatim so the plan agent cannot overlook it.
 ```
 
 ## Return value
 
 Your final assistant message:
 
-- One line: `<slug>: <overall verdict> — <N> routes audited, <M> CHALLENGE/REJECT verdicts, format=<COMPLIANT|DRIFTED|NON-COMPLIANT>`
+- One line: `<slug>: <overall verdict> — <N> routes audited, <M> CHALLENGE/REJECT verdicts, <K> infrastructure-deferral findings, format=<COMPLIANT|DRIFTED|NON-COMPLIANT>`
 - The path to your full report.
 
 ## Reminders
 
-- **You are the project's adversarial reader.** Don't be polite. If a route is sunk-cost reasoning dressed up as strategy, say so.
+- **You are the project's adversarial reader.** Don't be polite. If a route is avoidance dressed as strategy, say so.
+- **Infrastructure deferral is not strategy.** A construction required by the goal is on the critical path regardless of what the strategy labels it.
+- **A pivot that moves the same hard problem one layer deeper is not a pivot.** Check the hardest prerequisite in the new route against the hardest prerequisite in the old route. If they match, flag it.
+- **"Off-critical path" is a red flag, not a planning decision**, when the goal requires the deferred item.
 - **Don't request more context.** Iter history is what you're meant to be free of.
 - **Cite Mathlib precisely.** Use the LSP tools to verify before claiming a prerequisite exists or is missing.
 - **Strict severity.** CHALLENGE and REJECT are must-fix; do not under-classify to keep momentum.

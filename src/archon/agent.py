@@ -666,7 +666,7 @@ class ClaudeAgent:
                         last_activity = time.monotonic()
                     elif time.monotonic() - last_activity > idle_timeout_s:
                         idle_timeout_hit = True
-                        log.warning(
+                        log.warn(
                             f"No JSONL activity for {idle_timeout_s}s on "
                             f"attempt {attempt}; terminating claude."
                         )
