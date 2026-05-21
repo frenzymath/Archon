@@ -155,7 +155,10 @@ class PackageDataDoctorCheck(DoctorCheck):
         "templates": "archon-template/PROGRESS.md",
         "prompts": "prompts",
         "skills": "skills/lean4/.claude-plugin/plugin.json",
-        "agents": "agents",
+        # The v0.2.0 PR renamed the bundled directory from ``agents/`` to
+        # ``subagents/``; the doctor's lookup has to follow or it emits
+        # a permanent false-positive ``✗ 1 error(s)``.
+        "subagents": "subagents",
         "scripts": "scripts",
         "tools": "tools",
     }
