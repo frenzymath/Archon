@@ -33,7 +33,7 @@ def _strip_html_comments(text: str) -> str:
     """
     return _HTML_COMMENT_RE.sub("", text)
 
-from archon.commands.tooling.blueprint import lean_file_to_chapter_slug
+from archon.commands.tooling.blueprint import chapter_slug_for_lean_file
 from archon.state.iter_state import (
     format_recent_iter_sidecars_for_prompt,
     objectives_sidecar_path,
@@ -395,11 +395,35 @@ def _blueprint_chapter_hint(project_path: Path, rel_lean_path: str) -> str:
     """Build the 'your blueprint chapter is at X; create it if missing' hint.
 
     Empty string if no blueprint exists.
+
+    Resolution order:
+      1. ``% archon:covers`` declarations (consolidated-chapter handling).
+      2. The 1:1 slug ``Foo/Bar.lean → Foo_Bar.tex``.
+      3. Basename fallback: ``Foo/Bar.lean → Bar.tex`` if that file exists
+         on disk and the slug-derived path does not. Chapters not following
+         the underscore-prefix convention (e.g. ``AbelianVarietyRigidity.tex``
+         when the Lean file lives at ``AlgebraicJacobian/AbelianVarietyRigidity.lean``)
+         would otherwise be unreachable from the prover prompt.
     """
+    chapters_dir = project_path / "blueprint" / "src" / "chapters"
     if not (project_path / "blueprint" / "src").is_dir():
         return ""
-    slug = lean_file_to_chapter_slug(rel_lean_path)
-    rel_chapter = f"blueprint/src/chapters/{slug}.tex"
+
+    slug = chapter_slug_for_lean_file(project_path, rel_lean_path)
+    chapter_path = chapters_dir / f"{slug}.tex"
+
+    if not chapter_path.exists():
+        # Basename fallback — Foo/Bar.lean → Bar.tex when the underscore-
+        # prefixed slug isn't on disk but a bare-basename chapter is.
+        rel_norm = str(rel_lean_path).replace("\\", "/")
+        basename = rel_norm.rsplit("/", 1)[-1]
+        if basename.endswith(".lean"):
+            basename = basename[:-5]
+        basename_path = chapters_dir / f"{basename}.tex"
+        if basename_path.exists() and basename_path != chapter_path:
+            chapter_path = basename_path
+
+    rel_chapter = chapter_path.relative_to(project_path).as_posix()
     return dedent(f"""\
         Blueprint chapter for your file: {rel_chapter}
         - Read it BEFORE writing any Lean code — it contains the informal proof
