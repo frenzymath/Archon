@@ -10,9 +10,7 @@ from .base import InitStep
 
 class VersionStampStep(InitStep):
     name = "Version stamp"
-    # Logically step 10, but the original code reused log.phase(9) for both
-    # this and EnvAndConfigStep — kept that way to preserve console output.
-    number = 9
+    number = 12
 
     def run(self) -> None:
         ctx = self.ctx

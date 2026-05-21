@@ -18,7 +18,7 @@ class InnerGitStep(InitStep):
     """
 
     name = "Inner git (.archon/.git)"
-    number = 8
+    number = 10
 
     def run(self) -> None:
         ctx = self.ctx

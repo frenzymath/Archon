@@ -38,7 +38,7 @@ class GitHooksStep(InitStep):
     """Install Archon's pre-commit scrub + pre-push secret-scan hooks."""
 
     name = "Secret-detection git hooks"
-    number = 9
+    number = 11
 
     # (hook_name, marker substrings used to recognize Archon-managed
     # copies for safe refresh-in-place)

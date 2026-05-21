@@ -22,7 +22,7 @@ from .base import InitStep
 
 class SemanticPassStep(InitStep):
     name = "Claude semantic pass"
-    number = 7  # display-only — actual log.phase number is shared with later steps
+    number = 7
 
     def run(self) -> None:
         ctx = self.ctx
