@@ -84,13 +84,21 @@ class InitCommand:
             log.info("Aborted by user — no changes made.")
             raise typer.Exit(0)
 
+        # Anything other than a clean "fresh" init means there's already a
+        # .archon/ on disk (possibly with legacy symlinks). The non-fresh
+        # branch in CopyPromptsStep handles symlinks correctly by unlinking
+        # before copy; the fresh branch follows them and crashes with
+        # SameFileError. Pin ctx.fresh to False for keep/merge/overwrite so
+        # everyone takes the symlink-aware path.
+        if mode != "fresh":
+            self.ctx.fresh = False
+
         if mode == "keep":
             self._run_keep_only()
             return
 
         if mode == "merge":
             PromptMerger(resolved, state_dir, model=self.model).run()
-            self.ctx.fresh = False
 
         self._run_full_init()
 

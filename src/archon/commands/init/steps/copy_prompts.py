@@ -28,20 +28,18 @@ class CopyPromptsStep(InitStep):
         preserved = 0
         for f in sorted(prompts_src.glob("*.md")):
             dst = prompts_dst / f.name
+            # Whether fresh or not, a legacy symlink must be unlinked
+            # before copy_file — shutil.copy2 follows symlinks and would
+            # raise SameFileError when ``dst`` points back at ``f``.
+            # (Repro: v0.1.0 → v0.2.0 upgrade with --force or "overwrite".)
+            if dst.is_symlink():
+                dst.unlink()
             if ctx.fresh:
                 copy_file(f, dst, overwrite=True)
                 new += 1
                 continue
             if dst.exists():
-                if dst.is_symlink():
-                    # Legacy layout used symlinks back to the package
-                    # data — replace with a real copy so user edits are
-                    # preserved going forward.
-                    dst.unlink()
-                    copy_file(f, dst, overwrite=True)
-                    new += 1
-                else:
-                    preserved += 1
+                preserved += 1
                 continue
             copy_file(f, dst)
             new += 1
