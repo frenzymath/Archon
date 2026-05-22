@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Regression tests for guardrails.sh
@@ -80,7 +80,7 @@ echo "-- Fix 6: bash -c nested shell bypass --"
 run_test "bash -c 'git push' (block)"              "bash -c 'git push origin main'"         2
 run_test "bash -lc 'git push' (block)"             "bash -lc 'git push origin main'"        2
 run_test "sh -c 'git push' (block)"                "sh -c 'git push origin main'"           2
-run_test "/bin/bash -c 'git push' (block)"          "/bin/bash -c 'git push origin main'"   2
+run_test "/usr/bin/env bash -c 'git push' (block)" "/usr/bin/env bash -c 'git push origin main'"   2
 run_test "bash --norc -c 'git push' (block)"        "bash --norc -c 'git push origin main'" 2
 
 echo ""
