@@ -30,7 +30,15 @@
   background: radial-gradient(circle at 50% 50%, rgba(3,102,214,0.012) 0%, transparent 70%);
 }
 .gc:active { cursor: grabbing; }
-.svg { display: block; width: 100%; height: 100%; }
+.svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  text-rendering: geometricPrecision;
+  shape-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 
 /* ── Resize handles ── */
 .resizeHandleV {

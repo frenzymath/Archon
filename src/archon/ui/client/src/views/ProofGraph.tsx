@@ -10,6 +10,18 @@
  *   - Blueprint LaTeX section in sidebar.
  *   - Phase logs (plan, refactor, review) shown in sidebar for non-prover commits.
  *   - Legacy "refactor" logs are now reachable by clicking the corresponding commit.
+ *
+ * Layout notes (this revision):
+ *   - File groups are arranged as simple top-aligned column shelves (no
+ *     bin-packing / "Tetris"). The number of columns is derived from the
+ *     container aspect ratio; each group flows into the currently-shortest
+ *     column and stacks from the top with a fixed ROW_GAP. Every group sits on
+ *     a clean shared grid, which scans far better than interlocked packing at
+ *     the cost of some empty space at the bottom of shorter columns.
+ *   - Spacing favours vertical air (NG_Y / ROW_GAP) over horizontal gaps
+ *     (COL_GAP) so columns sit close together and rows breathe.
+ *   - Node names are the largest type in the box so they stay legible when the
+ *     graph is zoomed to fit; the full identifier is always in a hover title.
  */
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
@@ -31,6 +43,8 @@ import styles from './ProofGraph.module.css';
 const C_GREEN = '#28a745', C_ORANGE = '#e36209', C_RED = '#cb2431';
 function ncolor(sorry: boolean, touched: boolean) { return sorry ? (touched ? C_ORANGE : C_RED) : C_GREEN; }
 function basename(p: string) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(i + 1) : p; }
+// Strip a trailing extension (".lean", ".tex", …) so labels show just the name.
+function stripExt(p: string) { const b = basename(p); const d = b.lastIndexOf('.'); return d > 0 ? b.slice(0, d) : b; }
 
 // Branch colors (matches file-group palettes but fully opaque for git tree)
 const BRANCH_COLORS = ['#0366d6', '#6f42c1', '#e36209', '#28a745', '#cb2431', '#00868a', '#b08800', '#d73a49'];
@@ -44,44 +58,146 @@ interface LG {
 }
 interface LE { from: LN; to: LN; blocked: boolean; }
 
-const NW = 170, NH = 42, NG = 8, GP = 14, GH = 20, GG = 22;
+// Geometry. Spacing is chosen purely for legibility (the packer no longer needs
+// group widths to "compose"):
+// Geometry. We no longer need group widths to "compose" (the Tetris packer is
+// gone), so spacing is chosen purely for legibility:
+//   - generous vertical rhythm between nodes (NG_Y) so boxes breathe,
+//   - tight horizontal gap between group columns (COL_GAP) so columns sit close.
+const NW = 184;          // node width (a touch wider → more room for the bigger name)
+const NH = 44;           // node height
+const GP = 10;           // padding inside a group (all sides)
+const NG_X = 10;         // horizontal gap between nodes within a multi-col group
+const NG_Y = 12;         // vertical gap between node rows (more vertical air)
+const GH = 28;           // group header height (room for the larger file label)
+const COL_GAP = 24;      // horizontal gap between group columns (tighter)
+const ROW_GAP = 26;      // vertical gap between stacked groups in a column
+
+// Outer width of a group with `ic` node-columns.
+function groupW(ic: number) { return ic * NW + (ic - 1) * NG_X + GP * 2; }
+
 const BG = ['rgba(3,102,214,0.06)','rgba(111,66,193,0.06)','rgba(227,98,9,0.06)','rgba(40,167,69,0.06)','rgba(203,36,49,0.06)','rgba(0,134,114,0.06)'];
 const BS = ['rgba(3,102,214,0.22)','rgba(111,66,193,0.22)','rgba(227,98,9,0.22)','rgba(40,167,69,0.22)','rgba(203,36,49,0.22)','rgba(0,134,114,0.22)'];
 
-function doLayout(decls: GraphDeclaration[], edgeList: { from: string; to: string }[], files: { file: string; laneStatus?: 'cleared' | 'progressed' | 'attempted' }[], changed: Set<string>) {
-  const nm = new Map<string, LN>(); const gs: LG[] = [];
+function doLayout(
+  decls: GraphDeclaration[],
+  edgeList: { from: string; to: string }[],
+  files: { file: string; laneStatus?: 'cleared' | 'progressed' | 'attempted' }[],
+  changed: Set<string>,
+  aspect = 2.5,
+) {
+  const nm = new Map<string, LN>();
   const af = files.filter(f => decls.some(d => d.file === f.file));
-  if (!af.length) return { n: [] as LN[], g: gs, e: [] as LE[], w: 400, h: 400 };
-  const cols = Math.max(1, Math.round(Math.sqrt(af.length * 1.3)));
-  let gx = GG, gy = GG, col = 0, rowH = 0;
-  for (let fi = 0; fi < af.length; fi++) {
-    const fd = decls.filter(d => d.file === af[fi].file); if (!fd.length) continue;
-    const ic = fd.length > 6 ? 2 : 1, pc = Math.ceil(fd.length / ic);
-    const gw = ic * NW + (ic - 1) * NG + GP * 2, gh = GH + pc * (NH + NG) - NG + GP;
-    for (let di = 0; di < fd.length; di++) {
-      const d = fd[di], c = Math.floor(di / pc), r = di % pc;
-      const x = gx + GP + c * (NW + NG), y = gy + GH + r * (NH + NG);
+  if (!af.length) return { n: [] as LN[], g: [] as LG[], e: [] as LE[], w: 400, h: 400 };
+
+  interface GroupSize {
+    file: string; laneStatus?: 'cleared' | 'progressed' | 'attempted';
+    decls: GraphDeclaration[]; w: number; h: number; ic: number; pc: number;
+  }
+  const sized: GroupSize[] = af.map(f => {
+    const fd = decls.filter(d => d.file === f.file);
+    // Inner node-columns: 1 for small files, 2 for medium, 3 for large.
+    const ic = fd.length > 14 ? 3 : fd.length > 6 ? 2 : 1;
+    const pc = Math.ceil(fd.length / ic);
+    const w = groupW(ic);
+    const h = GH + pc * (NH + NG_Y) - NG_Y + GP;
+    return { file: f.file, laneStatus: f.laneStatus, decls: fd, w, h, ic, pc };
+  }).filter(g => g.decls.length > 0);
+
+  // ── Simple top-aligned column shelves (no Tetris) ──
+  // Decide how many group-columns to use from the container aspect ratio, then
+  // flow groups left-to-right into the column that is currently shortest, each
+  // group stacking from the TOP of its column with a fixed ROW_GAP. Every group
+  // sits on a clean shared grid; the only cost is some empty space at the bottom
+  // of shorter columns, which reads far better than interlocked Tetris.
+
+  // Preserve the file order as given (stable, scannable) rather than sorting by
+  // height — column shelves don't need height sorting to look clean, and keeping
+  // source order makes the layout predictable between refreshes.
+  const order = sized;
+
+  // Target overall width from aspect, then derive a column count. Base the
+  // estimate on the AVERAGE group width (not the widest) — most groups are
+  // single-column, so dividing by the widest 3-col group badly under-counts
+  // columns and leaves the layout too tall for a wide canvas.
+  const widest = Math.max(...sized.map(g => g.w));
+  const avgW = sized.reduce((s, g) => s + g.w, 0) / sized.length;
+  const totalArea = sized.reduce((s, g) => s + g.w * g.h, 0);
+  const targetW = Math.max(widest, Math.sqrt(totalArea * aspect));
+  const ncols = Math.max(1, Math.min(sized.length, Math.round(targetW / (avgW + COL_GAP))));
+
+  // Column bookkeeping: running bottom edge (y-cursor) and max width seen.
+  const colBottom = new Array(ncols).fill(ROW_GAP);  // start a bit down from top
+  const colMaxW = new Array(ncols).fill(0);
+  const placements: { g: GroupSize; col: number; y: number }[] = [];
+
+  for (const g of order) {
+    // shortest column wins (ties → leftmost, for stable left-to-right fill)
+    let best = 0;
+    for (let c = 1; c < ncols; c++) if (colBottom[c] < colBottom[best] - 0.5) best = c;
+    const y = colBottom[best];
+    placements.push({ g, col: best, y });
+    colBottom[best] = y + g.h + ROW_GAP;
+    colMaxW[best] = Math.max(colMaxW[best], g.w);
+  }
+
+  // Resolve each column's x from the cumulative max widths to the left.
+  const colX = new Array(ncols).fill(0);
+  colX[0] = COL_GAP;
+  for (let c = 1; c < ncols; c++) colX[c] = colX[c - 1] + colMaxW[c - 1] + COL_GAP;
+
+  const gs: LG[] = [];
+  for (const { g, col, y: gy } of placements) {
+    const gx = colX[col];
+    for (let di = 0; di < g.decls.length; di++) {
+      const d = g.decls[di];
+      const c = Math.floor(di / g.pc), r = di % g.pc;
+      const x = gx + GP + c * (NW + NG_X);
+      const ny = gy + GH + r * (NH + NG_Y);
       const t = changed.has(d.id);
-      nm.set(d.id, { id: d.id, d, x, y, w: NW, h: NH, c: ncolor(d.hasSorry, t), t });
+      nm.set(d.id, { id: d.id, d, x, y: ny, w: NW, h: NH, c: ncolor(d.hasSorry, t), t });
     }
     gs.push({
-      file: af[fi].file, label: basename(af[fi].file),
-      x: gx, y: gy, w: gw, h: gh, ci: fi % BG.length,
-      laneStatus: af[fi].laneStatus,
+      file: g.file, label: stripExt(g.file),
+      x: gx, y: gy, w: g.w, h: g.h,
+      ci: af.findIndex(f => f.file === g.file) % BG.length,
+      laneStatus: g.laneStatus,
     });
-    rowH = Math.max(rowH, gh); col++;
-    if (col >= cols) { col = 0; gx = GG; gy += rowH + GG; rowH = 0; } else { gx += gw + GG; }
   }
+
   const es: LE[] = [];
-  for (const e of edgeList) { const f = nm.get(e.from), t = nm.get(e.to); if (f && t) es.push({ from: f, to: t, blocked: t.d.hasSorry }); }
-  return { n: Array.from(nm.values()), g: gs, e: es, w: Math.max(...gs.map(g => g.x + g.w), 400) + GG, h: Math.max(...gs.map(g => g.y + g.h), 400) + GG };
+  for (const e of edgeList) {
+    const f = nm.get(e.from), t = nm.get(e.to);
+    if (f && t) es.push({ from: f, to: t, blocked: t.d.hasSorry });
+  }
+  return {
+    n: Array.from(nm.values()), g: gs, e: es,
+    w: Math.max(...gs.map(g => g.x + g.w), 400) + COL_GAP,
+    h: Math.max(...gs.map(g => g.y + g.h), 400) + ROW_GAP,
+  };
+}
+
+// ── Element aspect (measures the canvas container) ────────────────────
+
+function useElementAspect(ref: React.RefObject<HTMLElement>, fallback = 2.5) {
+  const [aspect, setAspect] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect;
+      if (height > 0) setAspect(width / height);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [ref]);
+  return aspect;
 }
 
 // ── ViewBox zoom/pan ─────────────────────────────────────────────────
 
-function useViewBox(cw: number, ch: number) {
+function useViewBox(cRef: React.RefObject<HTMLDivElement>, cw: number, ch: number) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const cRef = useRef<HTMLDivElement>(null);
   const [vb, setVb] = useState<[number, number, number, number]>([0, 0, 800, 600]);
   const drag = useRef(false);
   const last = useRef({ x: 0, y: 0 });
@@ -141,7 +257,7 @@ function useViewBox(cw: number, ch: number) {
     const vw = r.width * s, vh = r.height * s; setVb([cw / 2 - vw / 2, ch / 2 - vh / 2, vw, vh]);
   }, [cw, ch]);
   const scale = cw > 0 && vb[2] > 0 ? cw / vb[2] : 1;
-  return { svgRef, cRef, vb, zoomIn: () => zoomBy(0.7), zoomOut: () => zoomBy(1.4), reset, scale };
+  return { svgRef, vb, zoomIn: () => zoomBy(0.7), zoomOut: () => zoomBy(1.4), reset, scale };
 }
 
 // ── Sparkline ────────────────────────────────────────────────────────
@@ -497,8 +613,7 @@ function GitTree({
               <line x1={PAD_X} y1={y} x2={lineEndX} y2={y}
                 stroke={col} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.35} />
               <text x={PAD_X - 6} y={y + 4} fontSize={9} fill={col}
-                textAnchor="end" fontFamily="var(--font-mono)" fontWeight={600}
-                style={{ cursor: b.length > 10 ? 'default' : 'default' }}>
+                textAnchor="end" fontFamily="var(--font-mono)" fontWeight={600} paintOrder="stroke fill">
                 {display}
               </text>
             </g>
@@ -547,14 +662,14 @@ function GitTree({
               {c.iteration && (
                 <text x={n.x} y={n.y - COMMIT_R - 3}
                   fontSize={8} fill="var(--text-primary)"
-                  textAnchor="middle" fontFamily="var(--font-mono)" fontWeight={600}>
+                  textAnchor="middle" fontFamily="var(--font-mono)" fontWeight={600} paintOrder="stroke fill">
                   {c.iteration.replace('iter-', '#')}
                 </text>
               )}
               {c.shortSha && !isPhaseEnd && (
                 <text x={n.x} y={n.y + COMMIT_R + 9}
                   fontSize={7} fill={isSel ? 'var(--blue)' : 'var(--text-muted)'}
-                  textAnchor="middle" fontFamily="var(--font-mono)">
+                  textAnchor="middle" fontFamily="var(--font-mono)" paintOrder="stroke fill">
                   {c.shortSha}
                 </text>
               )}
@@ -574,7 +689,7 @@ function GitTree({
           <rect x={plusX - 8} y={plusY} width={18} height={18} rx={4}
             fill="var(--bg-tertiary)" stroke="var(--border)" strokeWidth={1} />
           <text x={plusX + 1} y={plusY + 13} fontSize={13} fill="var(--text-muted)"
-            textAnchor="middle" fontWeight={300}>+</text>
+            textAnchor="middle" fontWeight={300} paintOrder="stroke fill">+</text>
         </g>
       </svg>
 
@@ -647,6 +762,66 @@ function useDragResize(initial: number, min: number, max: number, axis: 'x' | 'y
   return { size, onMouseDown };
 }
 
+// ── Node renderer ────────────────────────────────────────────────────
+// The name is the headline and the only multi-character text on the node
+// (the "N att · status" line is gone). It's the largest type in the box so it
+// stays legible when the whole graph is zoomed to fit. The box is wider/taller
+// (NW/NH) to give the bigger glyphs room. Truncation only kicks in for the
+// genuinely long names; the hover <title> always carries the full identifier.
+const NAME_MAX = 19;   // chars before truncation; tuned to NW at the new size
+
+function GraphNode({
+  n, selected, onClick,
+}: { n: LN; selected: boolean; onClick: () => void }) {
+  const att = n.d.totalAttempts ?? 0;
+  const name = n.d.name.length > NAME_MAX ? n.d.name.slice(0, NAME_MAX - 1) + '…' : n.d.name;
+  return (
+    <g data-node="1" onClick={onClick} style={{ cursor: 'pointer' }}>
+      {/* Selection glow: an outer soft blue halo to make the active node "pop" */}
+      {selected && (
+        <rect x={n.x - 4} y={n.y - 4} width={n.w + 8} height={n.h + 8} rx={10}
+          fill="var(--blue)" opacity={0.12} />
+      )}
+      {/* "many attempts" halo (suppressed when selected to avoid visual clutter) */}
+      {att > 3 && !selected && (
+        <rect x={n.x - 2} y={n.y - 2} width={n.w + 4} height={n.h + 4} rx={8}
+          fill="none" stroke={n.c} strokeWidth={1.5} opacity={0.3} />
+      )}
+      {/* Box: slightly tinted when selected */}
+      <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={6}
+        fill={selected ? 'rgba(3, 102, 214, 0.05)' : 'var(--bg-primary)'}
+        stroke={selected ? 'var(--blue)' : n.c}
+        strokeWidth={selected ? 2.5 : 2} />
+      {/* Kind tag, top-left, small and muted so the name dominates */}
+      <text x={n.x + 9} y={n.y + 14} fontSize="8.5" fontWeight="700"
+        fill={selected ? 'var(--blue)' : n.c} fontFamily="var(--font-sans)" 
+        letterSpacing="0.5" opacity={0.85} paintOrder="stroke fill">
+        {n.d.kind.toUpperCase()}
+      </text>
+      {/* Name — the headline. Largest type in the node. */}
+      <text x={n.x + 9} y={n.y + 33} fontSize="15" fontWeight="600"
+        fill={selected ? 'var(--blue)' : 'var(--text-primary)'} 
+        fontFamily="var(--font-mono)" paintOrder="stroke fill">
+        {name}
+        <title>{n.d.name}</title>
+      </text>
+      {/* Sorry-count chip / solved tick, top-right */}
+      {n.d.hasSorry ? (
+        <>
+          <rect x={n.x + n.w - 28} y={n.y + 5} width={22} height={14} rx={7}
+            fill={n.c} opacity={0.15} />
+          <text x={n.x + n.w - 17} y={n.y + 15} fontSize="8.5" fontWeight="700"
+            fill={n.c} textAnchor="middle" fontFamily="var(--font-mono)" paintOrder="stroke fill">
+            {n.d.sorryCount}s
+          </text>
+        </>
+      ) : (
+        <text x={n.x + n.w - 15} y={n.y + 16} fill={C_GREEN} fontSize="12" fontWeight="700" paintOrder="stroke fill">✓</text>
+      )}
+    </g>
+  );
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 export default function ProofGraph() {
@@ -715,8 +890,17 @@ export default function ProofGraph() {
     showPhaseLogs ? commitPhase : undefined,
   );
 
-  const lo = useMemo(() => activeData ? doLayout(activeData.declarations, activeData.edges, activeData.files, changedSet) : null, [activeData, changedSet]);
-  const { svgRef, cRef, vb, zoomIn, zoomOut, reset, scale } = useViewBox(lo?.w ?? 0, lo?.h ?? 0);
+  const cRef = useRef<HTMLDivElement>(null);          // canvas container ref (owned here)
+  const canvasAspect = useElementAspect(cRef);         // measured independently of `lo`
+
+  const lo = useMemo(
+    () => activeData
+      ? doLayout(activeData.declarations, activeData.edges, activeData.files, changedSet, canvasAspect)
+      : null,
+    [activeData, changedSet, canvasAspect],
+  );
+
+  const { svgRef, vb, zoomIn, zoomOut, reset, scale } = useViewBox(cRef, lo?.w ?? 0, lo?.h ?? 0);
 
   const summary = useMemo(() => {
     if (!lo) return null;
@@ -826,6 +1010,15 @@ export default function ProofGraph() {
           {/* Graph canvas */}
           <div className={styles.gc} ref={cRef}>
             <svg ref={svgRef} className={styles.svg} viewBox={`${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`} preserveAspectRatio="xMidYMid meet" width="100%" height="100%">
+              <defs>
+                {/* Per-group clip rects so the (now larger) file label is
+                    truncated to the box width instead of overflowing. */}
+                {lo?.g.map(g => (
+                  <clipPath key={`clip-${g.file}`} id={`lbl-${g.ci}-${Math.round(g.x)}-${Math.round(g.y)}`}>
+                    <rect x={g.x + 8} y={g.y} width={g.w - 16 - 12} height={GH} />
+                  </clipPath>
+                ))}
+              </defs>
               {lo?.g.map(g => {
                 const dotColor = g.laneStatus === 'cleared' ? C_GREEN
                   : g.laneStatus === 'progressed' ? C_ORANGE
@@ -838,27 +1031,28 @@ export default function ProofGraph() {
                   : g.laneStatus === 'attempted'
                   ? 'Latest multilane round: lanes ran on this file but none was merge-worthy.'
                   : '';
+                const clipId = `lbl-${g.ci}-${Math.round(g.x)}-${Math.round(g.y)}`;
                 return <g key={g.file}>
-                <rect x={g.x} y={g.y} width={g.w} height={g.h} rx={10} ry={10} fill={BG[g.ci]} stroke={BS[g.ci]} strokeWidth={1.5} />
-                <text x={g.x + 8} y={g.y + 14} fontSize="10" fontWeight="600" fill="var(--text-muted)" fontFamily="var(--font-mono)">{g.label}</text>
-                {dotColor && (
-                  <circle cx={g.x + g.w - 10} cy={g.y + 10} r={4} fill={dotColor}>
-                    <title>{dotTitle}</title>
-                  </circle>
-                )}
-              </g>;
-              })}
-              {lo?.n.map(n => {
-                const sel = n.id === selNode, att = n.d.totalAttempts ?? 0, ms = n.d.latestMilestoneStatus;
-                return <g key={n.id} data-node="1" onClick={() => clickNode(n.id)} style={{ cursor: 'pointer' }}>
-                  {att > 3 && <rect x={n.x - 2} y={n.y - 2} width={n.w + 4} height={n.h + 4} rx={8} fill="none" stroke={n.c} strokeWidth={1.5} opacity={0.3} />}
-                  <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={6} fill="var(--bg-primary)" stroke={sel ? 'var(--blue)' : n.c} strokeWidth={sel ? 2.5 : 1.5} />
-                  <text x={n.x + 5} y={n.y + 12} fontSize="8" fontWeight="700" fill={n.c} fontFamily="var(--font-sans)">{n.d.kind.toUpperCase()}</text>
-                  <text x={n.x + 5} y={n.y + 25} fontSize="10.5" fontWeight="500" fill="var(--text-primary)" fontFamily="var(--font-mono)">{n.d.name.length > 19 ? n.d.name.slice(0, 18) + '…' : n.d.name}</text>
-                  {(att > 0 || ms) && <text x={n.x + 5} y={n.y + 36} fontSize="8" fill="var(--text-muted)" fontFamily="var(--font-mono)">{att > 0 ? `${att} att` : ''}{att > 0 && ms ? ' · ' : ''}{ms || ''}</text>}
-                  {n.d.hasSorry ? <><rect x={n.x + n.w - 26} y={n.y + 3} width={20} height={12} rx={6} fill={n.c} opacity={0.15} /><text x={n.x + n.w - 16} y={n.y + 12} fontSize="8" fontWeight="700" fill={n.c} textAnchor="middle" fontFamily="var(--font-mono)">{n.d.sorryCount}s</text></> : <text x={n.x + n.w - 14} y={n.y + 13} fill={C_GREEN} fontSize="10" fontWeight="700">✓</text>}
+                  <rect x={g.x} y={g.y} width={g.w} height={g.h} rx={10} ry={10}
+                    fill={BG[g.ci]} stroke={BS[g.ci]} strokeWidth={1.5} />
+                  {/* File label — bigger, but clipped to the box so long names
+                      don't bleed past the group rectangle. */}
+                  <text x={g.x + 10} y={g.y + 19} fontSize="14" fontWeight="700"
+                    fill="var(--text-secondary)" fontFamily="var(--font-mono)"
+                    letterSpacing="0.2" clipPath={`url(#${clipId})`} paintOrder="stroke fill">
+                    {g.label}
+                    <title>{g.label}</title>
+                  </text>
+                  {dotColor && (
+                    <circle cx={g.x + g.w - 10} cy={g.y + 11} r={4} fill={dotColor}>
+                      <title>{dotTitle}</title>
+                    </circle>
+                  )}
                 </g>;
               })}
+              {lo?.n.map(n => (
+                <GraphNode key={n.id} n={n} selected={n.id === selNode} onClick={() => clickNode(n.id)} />
+              ))}
               {/* Edges are intentionally not rendered — the dependency lines
                   were hard to read and provided little value. The underlying
                   edge data is still used by the sidebar for name lookups. */}
