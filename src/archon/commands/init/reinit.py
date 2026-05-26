@@ -15,7 +15,7 @@ from pathlib import Path
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 
 from .utils import data_path, has, parse_stage
 
@@ -101,10 +101,12 @@ class PromptMerger:
         state_dir: Path,
         *,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.state_dir = state_dir
         self.model = model
+        self.backend = backend
 
     def run(self) -> None:
         staging = self._stage_bundled_prompts()
@@ -189,7 +191,7 @@ class PromptMerger:
             - When done, delete {staging} and report: "Merged N files, kept M files."
             """) + legacy_block
 
-        ClaudeAgent(model=self.model, role="init-merge").run_interactive(
+        ClaudeAgent(model=self.model, role="init-merge", backend=self.backend or ClaudeBackend()).run_interactive(
             prompt, cwd=project_path,                                    
         )
         if staging.exists():

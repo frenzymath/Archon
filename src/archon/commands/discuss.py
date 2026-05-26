@@ -13,8 +13,9 @@ from typing import Optional
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 from archon.state import read_stage
+from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
 
 
 _HINT_PATTERN = re.compile(r"^- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] .+$")
@@ -111,10 +112,12 @@ class DiscussCommand:
         *,
         focus: str | None = None,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.focus = focus
         self.model = model
+        self.backend = backend
 
     def run(self) -> None:
         resolved = Path(self.project_path).resolve()
@@ -136,7 +139,7 @@ class DiscussCommand:
 
         self._announce(resolved, stage)
         try:
-            ClaudeAgent(model=self.model, role="discuss").run_interactive(
+            ClaudeAgent(model=self.model, role="discuss", backend=self.backend or ClaudeBackend()).run_interactive(
                 prompt, cwd=resolved,
             )
         except KeyboardInterrupt:
@@ -345,6 +348,16 @@ def discuss(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Start an interactive discussion about the project.
 
@@ -368,4 +381,6 @@ def discuss(
       archon discuss . --focus Algebra/WLocal.lean
       archon discuss . --focus wLocal_iff
     """
-    DiscussCommand(project_path, focus=focus, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    DiscussCommand(project_path, focus=focus, model=model, backend=backend).run()

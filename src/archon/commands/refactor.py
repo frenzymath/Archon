@@ -18,14 +18,16 @@ import re
 import shutil
 from pathlib import Path
 from textwrap import dedent
+from typing import Optional
 
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 from archon.commands.tooling.inner_git import InnerGit
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.version import warn_if_mismatch
+from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
 
 
 app = typer.Typer(
@@ -84,10 +86,12 @@ class RefactorDraftCommand:
         *,
         auto_run: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.auto_run = auto_run
         self.model = model
+        self.backend = backend
 
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
@@ -101,7 +105,7 @@ class RefactorDraftCommand:
         log.step("Launching Claude to interview you and write REFACTOR_DIRECTIVE.md.")
 
         prompt = self._build_prompt(resolved, state_dir)
-        ClaudeAgent(model=self.model, role="refactor-draft").run_interactive(
+        ClaudeAgent(model=self.model, role="refactor-draft", backend=self.backend or ClaudeBackend()).run_interactive(
             prompt, cwd=resolved,
         )
 
@@ -143,10 +147,12 @@ class RefactorRunCommand:
         *,
         verbose_logs: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.verbose_logs = verbose_logs
         self.model = model
+        self.backend = backend
 
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
@@ -240,6 +246,7 @@ class RefactorRunCommand:
         sub = Subagent(
             descriptor, resolved,
             model=self.model, verbose_logs=self.verbose_logs,
+            backend=self.backend or ClaudeBackend(),
         )
         result = sub.run(
             directive=directive, slug=slug, iter_num=iter_num, log_base=log_base,
@@ -295,6 +302,16 @@ def draft(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Interview the user and write a REFACTOR_DIRECTIVE.md.
 
@@ -304,7 +321,9 @@ def draft(
     launched — the user is expected to review the directive first and
     then run `archon refactor run`.
     """
-    RefactorDraftCommand(project_path, auto_run=auto_run, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    RefactorDraftCommand(project_path, auto_run=auto_run, model=model, backend=backend).run()
 
 
 @app.command("run")
@@ -321,6 +340,16 @@ def run(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Execute REFACTOR_DIRECTIVE.md with the refactor agent.
 
@@ -328,4 +357,6 @@ def run(
     `archon[NNN/refactor]: <summary>` (the agent phase commit). The
     outer (mathematician's) git repo is not touched.
     """
-    RefactorRunCommand(project_path, verbose_logs=verbose_logs, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    RefactorRunCommand(project_path, verbose_logs=verbose_logs, model=model, backend=backend).run()

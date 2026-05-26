@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from archon.agent import ClaudeBackend
 
 if TYPE_CHECKING:
     from archon.commands.tooling.project import BootstrapReport
@@ -24,4 +26,5 @@ class InitContext:
     state_dir: Path
     fresh: bool
     model: str
+    backend: ClaudeBackend = field(default_factory=ClaudeBackend)
     bootstrap_report: "BootstrapReport | None" = None

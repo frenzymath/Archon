@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -30,6 +31,7 @@ from archon import log
 from archon.commands.tooling.project_config import (
     load_project_config,
     resolve_subagents_enabled,
+    resolve_claude_backend,
 )
 from archon.subagents.base import (
     ROOT_PARENT_SLUG,
@@ -97,6 +99,16 @@ def subagent_command(
              "Repeat to declare multiple. Validated against the parent's "
              "recorded domain.",
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Invoke a subagent by name on a directive file.
 
@@ -135,7 +147,8 @@ def subagent_command(
         parent_dir.mkdir(parents=True, exist_ok=True)
         log_base = parent_dir / f"{descriptor.name}-{slug}"
 
-    sub = Subagent(descriptor, resolved, verbose_logs=verbose_logs)
+    backend = resolve_claude_backend(cfg, cli_value=claude_backend)
+    sub = Subagent(descriptor, resolved, verbose_logs=verbose_logs, backend=backend)
     try:
         result = sub.run(
             directive=directive,

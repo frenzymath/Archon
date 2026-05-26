@@ -63,7 +63,7 @@ class SemanticPassStep(InitStep):
             {json.dumps(bootstrap_summary, indent=2)}
             """)
 
-        ClaudeAgent(model=ctx.model, role="init").run_interactive(
+        ClaudeAgent(model=ctx.model, role="init", backend=ctx.backend).run_interactive(
             prompt, cwd=ctx.project_path,
         )
 

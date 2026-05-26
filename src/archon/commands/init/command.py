@@ -13,7 +13,7 @@ from pathlib import Path
 import typer
 
 from archon import log
-from archon.agent import DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL
 from archon.commands.tooling.version import warn_if_mismatch
 
 from .context import InitContext
@@ -44,10 +44,12 @@ class InitCommand:
         *,
         force: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path_arg = project_path
         self.force = force
         self.model = model
+        self.backend = backend
         self.ctx: InitContext | None = None
 
     def run(self) -> None:
@@ -77,6 +79,7 @@ class InitCommand:
             state_dir=state_dir,
             fresh=True,
             model=self.model,
+            backend=self.backend or ClaudeBackend(),
         )
 
         mode = self._resolve_reinit_mode()
@@ -98,7 +101,7 @@ class InitCommand:
             return
 
         if mode == "merge":
-            PromptMerger(resolved, state_dir, model=self.model).run()
+            PromptMerger(resolved, state_dir, model=self.model, backend=self.backend or ClaudeBackend()).run()
 
         self._run_full_init()
 

@@ -33,6 +33,7 @@ def _strip_html_comments(text: str) -> str:
     """
     return _HTML_COMMENT_RE.sub("", text)
 
+from archon.commands.tooling.blueprint import chapter_slug_for_lean_file
 from archon.state import normalize_stage_for_prompt_path
 from archon.state.iter_state import (
     format_recent_iter_sidecars_for_prompt,

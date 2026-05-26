@@ -29,7 +29,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 from archon.commands.tooling.project_config import (
     load_project_config,
     resolve_claude_backend,
@@ -203,6 +203,7 @@ class Subagent:
         *,
         model: str | None = None,
         verbose_logs: bool = False,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.descriptor = descriptor
         self.name = descriptor.name
@@ -215,7 +216,10 @@ class Subagent:
             self.model = resolve_subagent_model(
                 cfg, self.name, fallback=DEFAULT_MODEL,
             )
-        self.backend = resolve_claude_backend(cfg)
+        if backend is not None:
+            self.backend = backend
+        else:
+            self.backend = resolve_claude_backend(cfg)
 
     # ── prompt envelope ─────────────────────────────────────────────
 
