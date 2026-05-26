@@ -160,15 +160,16 @@ def multilane_config_from_simple(simple: dict) -> MultiLaneConfig:
     - worktree.sync_mode → ``hard-reset``
     """
     lanes_out: list[LaneConfig] = []
-    for raw in simple.get('lanes', []) or []:
-        normalized = dict(raw)
-        normalized.setdefault('worktree', {})
-        wt = normalized['worktree']
-        lane_id = str(normalized.get('lane_id') or normalized.get('provider') or 'lane')
-        wt.setdefault('path', f'.archon/lanes/{lane_id}')
-        wt.setdefault('branch', f'lane/{lane_id}')
-        wt.setdefault('sync_mode', 'hard-reset')
-        lanes_out.append(_lane_from_raw(normalized))
+    if simple.get('enabled', False):
+        for raw in simple.get('lanes', []) or []:
+            normalized = dict(raw)
+            normalized.setdefault('worktree', {})
+            wt = normalized['worktree']
+            lane_id = str(normalized.get('lane_id') or normalized.get('provider') or 'lane')
+            wt.setdefault('path', f'.archon/lanes/{lane_id}')
+            wt.setdefault('branch', f'lane/{lane_id}')
+            wt.setdefault('sync_mode', 'hard-reset')
+            lanes_out.append(_lane_from_raw(normalized))
     return MultiLaneConfig(
         enabled=bool(simple.get('enabled', False)),
         version=int(simple.get('version', 1)),

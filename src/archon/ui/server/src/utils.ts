@@ -15,6 +15,27 @@ export function parseJsonl(filePath: string): LogEntry[] {
   }).filter((e): e is LogEntry => e !== null);
 }
 
+/** Pick the dominant model from a `model_usage` map. Claude Code emits
+ *  a fixed-size haiku sidecar call on every session (~$0.02) regardless
+ *  of `--model`; picking by `Object.keys()[0]` mislabels every
+ *  opus/sonnet session as haiku. Rank by cost, then output tokens, then
+ *  name. Returns the raw model id (no display stripping). */
+export function primaryModelId(
+  modelUsage: Record<string, { inputTokens?: number; outputTokens?: number; costUSD?: number }> | undefined,
+): string {
+  if (!modelUsage) return 'unknown';
+  const entries = Object.entries(modelUsage);
+  if (!entries.length) return 'unknown';
+  entries.sort(([an, a], [bn, b]) => {
+    const ac = a.costUSD ?? 0, bc = b.costUSD ?? 0;
+    if (bc !== ac) return bc - ac;
+    const ao = a.outputTokens ?? 0, bo = b.outputTokens ?? 0;
+    if (bo !== ao) return bo - ao;
+    return an.localeCompare(bn);
+  });
+  return entries[0][0];
+}
+
 /** Read just the first JSONL line's ``ts`` field — used to anchor a
  *  log file in chronological order without parsing the whole stream.
  *  Reads a small head buffer so the cost stays O(1) per file even for
