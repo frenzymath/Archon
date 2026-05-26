@@ -8,6 +8,9 @@ from scratch, you don't need this file — follow the
 - **Coming from a pre-CLI checkout?** Start with section 1 (v0.1.0 reworked
   installation around a single `archon` CLI) and continue through to
   section 6.
+- **Coming from v0.2.0 or earlier?** Skip to [section 8](#8-upgrading-to-v030) —
+  v0.3.0 adds a configurable Claude backend for alternative headless
+  entrypoints and hardens stage detection.
 - **Coming from v0.1.0?** Skip to [section 7](#7-upgrading-from-v010-to-v020) —
   v0.2.0 adds multi-lane proving, the refactor agent, inner-git
   versioning, `archon-protected.yaml`, an opt-in subagent system, a
@@ -481,6 +484,38 @@ for orphan files, broken `\uses{...}` references, and missing
 `\lean{...}` blocks; the plan agent then sees the findings inline under
 `## Blueprint doctor — live structural findings`. No configuration is
 needed — it's silently included in every iteration.
+
+---
+
+## 8. Upgrading to v0.3.0
+
+v0.3.0 adds a configurable Claude backend for alternative headless
+entrypoints and hardens stage detection.
+
+### 8.1 Reinstall the CLI
+
+```bash
+archon update
+```
+
+### 8.2 Configurable Claude backend
+
+You can now use alternative entrypoints for the headless `claude -p` command
+via the new `--claude-backend` CLI flag or by setting `loop.claude_backend`
+in `.archon/config.json`. This is useful for environments like VS Code or
+Claude Desktop.
+
+Supported values:
+- `default`: plain `claude -p` (default)
+- `vscode`: sets `CLAUDE_CODE_ENTRYPOINT=claude-vscode`
+- `desktop`: sets `CLAUDE_CODE_ENTRYPOINT=claude-desktop`
+
+### 8.3 Hardened stage detection
+
+Stage detection in `PROGRESS.md` is now more resilient. Human or agent
+annotations (e.g., dates or iteration numbers) appended after the stage token
+are ignored by the orchestrator, preventing the loop from stalling on
+unexpected input.
 
 ---
 

@@ -1,11 +1,13 @@
 # Archon
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 
+> **Archon v0.3.0.** Adds a configurable **Claude backend** (`--claude-backend`) for alternative headless entrypoints (VSCode, Desktop), and hardens **stage detection** in `PROGRESS.md` to be more resilient to annotations.
+>
 > **Archon v0.2.0.** Adds **multi-lane parallel proving** (Anthropic + Moonshot + DeepSeek side by side), a **refactor agent** driven by the plan agent, **inner-git versioning** of agent work, a frozen-signature surface (`archon-protected.yaml`), an **opt-in subagent system** (blueprint review, strategy critique, Mathlib design advice, and more), a **`--resume`** flag for interrupted runs, a **blueprint-doctor** phase that catches blueprint drift before the plan agent runs, and a **post-plan validation step**. New CLI commands: `archon refactor`, `archon discuss`, `archon branch`, `archon version`. Default single-agent behavior is preserved — subagents and multilane are both off by default.
 >
-> **Upgrading from v0.1.0?** See [section 7 of MIGRATION.md](docs/MIGRATION.md#7-upgrading-from-v010-to-v020). **Upgrading from a pre-CLI checkout?** Start at section 1.
+> **Upgrading from v0.2.0?** Just run `archon update`. **Upgrading from v0.1.0?** See [section 7 of MIGRATION.md](docs/MIGRATION.md#7-upgrading-from-v010-to-v020).
 >
 > Full release notes: [CHANGELOG.md](docs/CHANGELOG.md).
 

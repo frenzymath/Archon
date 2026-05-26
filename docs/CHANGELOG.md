@@ -2,6 +2,10 @@
 
 All notable changes to Archon are documented here.
 
+## [0.3.0] — 2026-05
+
+This release adds a configurable **Claude backend** (`--claude-backend` or `loop.claude_backend` in `config.json`), allowing alternative headless entrypoints (VSCode, Desktop). It also hardens **stage detection** in `PROGRESS.md` by tolerating human/agent annotations after the stage token and centralises the normalization logic.
+
 ## [0.2.0] — 2026-05
 
 This release adds **multi-lane parallel proving**, a dedicated **refactor agent**,
