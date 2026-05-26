@@ -37,6 +37,8 @@ _OBJECTIVE_NUMBERED = re.compile(
 # relative paths inside other lanes' worktrees.
 _SKIP_PARTS = {".lake", "lake-packages", ".archon"}
 
+_PROVER_MODE_TAG = re.compile(r'\[prover-mode:\s*([^\]]+)\]', re.IGNORECASE)
+
 # Plan agents sometimes list off-limits files inside `## Current Objectives`
 # (e.g. "### 3. The protected files (`Foo.lean`) — DO NOT TOUCH"). Without
 # filtering, the regex picks up `Foo.lean` as an objective and the
@@ -189,6 +191,76 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
         candidates = _extract_list_candidates(section_lines)
 
     return _resolve_candidate_paths(project_path, candidates)
+
+
+def parse_objectives_with_modes(
+    progress_file: Path, project_path: Path,
+) -> list[tuple[Path, str | None]]:
+    """Like ``parse_objective_files`` but also returns the per-file mode tag.
+
+    Returns a list of ``(path, mode_name)`` pairs where ``mode_name`` is the
+    value of a ``[prover-mode: <name>]`` tag on the objective line, or ``None``
+    when no tag is present.
+    """
+    if not progress_file.exists():
+        return []
+
+    text = progress_file.read_text()
+    section_lines = _extract_section(text, "## Current Objectives")
+
+    use_headings = bool(_extract_heading_candidates(section_lines))
+    raw_lines: list[str] = []
+    for line in section_lines:
+        if _has_stop_marker(line):
+            continue
+        if use_headings:
+            if _OBJECTIVE_HEADING.search(line):
+                raw_lines.append(line)
+        else:
+            if _OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line):
+                raw_lines.append(line)
+
+    candidates: list[str] = []
+    modes: list[str | None] = []
+    for line in raw_lines:
+        if use_headings:
+            m = _OBJECTIVE_HEADING.search(line)
+        else:
+            m = _OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line)
+        if not m:
+            continue
+        if not use_headings:
+            prefix = line[:m.start(1)]
+            if ':' in prefix:
+                continue
+        candidates.append(m.group(1).strip())
+        mode_m = _PROVER_MODE_TAG.search(line)
+        modes.append(mode_m.group(1).strip() if mode_m else None)
+
+    paths = _resolve_candidate_paths(project_path, candidates)
+    # Match paths back to their modes via candidate index. resolve may drop
+    # candidates that don't exist, so rebuild the mapping by candidate string.
+    cand_to_mode: dict[str, str | None] = {}
+    for cand, mode in zip(candidates, modes):
+        cand_to_mode[cand] = mode
+
+    # _resolve_candidate_paths resolves and deduplicates; we pair each
+    # resolved path back with the mode of the first matching candidate.
+    results: list[tuple[Path, str | None]] = []
+    seen: set[str] = set()
+    for cand, mode in zip(candidates, modes):
+        cand_norm = cand.replace("\\", "/").strip("/")
+        for p in paths:
+            ps = str(p)
+            if ps in seen:
+                continue
+            # Match: path ends with the candidate (basename or relative path).
+            if ps.replace("\\", "/").endswith(cand_norm) or ps.split("/")[-1] == cand_norm.split("/")[-1]:
+                seen.add(ps)
+                results.append((p, mode))
+                break
+
+    return results
 
 
 def auto_fix_objectives(

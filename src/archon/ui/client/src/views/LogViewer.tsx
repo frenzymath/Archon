@@ -217,7 +217,9 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
             if (f.name === 'provers-combined.jsonl') return null;
 
             const proverSlug = f.name.replace('.jsonl', '');
-            const proverStatus = isProver && meta?.provers?.[proverSlug]?.status;
+            const baseProverSlug = proverSlug.includes('__') ? proverSlug.slice(0, proverSlug.lastIndexOf('__')) : proverSlug;
+            const proverStatus = isProver && meta?.provers?.[baseProverSlug]?.status;
+            const proverMode = isProver ? (meta?.provers?.[baseProverSlug]?.mode ?? null) : null;
             const subagentRoleLabel = isSubagent
               ? subagentDisplayRole(f.role || '')
               : '';
@@ -260,6 +262,7 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
                 <span className={styles.fileName}>
                   {isProver ? displayName : (displaySlug || '')}
                 </span>
+                {proverMode && <span className={styles.proverMode}>{proverMode}</span>}
                 {f.commit && <span className={styles.fileCommit}>{f.commit.shortSha}</span>}
               </div>
             );
@@ -323,6 +326,7 @@ function subagentPairKey(innerName: string, slug: string): string {
 const SUBAGENT_REPORT_RE = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-(.+)-report$/;
 
 const FILTER_OPTIONS = [
+  { value: 'prompt', label: 'prompt' },
   { value: 'shell', label: 'shell' },
   { value: 'thinking', label: 'thinking' },
   { value: 'tool_call', label: 'tool call' },

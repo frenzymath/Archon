@@ -24,12 +24,27 @@ from archon.prompts import (
 from archon.state import (
     archive_task_results,
     parse_objective_files,
+    parse_objectives_with_modes,
     write_meta,
 )
 
 from ..resume import PROVER_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import file_slug, relpath
 from .environment import ProverEnvironment, snapshot_baseline
+
+
+def _load_mode_content(state_dir: Path, mode_name: str | None) -> str | None:
+    """Load the body of a prover-mode descriptor (after frontmatter), or None."""
+    if not mode_name:
+        return None
+    mode_file = state_dir / "prover-modes" / f"{mode_name}.md"
+    if not mode_file.exists():
+        return None
+    text = mode_file.read_text(encoding="utf-8")
+    # Strip YAML frontmatter (---...---) so only the body is injected.
+    import re as _re
+    stripped = _re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, count=1, flags=_re.DOTALL)
+    return stripped.strip() or None
 
 
 def _run_single_prover(
@@ -190,7 +205,11 @@ class ParallelProverRunner:
         progress = self.state_dir / "PROGRESS.md"
         archive_task_results(self.state_dir, self.iter_dir)
 
-        sorry_files = parse_objective_files(progress, self.project_path)
+        objectives_with_modes = parse_objectives_with_modes(progress, self.project_path)
+        sorry_files = [p for p, _ in objectives_with_modes]
+        file_modes: dict[str, str | None] = {
+            str(p): m for p, m in objectives_with_modes
+        }
         if not sorry_files:
             log.warn("No files parsed from PROGRESS.md ## Current Objectives.")
             log.warn("The plan agent must list target files in **bold** or `backticks`.")
@@ -251,34 +270,42 @@ class ParallelProverRunner:
 
         if dry_run:
             for f in sorry_files:
-                log.step(f"[dry-run] Prover: {relpath(f, self.project_path)}")
+                mode = file_modes.get(str(f))
+                mode_tag = f" [mode: {mode}]" if mode else ""
+                log.step(f"[dry-run] Prover: {relpath(f, self.project_path)}{mode_tag}")
             return
 
         if file_count == 1:
-            self._run_single_file(sorry_files[0])
+            self._run_single_file(sorry_files[0], mode_name=file_modes.get(str(sorry_files[0])))
             return
 
-        self._run_fanout(sorry_files)
+        self._run_fanout(sorry_files, file_modes=file_modes)
 
-    def _run_single_file(self, target: Path) -> None:
+    def _run_single_file(self, target: Path, mode_name: str | None = None) -> None:
         rel = relpath(target, self.project_path)
         slug = file_slug(rel)
         log.info(f"Only 1 file ({rel}) — running serial prover")
 
         prover_log = self.iter_dir / "provers" / slug
-        write_meta(self.iter_meta, **{
+        meta_update: dict[str, object] = {
             f"provers.{slug}.file": rel,
             f"provers.{slug}.status": "running",
-        })
+        }
+        if mode_name:
+            meta_update[f"provers.{slug}.mode"] = mode_name
+        write_meta(self.iter_meta, **meta_update)
 
         snap_dir = self.iter_dir / "snapshots" / slug
         snapshot_baseline(target, snap_dir)
 
+        mode_content = _load_mode_content(self.state_dir, mode_name)
         base_prompt = build_parallel_prover_prompt(
             self.project_name, self.project_path, self.state_dir, self.stage,
             self.iter_num,
             assigned_rel_lean_path=rel,
             debug_feedback=self.debug_feedback,
+            mode_name=mode_name,
+            mode_content=mode_content,
         )
         prompt = f"{base_prompt}\nYour assigned file: {rel}"
         resume_sid = pick_resume_session(
@@ -308,7 +335,7 @@ class ParallelProverRunner:
             **{f"provers.{slug}.status": "done" if ok else "error"},
         )
 
-    def _run_fanout(self, sorry_files: list[Path]) -> None:
+    def _run_fanout(self, sorry_files: list[Path], *, file_modes: dict[str, str | None] | None = None) -> None:
         file_count = len(sorry_files)
         log.info(
             f"Found {file_count} file(s) — launching parallel provers "
@@ -324,6 +351,7 @@ class ParallelProverRunner:
         log.step(f"tail -f {self.iter_dir}/provers/*.jsonl")
         log.step(f"watch -n10 'ls -lt {self.state_dir}/task_results/'")
 
+        file_modes = file_modes or {}
         futures = {}
         prover_logs: dict[str, Path] = {}
         with ProcessPoolExecutor(
@@ -335,11 +363,15 @@ class ParallelProverRunner:
                 prover_log = self.iter_dir / "provers" / slug
                 prover_logs[slug] = prover_log
 
+                mode_name = file_modes.get(str(f))
+                mode_content = _load_mode_content(self.state_dir, mode_name)
                 base_prompt = build_parallel_prover_prompt(
                     self.project_name, self.project_path, self.state_dir, self.stage,
                     self.iter_num,
                     assigned_rel_lean_path=rel,
                     debug_feedback=self.debug_feedback,
+                    mode_name=mode_name,
+                    mode_content=mode_content,
                 )
                 prompt = f"{base_prompt}\nYour assigned file: {rel}"
 
@@ -364,10 +396,13 @@ class ParallelProverRunner:
                     submit_prompt = prompt
 
                 log.step(f"Starting prover for {rel}")
-                write_meta(self.iter_meta, **{
+                meta_update: dict[str, object] = {
                     f"provers.{slug}.file": rel,
                     f"provers.{slug}.status": "running",
-                })
+                }
+                if mode_name:
+                    meta_update[f"provers.{slug}.mode"] = mode_name
+                write_meta(self.iter_meta, **meta_update)
 
                 future = pool.submit(
                     _run_single_prover,

@@ -38,6 +38,7 @@ from .progress import (
     is_complete,
     normalize_stage_for_prompt_path,
     parse_objective_files,
+    parse_objectives_with_modes,
     read_stage,
     write_stage,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "is_complete",
     "normalize_stage_for_prompt_path",
     "parse_objective_files",
+    "parse_objectives_with_modes",
     "read_stage",
     "write_stage",
     "IterSidecarSnapshot",
