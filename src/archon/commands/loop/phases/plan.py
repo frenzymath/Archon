@@ -142,7 +142,7 @@ class PlanPhase(Phase):
                 cwd=ctx.project_path,
                 jsonl_fallback=Path(str(plan_log) + ".jsonl"),
             )
-            ClaudeAgent(model=ctx.model, role="plan").run(
+            ClaudeAgent(model=ctx.model, role="plan", backend=ctx.backend).run(
                 PLAN_CONTINUE if resume_sid else plan_prompt,
                 cwd=ctx.project_path,
                 log_base=plan_log, verbose_logs=ctx.verbose_logs,

@@ -157,7 +157,7 @@ class ReviewPhase(Phase):
             cwd=ctx.project_path,
             jsonl_fallback=Path(str(review_log) + ".jsonl"),
         )
-        ClaudeAgent(model=ctx.model, role="review").run(
+        ClaudeAgent(model=ctx.model, role="review", backend=ctx.backend).run(
             REVIEW_CONTINUE if resume_sid else prompt,
             cwd=ctx.project_path,
             log_base=review_log, verbose_logs=ctx.verbose_logs,

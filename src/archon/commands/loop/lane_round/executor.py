@@ -29,6 +29,8 @@ from archon.multilane.dispatch import (
     write_preview_runtime_artifacts,
 )
 
+from archon.agent import ClaudeBackend
+
 from .assignment import LaneAssignmentRunner
 from .helpers import non_archon_dirty_files, restore_repo_paths
 from .lock import MultiLaneLock
@@ -59,6 +61,7 @@ class LaneRoundExecutor:
         model: str,
         max_parallel: int = 4,
         config: MultiLaneConfig | None = None,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -70,6 +73,7 @@ class LaneRoundExecutor:
         self.model = model
         self.max_parallel = max_parallel
         self.config = config
+        self.backend = backend or ClaudeBackend()
 
         # Filled during run().
         self._assignments: list = []
@@ -270,6 +274,7 @@ class LaneRoundExecutor:
             lane_provider=lane_provider,
             lane_env=lane_env,
             cancel_event=self._cancel_events[assignment.assignment_id],
+            backend=self.backend,
         )
         return runner.run()
 
@@ -411,6 +416,7 @@ class LaneRoundExecutor:
             iteration=self.iteration,
             model=self.model,
             verbose_logs=self.verbose_logs,
+            backend=self.backend,
         )
         promotion_info.update(promoter.merge_and_promote(groups))
         return promotion_info

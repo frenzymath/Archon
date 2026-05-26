@@ -133,6 +133,16 @@ def loop(
              "when they notice something the developer should fix. "
              "(default from config or off)",
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Start the automated plan → prove → review loop.
 
@@ -155,6 +165,7 @@ def loop(
     from archon.commands.tooling.project_config import (
         load_project_config,
         resolve as _resolve,
+        resolve_claude_backend,
     )
 
     project_config = load_project_config(resolved)
@@ -177,6 +188,7 @@ def loop(
     debug_feedback = _resolve(
         debug_feedback, section=loop_cfg, key='debug_feedback', default=False,
     )
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
 
     # Multi-lane execution fires automatically when config.json has it
     # enabled with at least one lane defined. The old --multilane-execute
@@ -215,6 +227,7 @@ def loop(
         multilane_cfg=multilane_cfg,
         debug_feedback=debug_feedback,
         resume=resume,
+        backend=backend,
     )
 
     LoopCommand(options).run()

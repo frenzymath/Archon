@@ -60,6 +60,15 @@ def default_config() -> dict[str, Any]:
                 "while you are iterating on Archon itself."
             ),
             'debug_feedback': False,
+            '_claude_backend_help': (
+                "How 'claude -p' is invoked for headless runs. "
+                "'default': plain claude -p (no changes). "
+                "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode before "
+                "each claude subprocess, so the session is attributed to the "
+                "VS Code extension. "
+                "'desktop': same but with CLAUDE_CODE_ENTRYPOINT=claude-desktop."
+            ),
+            'claude_backend': 'default',
             '_axiom_sweep_help': (
                 "Run a deterministic #print axioms sweep between the "
                 "prover and review phases (after \\leanok sync) to catch "
@@ -91,6 +100,18 @@ def default_config() -> dict[str, Any]:
                 "that subagent). For backward compat, a bare string "
                 "value is treated as the model alias."
             ),
+            '_model_overrides_help': (
+                "Per-subagent model overrides: add any subagent name as a "
+                "key with a model alias (string) or a dict {\"model\": \"...\"} "
+                "to override loop.model for that specific subagent only. "
+                "Useful for running heavy critics on Opus while provers run "
+                "on a lighter model, or vice versa. The loop.model value is "
+                "used as fallback for any subagent not listed here."
+            ),
+            '_model_overrides_examples': {
+                "strategy-critic": "opus",
+                "mathlib-analogist": "sonnet",
+            },
             '_available': [
                 # The subagents shipped with Archon. Copy any of these
                 # names into `enabled` to activate. See
@@ -200,6 +221,49 @@ def write_default_config(project_path: Path, *, force: bool = False) -> bool:
     return True
 
 
+def _fill_missing_keys(user: dict, defaults: dict) -> tuple[dict, bool]:
+    """Recursively add keys from *defaults* that are absent in *user*.
+
+    Never overwrites an existing value — the user's content always wins.
+    Returns ``(updated_dict, changed)`` where *changed* is True when at
+    least one key was added anywhere in the tree.
+    """
+    changed = False
+    result = dict(user)
+    for key, default_val in defaults.items():
+        if key not in result:
+            result[key] = default_val
+            changed = True
+        elif isinstance(default_val, dict) and isinstance(result[key], dict):
+            result[key], sub_changed = _fill_missing_keys(result[key], default_val)
+            changed = changed or sub_changed
+    return result, changed
+
+
+def migrate_project_config(project_path: Path) -> bool:
+    """Add keys from the current default schema that are absent in the project config.
+
+    Called during ``archon init`` re-init so users automatically see new
+    options (like ``loop.claude_backend`` or subagent model-override
+    examples) after an Archon upgrade — without losing any of their own
+    values. Returns True if the file was updated.
+    """
+    path = config_path(project_path)
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    updated, changed = _fill_missing_keys(data, default_config())
+    if not changed:
+        return False
+    path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8')
+    return True
+
+
 @dataclass
 class ProjectConfig:
     """Parsed view of ``.archon/config.json``."""
@@ -282,6 +346,41 @@ def resolve_recent_iter_window(cfg: ProjectConfig, *, fallback: int = 3) -> int:
 
 
 # ── subagent registry resolution ──────────────────────────────────────
+
+
+_CLAUDE_BACKEND_ENTRYPOINTS: dict[str, str | None] = {
+    "default": None,
+    "vscode":  "claude-vscode",
+    "desktop": "claude-desktop",
+}
+
+
+def resolve_claude_backend(
+    cfg: ProjectConfig,
+    *,
+    cli_value: str | None = None,
+) -> "ClaudeBackend":
+    """Return a :class:`~archon.agent.ClaudeBackend` from CLI or config.
+
+    Precedence: ``cli_value`` (``--claude-backend`` flag) > ``loop.
+    claude_backend`` in ``config.json`` > built-in default (``"default"``).
+    Unknown values fall back to ``"default"`` with a warning.
+    """
+    from archon.agent import ClaudeBackend, EntrypointBackend
+    from archon import log as _log
+
+    section = cfg.loop_section()
+    raw = (cli_value or section.get("claude_backend") or "default").strip().lower()
+    if raw not in _CLAUDE_BACKEND_ENTRYPOINTS:
+        _log.warn(
+            f"Unknown claude_backend '{raw}'; valid values: "
+            f"{', '.join(_CLAUDE_BACKEND_ENTRYPOINTS)}. Using 'default'."
+        )
+        raw = "default"
+    entrypoint = _CLAUDE_BACKEND_ENTRYPOINTS[raw]
+    if entrypoint is not None:
+        return EntrypointBackend(entrypoint)
+    return ClaudeBackend()
 
 
 def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | None:

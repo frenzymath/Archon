@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from archon.agent import ClaudeBackend
+
 if TYPE_CHECKING:
     from archon.commands.tooling.blueprint import BlueprintServer
 
@@ -47,6 +49,7 @@ class LoopOptions:
 
     debug_feedback: bool = False
     resume: bool = False
+    backend: ClaudeBackend = field(default_factory=ClaudeBackend)
 
     @property
     def do_git(self) -> bool:
@@ -106,6 +109,10 @@ class LoopContext:
     @property
     def model(self) -> str:
         return self.options.model
+
+    @property
+    def backend(self) -> ClaudeBackend:
+        return self.options.backend
 
     @property
     def verbose_logs(self) -> bool:

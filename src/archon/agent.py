@@ -30,7 +30,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -310,6 +310,77 @@ if RAW: RAW.close()
 '''
 
 
+# ── ClaudeBackend ─────────────────────────────────────────────────────
+
+
+class ClaudeBackend:
+    """Extension point for how ``claude -p`` is invoked.
+
+    The default implementation issues a plain ``claude -p <prompt>``
+    subprocess. Subclass and override ``build_headless`` to change the
+    command or inject environment variables — the returned (cmd, env)
+    pair is forwarded directly to ``subprocess.Popen``.
+
+    Adding a new backend (e.g. a Python wrapper that makes the
+    interactive ``claude`` session headless) is a single new subclass
+    here; nothing else in ``ClaudeAgent`` or its callers changes.
+    """
+
+    def build_headless(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        flags: list[str],
+        resume_session_id: str | None,
+        base_env: dict[str, str],
+    ) -> tuple[list[str], dict[str, str]]:
+        """Return ``(command, env)`` for the headless ``claude -p`` call.
+
+        ``base_env`` is already the fully merged environment (OS env +
+        provider overrides + caller-supplied overrides + IS_SANDBOX).
+        Subclasses may return a modified copy.
+        """
+        cmd = ["claude"]
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
+        cmd.extend(["-p", prompt, *flags])
+        return cmd, base_env
+
+
+class EntrypointBackend(ClaudeBackend):
+    """Sets ``CLAUDE_CODE_ENTRYPOINT`` before invoking the standard binary.
+
+    Use ``entrypoint="claude-vscode"`` or ``entrypoint="claude-desktop"``
+    to run inside the matching session variant. ``entrypoint=None`` (the
+    default) falls back to the base :class:`ClaudeBackend` behaviour with
+    no env injection.
+    """
+
+    def __init__(self, entrypoint: str | None = None) -> None:
+        self.entrypoint = entrypoint
+
+    def build_headless(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        flags: list[str],
+        resume_session_id: str | None,
+        base_env: dict[str, str],
+    ) -> tuple[list[str], dict[str, str]]:
+        env = (
+            {**base_env, "CLAUDE_CODE_ENTRYPOINT": self.entrypoint}
+            if self.entrypoint
+            else base_env
+        )
+        cmd = ["claude"]
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
+        cmd.extend(["-p", prompt, *flags])
+        return cmd, env
+
+
 # ── ClaudeAgent ───────────────────────────────────────────────────────
 
 
@@ -339,6 +410,7 @@ class ClaudeAgent:
     role: str | None = None
     permission_mode: str = "bypassPermissions"
     skip_permissions: bool = True
+    backend: ClaudeBackend = field(default_factory=ClaudeBackend)
 
     # ── command assembly ─────────────────────────────────────────────
 
@@ -447,17 +519,21 @@ class ClaudeAgent:
         iter's meta.json via ``state.read_meta``).
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
-        cmd = ["claude"]
-        if resume_session_id:
-            cmd.extend(["--resume", resume_session_id])
-        cmd.extend(["-p", prompt, *self._build_flags(real_model)])
-        if extra_args:
-            cmd.extend(extra_args)
 
         merged = dict(provider_env_vars)
         if env_overrides:
             merged.update(env_overrides)
-        env = self._build_env(merged)
+        base_env = self._build_env(merged)
+
+        cmd, env = self.backend.build_headless(
+            prompt,
+            model=real_model,
+            flags=self._build_flags(real_model),
+            resume_session_id=resume_session_id,
+            base_env=base_env,
+        )
+        if extra_args:
+            cmd.extend(extra_args)
 
         self._announce_model(real_model=real_model, provider=provider)
 
@@ -737,4 +813,4 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
-__all__ = ["ClaudeAgent", "DEFAULT_MODEL", "RunOutcome"]
+__all__ = ["ClaudeAgent", "ClaudeBackend", "EntrypointBackend", "DEFAULT_MODEL", "RunOutcome"]

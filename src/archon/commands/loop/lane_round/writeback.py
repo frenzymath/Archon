@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from archon.agent import ClaudeBackend
+
 
 def select_writeback_rows(
     results: list[dict[str, object]],
@@ -134,12 +136,14 @@ class WritebackPromoter:
         iteration: int,
         model: str,
         verbose_logs: bool,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.state_dir = state_dir
         self.iteration = iteration
         self.model = model
         self.verbose_logs = verbose_logs
+        self.backend = backend or ClaudeBackend()
 
     def promote_simple(self, rows: list[dict[str, object]]) -> dict[str, object]:
         """Verbatim copy + commit. Used when no merge agent is needed."""
@@ -201,6 +205,7 @@ class WritebackPromoter:
                 iteration=self.iteration,
                 model=self.model,
                 verbose_logs=self.verbose_logs,
+                backend=self.backend,
             )
             self._symlink_merge_log(outcome, rel)
 

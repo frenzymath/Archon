@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent
+from archon.agent import ClaudeAgent, ClaudeBackend
 from archon.multilane.dispatch import build_assignment_prompt
 from archon.state import utcnow_iso
 
@@ -46,6 +46,7 @@ class LaneAssignmentRunner:
         lane_provider: str | None = None,
         lane_env: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -59,6 +60,7 @@ class LaneAssignmentRunner:
         self.lane_provider = lane_provider
         self.lane_env = lane_env
         self.cancel_event = cancel_event
+        self.backend = backend or ClaudeBackend()
 
         self.lane_path = Path(assignment.worktree_path)
         self.slug = file_slug(assignment.assigned_file)
@@ -176,7 +178,7 @@ class LaneAssignmentRunner:
             run_env = {**run_env, **self.lane_env}
 
         try:
-            return ClaudeAgent(model=self.model, role=role_tag).run(
+            return ClaudeAgent(model=self.model, role=role_tag, backend=self.backend).run(
                 prompt,
                 cwd=self.lane_path,
                 log_base=Path(self.assignment.log_path),

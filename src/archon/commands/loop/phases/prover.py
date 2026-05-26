@@ -116,6 +116,7 @@ class ProverPhase(Phase):
             model=ctx.model,
             max_parallel=ctx.options.max_parallel,
             config=lane_config,
+            backend=ctx.backend,
         )
         execution_info = executor.run()
         if not ctx.dry_run and execution_info is not None:
@@ -154,6 +155,7 @@ class ProverPhase(Phase):
             blueprint_url=ctx.blueprint_url,
             debug_feedback=ctx.options.debug_feedback,
             resume_enabled=self._resume_enabled(),
+            backend=ctx.backend,
         )
         runner.run(dry_run=ctx.dry_run)
 
@@ -171,5 +173,6 @@ class ProverPhase(Phase):
             debug_feedback=ctx.options.debug_feedback,
             iter_meta=ctx.iter_meta,
             resume_enabled=self._resume_enabled(),
+            backend=ctx.backend,
         )
         runner.run(dry_run=ctx.dry_run, progress_file=ctx.progress_file)

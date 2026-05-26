@@ -33,5 +33,12 @@ class EnvAndConfigStep(InitStep):
         if cfg_written:
             log.step("Wrote .archon/config.json with default loop + multilane settings")
         else:
-            log.step(".archon/config.json already exists — preserved")
+            cfg_migrated = project_config.migrate_project_config(ctx.project_path)
+            if cfg_migrated:
+                log.step(
+                    ".archon/config.json updated — new keys added "
+                    "(your existing values were preserved)"
+                )
+            else:
+                log.step(".archon/config.json already up to date — preserved")
         log.success("Project config ready")

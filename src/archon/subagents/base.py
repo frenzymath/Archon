@@ -32,6 +32,7 @@ from archon import log
 from archon.agent import ClaudeAgent, DEFAULT_MODEL
 from archon.commands.tooling.project_config import (
     load_project_config,
+    resolve_claude_backend,
     resolve_subagent_model,
 )
 from archon.dispatch import SlotPool
@@ -207,13 +208,14 @@ class Subagent:
         self.name = descriptor.name
         self.project_path = project_path
         self.verbose_logs = verbose_logs
+        cfg = load_project_config(project_path)
         if model is not None:
             self.model = model
         else:
-            cfg = load_project_config(project_path)
             self.model = resolve_subagent_model(
                 cfg, self.name, fallback=DEFAULT_MODEL,
             )
+        self.backend = resolve_claude_backend(cfg)
 
     # ── prompt envelope ─────────────────────────────────────────────
 
@@ -293,7 +295,7 @@ class Subagent:
         prompt = self.build_prompt(
             directive=directive, slug=slug, iter_num=iter_num,
         )
-        agent = ClaudeAgent(model=self.model, role=self.name)
+        agent = ClaudeAgent(model=self.model, role=self.name, backend=self.backend)
 
         start_ts = _now_iso()
         if dispatch_log is not None:
