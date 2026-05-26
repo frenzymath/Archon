@@ -17,7 +17,7 @@ import typer
 from archon import log
 from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 
-from .utils import data_path, has, parse_stage
+from .utils import _files_equal, data_path, has, parse_stage
 
 
 class ReinitController:
@@ -53,6 +53,33 @@ class ReinitController:
                 info["version"] = "current-copy"
         return info
 
+    def _diff_summary(self) -> tuple[list[str], list[str]]:
+        """Return (changed, extras) local file path lists.
+
+        ``changed`` — files that exist in both bundled and local but differ.
+        ``extras``  — files present locally but absent from the bundled set.
+        """
+        changed: list[str] = []
+        extras: list[str] = []
+        prompts_src = data_path("prompts")
+        prompts_dst = self.state_dir / "prompts"
+        if prompts_src.exists():
+            bundled_names = {f.name for f in prompts_src.glob("*.md")}
+            for f in sorted(prompts_src.glob("*.md")):
+                local = prompts_dst / f.name
+                if local.exists() and not _files_equal(f, local):
+                    changed.append(f".archon/prompts/{f.name}")
+            if prompts_dst.is_dir():
+                for f in sorted(prompts_dst.glob("*.md")):
+                    if f.name not in bundled_names:
+                        extras.append(f".archon/prompts/{f.name}")
+        template_dir = data_path("archon-template")
+        claude_src = template_dir / "CLAUDE.md"
+        claude_dst = self.state_dir / "CLAUDE.md"
+        if claude_src.exists() and claude_dst.exists() and not _files_equal(claude_src, claude_dst):
+            changed.append(".archon/CLAUDE.md")
+        return changed, extras
+
     def prompt_mode(self, info: dict) -> str:
         log.warn("This project has already been initialized with Archon.")
         log.key_value({
@@ -60,6 +87,20 @@ class ReinitController:
             "Current stage": info["stage"],
             "Prompts are symlinks": "yes" if info["prompts_are_symlinks"] else "no",
         })
+
+        changed, extras = self._diff_summary()
+        typer.echo("")
+        if changed or extras:
+            if changed:
+                typer.echo(f"  {len(changed)} file(s) differ from the bundled version:")
+                for name in changed:
+                    typer.echo(f"    ~ {name}")
+            if extras:
+                typer.echo(f"  {len(extras)} file(s) present locally but not in this Archon version:")
+                for name in extras:
+                    typer.echo(f"    + {name}  (user-added or removed from defaults — will not be touched)")
+        else:
+            typer.echo("  Local files match the bundled version — no changes to reconcile.")
 
         if info["prompts_are_symlinks"]:
             log.step(

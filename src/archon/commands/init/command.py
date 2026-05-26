@@ -96,6 +96,12 @@ class InitCommand:
         if mode != "fresh":
             self.ctx.fresh = False
 
+        # Prompt files should be force-replaced on a fresh install OR when
+        # the user explicitly chose "overwrite" (or --force). "merge" and
+        # "keep" deliberately preserve local edits, so they don't set this.
+        if mode in ("fresh", "overwrite"):
+            self.ctx.overwrite = True
+
         if mode == "keep":
             self._run_keep_only()
             return

@@ -107,20 +107,7 @@ class SkillsStep(InitStep):
             log.warn("Archon tools directory not found in package data")
             return
 
-        for src in sorted(tools_src.glob("*.py")):
-            if src.stem == self._SUBAGENT_WRAPPER_STEM:
-                dst = tools_dst / "archon-subagent.py"
-            else:
-                # informal_agent.py -> archon-informal-agent.py
-                stem = src.stem.replace("_", "-")
-                dst = tools_dst / f"archon-{stem}.py"
-            copy_file(src, dst, overwrite=True)
-            log.success(f"Copied {dst.name}")
-
-        # Sweep abandoned per-role wrapper files from previous Archon
-        # versions. We only remove files we know we used to install —
-        # never anything else under .claude/tools/.
-        for stale in (
+        _KNOWN_STALE = {
             "archon-refactor-agent.py",
             "archon-analogy-agent.py",
             "archon-challenger-agent.py",
@@ -133,10 +120,34 @@ class SkillsStep(InitStep):
             "archon-refactor-wrapper.py",
             "archon-analogy-wrapper.py",
             "archon-challenger-wrapper.py",
-        ):
+        }
+
+        installed: set[str] = set()
+        for src in sorted(tools_src.glob("*.py")):
+            if src.stem == self._SUBAGENT_WRAPPER_STEM:
+                dst = tools_dst / "archon-subagent.py"
+            else:
+                # informal_agent.py -> archon-informal-agent.py
+                stem = src.stem.replace("_", "-")
+                dst = tools_dst / f"archon-{stem}.py"
+            installed.add(dst.name)
+            if copy_file(src, dst, overwrite=True):
+                log.success(f"Copied {dst.name}")
+
+        # Sweep abandoned per-role wrapper files from previous Archon versions.
+        for stale in _KNOWN_STALE:
             stale_path = tools_dst / stale
             if stale_path.is_file():
                 stale_path.unlink()
+
+        # Warn about archon-*.py files that are neither installed nor known-stale.
+        for f in sorted(tools_dst.glob("archon-*.py")):
+            if f.name not in installed and f.name not in _KNOWN_STALE:
+                log.warn(
+                    f"  {f.name} is not part of this Archon version's default tools. "
+                    "You may have added it, or it was removed in a newer release — "
+                    "safe to delete if you no longer need it."
+                )
 
     def _copy_subagent_descriptors(self) -> None:
         """Copy every built-in subagent descriptor into ``.archon/subagents/``.
@@ -154,10 +165,22 @@ class SkillsStep(InitStep):
         if not src_dir.is_dir():
             return
         dst_dir.mkdir(parents=True, exist_ok=True)
+
+        installed: set[str] = set()
         for src in sorted(src_dir.glob("*.md")):
             dst = dst_dir / src.name
-            copy_file(src, dst, overwrite=True)
-            log.success(f"Copied subagent descriptor {dst.name}")
+            installed.add(dst.name)
+            if copy_file(src, dst, overwrite=True):
+                log.success(f"Copied subagent descriptor {dst.name}")
+
+        # Warn about descriptors present locally but not in the bundled set.
+        for f in sorted(dst_dir.glob("*.md")):
+            if f.name not in installed:
+                log.warn(
+                    f"  {f.name} is not part of this Archon version's default subagents. "
+                    "You may have added it, or it was removed in a newer release — "
+                    "safe to delete if you no longer need it."
+                )
 
     def _cleanup_legacy_subagents(self) -> None:
         """Remove pre-migration ``.claude/agents/{analogy,challenger,refactor}.md``.
