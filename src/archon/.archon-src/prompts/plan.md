@@ -339,6 +339,10 @@ So **before committing more than one iter of prover budget to a hard or recurrin
 
 If a counterexample turns up, the statement (or a missing hypothesis) is the bug: fix the blueprint statement, mark the Lean declaration with a `% NOTE:` for review, and do NOT assign a prover to formalize the false version. If the disproof attempt fails, you've cheaply raised your confidence that the target is true — now spend the budget. Record the disproof attempt and its outcome in the iter sidecar so the next planner doesn't repeat it.
 
+## Prover modes
+
+The available prover modes are auto-injected into this prompt above (under **Available prover modes**). The default mode for each stage is used when no tag is present. To override the mode for a specific file's objective, append `[prover-mode: <name>]` to the objective line.
+
 ## Multi-agent coordination
 
 Provers run in parallel — one per file. Number objectives clearly; each maps to exactly one `.lean` file. Reference the blueprint chapter alongside, and **list every ready sorry in that file that the prover should fill in this iter** — not just one:
@@ -347,7 +351,7 @@ Provers run in parallel — one per file. Number objectives clearly; each maps t
 ## Current Objectives
 
 1. **`Core.lean`** — Fill sorries in `filter_convergence` (line 156), `filter_inv` (line 188), `filter_assoc` (line 211). Blueprint: `chapters/Core.tex` (`thm:filter_convergence`, `thm:filter_inv`, `thm:filter_assoc`).
-2. **`Measure.lean`** — Fill sorry in `sigma_finite_restrict` (line 45). Blueprint: `chapters/Measure.tex`.
+2. **`Measure.lean`** — Fill sorry in `sigma_finite_restrict` (line 45). Blueprint: `chapters/Measure.tex`. [prover-mode: fine-grained]
 3. **`ChartAlgebra.lean`** — Scaffold the file with declarations for `thm:chart_id`, `thm:chart_comp`, `thm:chart_inv` from the chapter; leave bodies as `sorry`. Blueprint: `chapters/ChartAlgebra.tex`. (File-skeleton dispatch — see below.)
 ```
 

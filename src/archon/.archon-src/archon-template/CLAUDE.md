@@ -64,7 +64,7 @@ All Archon state files are in `.archon/`. The table below covers **phase agents*
 | `iter/iter-NNN/objectives.md` | optional write | — | read | read |
 | `archon-protected.yaml` | read | read | read | **write** |
 | `.lean` files | — | write (own file; frozen protected signatures) | — | write (via comments) |
-| `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints) | — | **write** (semantic markers: `\mathlibok`, `% NOTE:`, `\lean{...}` corrections — NOT `\leanok`) | read |
+| `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints) | read | **write** (semantic markers: `\mathlibok`, `% NOTE:`, `\lean{...}` corrections — NOT `\leanok`) | read |
 | `analogies/<slug>.md` | read (when relevant) | — | — | read |
 | `TO_USER.md` | — (review owns) | — | **write** (reset at review start) | read |
 
@@ -123,7 +123,8 @@ The user provides hints in two places:
 ### Prover Agent
 
 - Read `PROGRESS.md` for your objectives (read only).
-- Read the stage-specific prompt from `.archon/prompts/` (`prover-autoformalize.md` / `prover-prover.md` / `prover-polish.md`).
+- Your **active mode** is injected directly into your invocation prompt — read it carefully, it defines your goal, workflow, and constraints for this session.
+- When your mode specifies `read_blueprint: true`, you are permitted to **read** your assigned blueprint chapter (`blueprint/src/chapters/<your_slug>.tex`) for the informal proof sketch. You may never write to blueprint chapters.
 - Write results to `task_results/<your_file>.md`.
 - Write only to the `.lean` file(s) you are assigned — never edit another agent's file.
 - Check for `/- USER: ... -/` comments in your file for file-specific hints.

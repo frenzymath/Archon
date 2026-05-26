@@ -736,6 +736,91 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ── prover modes catalog ─────────────────────────────────────────────
+
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)", re.DOTALL)
+
+
+def _parse_mode_frontmatter(text: str) -> dict:
+    """Extract YAML frontmatter from a prover-mode descriptor file."""
+    import yaml as _yaml
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}
+    try:
+        return _yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        return {}
+
+
+def _prover_modes_catalog_block(state_dir: Path) -> str:
+    """Render the available prover-modes catalog for injection into the plan prompt.
+
+    Reads ``<state_dir>/prover-modes/*.md`` (installed by ``archon init``
+    from the built-in ``prover-modes/`` source directory). Returns an empty
+    string if no mode files are found.
+    """
+    modes_dir = state_dir / "prover-modes"
+    if not modes_dir.is_dir():
+        return ""
+
+    modes: list[dict] = []
+    for path in sorted(modes_dir.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _parse_mode_frontmatter(text)
+        if not fm.get("name"):
+            continue
+        modes.append(fm)
+
+    if not modes:
+        return ""
+
+    lines = [
+        "",
+        "## Available prover modes",
+        "",
+        "Add `[prover-mode: <name>]` to an objective line in `PROGRESS.md` to "
+        "override the default mode for that file. The stage default is used when no tag is present "
+        "(formalize → autoformalize stage, prove → prover stage, polish → polish stage). "
+        "Blueprint access is granted automatically to modes that require it.",
+        "",
+    ]
+    for fm in modes:
+        name = fm.get("name", "?")
+        desc = str(fm.get("description", "")).strip()
+        compatible = fm.get("compatible_stages") or []
+        defaults = fm.get("default_for_stages") or []
+        read_bp = fm.get("read_blueprint", False)
+
+        tags: list[str] = []
+        if defaults:
+            tags.append(f"default for: {', '.join(defaults)}")
+        if read_bp:
+            tags.append("reads blueprint")
+        tag_str = f" [{' · '.join(tags)}]" if tags else ""
+        compat_str = f" — valid stages: {', '.join(compatible)}" if compatible else ""
+        short_desc = desc[:200] + "..." if len(desc) > 200 else desc
+        lines.append(f"- **{name}**{tag_str}{compat_str} — {short_desc}")
+
+        notes = str(fm.get("dispatcher_notes", "")).strip()
+        if notes:
+            for note_line in notes.splitlines():
+                lines.append(f"  {note_line}")
+
+    lines.append("")
+    lines.append(
+        "Tag syntax (add to any objective bullet in PROGRESS.md): "
+        "`[prover-mode: fine-grained]`. One tag per objective; "
+        "the tag is stripped from the directive the prover sees."
+    )
+
+    return "\n".join(lines) + "\n"
+
+
 # ── stage normalization ───────────────────────────────────────────────
 
 
@@ -802,6 +887,7 @@ def build_plan_prompt(
         state_dir, iter_num,
         role="plan", window=recent_iter_window,
     )
+    modes_catalog_block = _prover_modes_catalog_block(state_dir)
     catalog_block = _subagent_catalog_block(project_path, role="plan")
     user_hints_block = _user_hints_block(captured_user_hints)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
@@ -818,13 +904,31 @@ def build_plan_prompt(
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
-        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
-    iter_num: int, debug_feedback: bool = False
+    iter_num: int, debug_feedback: bool = False,
+    *,
+    mode_name: str | None = None,
+    mode_content: str | None = None,
 ) -> str:
+    if mode_content:
+        mode_block = (
+            f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
+            + mode_content.strip()
+            + "\n"
+        )
+        return dedent(f"""\
+            You are the prover agent for project '{project_name}'. Current stage: {stage}.
+            Archon iteration: {iter_num:03d}.
+            Project directory: {project_path}
+            Project state directory: {state_dir}
+            Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
+            All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
+            + mode_block \
+            + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
@@ -839,17 +943,46 @@ def build_parallel_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int, debug_feedback: bool = False,
     assigned_rel_lean_path: str | None = None,
+    *,
+    mode_name: str | None = None,
+    mode_content: str | None = None,
 ) -> str:
     """Build the prover prompt, optionally tailored to a specific assigned file.
 
-    When `assigned_rel_lean_path` is provided, the prompt includes a
-    pointer to the blueprint chapter for that file.
+    When ``assigned_rel_lean_path`` is provided, a blueprint chapter pointer
+    is injected (the chapter path is derived from the file slug).
+
+    When ``mode_content`` is provided, the mode body is injected inline and
+    replaces the old "read prover-<stage>.md" instruction.
     """
     bp_hint = ""
     if assigned_rel_lean_path:
         hint = _blueprint_chapter_hint(project_path, assigned_rel_lean_path)
         if hint:
             bp_hint = "\n\n" + hint
+
+    if mode_content:
+        mode_block = (
+            f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
+            + mode_content.strip()
+            + "\n"
+        )
+        return dedent(f"""\
+            You are a prover agent for project '{project_name}'. Current stage: {stage}.
+            Archon iteration: {iter_num:03d}.
+            Project directory: {project_path}
+            Project state directory: {state_dir}
+            Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
+            Check your .lean file for /- USER: ... -/ comments for file-specific hints.
+
+            IMPORTANT:
+            - You own ONLY the file assigned below. Do NOT edit any other .lean file.
+            - Write your results to {state_dir}/task_results/<your_file>.md when done.
+            - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
+            - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
+            - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
+            + bp_hint + mode_block \
+            + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
