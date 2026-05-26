@@ -129,11 +129,11 @@ def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
     content = progress_file.read_text()
 
     pattern = r"## Current Stage\s+([^\n#]+)"
-    
+
     match = re.search(pattern, content)
     if match:
-        return match.group(1).strip()
-    
+        return match.group(1).strip().split()[0]
+
     raise ValueError("Could not read current stage from PROGRESS.md")
 
 
@@ -142,6 +142,36 @@ def is_complete(progress_file: Path, force_stage: str | None = None) -> bool:
         return "COMPLETE" in read_stage(progress_file, force_stage)
     except (FileNotFoundError, ValueError):
         return False
+
+
+# Canonical prover stage tokens shipped at `.archon/prompts/prover-<stage>.md`.
+# Used by ``normalize_stage_for_prompt_path`` to recover the canonical
+# token from a verbose ``## Current Stage`` line; the planner sometimes
+# writes things like ``prover (Iter-123: M1.b residual — Steps 1-4 ...)``
+# and the raw text breaks the prompt-file path resolution.
+_PROVER_STAGES = ("autoformalize", "prover", "polish")
+
+
+def normalize_stage_for_prompt_path(stage: str) -> str:
+    """Pick the canonical prover-stage token used in `prover-<stage>.md` paths.
+
+    The plan agent occasionally writes ``## Current Stage`` with descriptive
+    text appended after the stage token, e.g.::
+
+        ## Current Stage
+        prover (Iter-123: M1.b residual — Steps 1-4 of the IsLocalization.of_le)
+
+    The raw text contains parentheses, em-dashes and trailing fragments — when
+    embedded into ``.archon/prompts/prover-<stage>.md`` this produces a
+    non-existent filename and the prover wastes one boot pivoting back to the
+    canonical path. Match the first known prefix instead so the path is always
+    one of the three shipped prompts.
+    """
+    head = stage.strip().lower().lstrip("`*").lstrip()
+    for canonical in _PROVER_STAGES:
+        if head.startswith(canonical):
+            return canonical
+    return "prover"
 
 
 def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]:

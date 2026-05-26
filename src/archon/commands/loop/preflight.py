@@ -36,7 +36,7 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool) -> None:
         raise typer.Exit(1)
 
     stage = read_stage(progress)
-    if stage == "init":
+    if "init" in stage:
         log.error(f"Project is still in init stage. Run: archon init {project_path}")
         raise typer.Exit(1)
 

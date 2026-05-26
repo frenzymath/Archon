@@ -33,7 +33,7 @@ def _strip_html_comments(text: str) -> str:
     """
     return _HTML_COMMENT_RE.sub("", text)
 
-from archon.commands.tooling.blueprint import chapter_slug_for_lean_file
+from archon.state import normalize_stage_for_prompt_path
 from archon.state.iter_state import (
     format_recent_iter_sidecars_for_prompt,
     objectives_sidecar_path,
@@ -739,36 +739,6 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
 # ── stage normalization ───────────────────────────────────────────────
 
 
-# Canonical prover stage tokens shipped at `.archon/prompts/prover-<stage>.md`.
-# Used by ``_normalize_stage_for_prompt_path`` to recover the canonical
-# token from a verbose ``## Current Stage`` line; the planner sometimes
-# writes things like ``prover (Iter-123: M1.b residual — Steps 1-4 ...)``
-# and the raw text breaks the prompt-file path resolution.
-_PROVER_STAGES = ("autoformalize", "prover", "polish")
-
-
-def _normalize_stage_for_prompt_path(stage: str) -> str:
-    """Pick the canonical prover-stage token used in `prover-<stage>.md` paths.
-
-    The plan agent occasionally writes ``## Current Stage`` with descriptive
-    text appended after the stage token, e.g.::
-
-        ## Current Stage
-        prover (Iter-123: M1.b residual — Steps 1-4 of the IsLocalization.of_le)
-
-    The raw text contains parentheses, em-dashes and trailing fragments — when
-    embedded into ``.archon/prompts/prover-<stage>.md`` this produces a
-    non-existent filename and the prover wastes one boot pivoting back to the
-    canonical path. Match the first known prefix instead so the path is always
-    one of the three shipped prompts.
-    """
-    head = stage.strip().lower().lstrip("`*").lstrip()
-    for canonical in _PROVER_STAGES:
-        if head.startswith(canonical):
-            return canonical
-    return "prover"
-
-
 # ── prompt builders ───────────────────────────────────────────────────
 
 
@@ -855,7 +825,7 @@ def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int, debug_feedback: bool = False
 ) -> str:
-    stage_path = _normalize_stage_for_prompt_path(stage)
+    stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
@@ -881,7 +851,7 @@ def build_parallel_prover_prompt(
         if hint:
             bp_hint = "\n\n" + hint
 
-    stage_path = _normalize_stage_for_prompt_path(stage)
+    stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.

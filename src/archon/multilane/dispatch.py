@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
-from archon.state import parse_objective_files
+from archon.state import normalize_stage_for_prompt_path, parse_objective_files
 
 from .collect import summarize_assignments, write_runtime_jsonl
 from .config import resolve_runtime_paths
@@ -95,12 +95,13 @@ def build_assignment_prompt(
     iter_num: int,
 ) -> str:
     state_view = Path(assignment.state_view_path) if assignment.state_view_path else state_dir
+    stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {lane_project_path}
         Instruction/state directory (read-only): {state_view}
-        Read {state_view}/CLAUDE.md for your role, then read {state_view}/prompts/prover-{stage}.md and {state_view}/PROGRESS.md.
+        Read {state_view}/CLAUDE.md for your role, then read {state_view}/prompts/prover-{stage_path}.md and {state_view}/PROGRESS.md.
         Check your assigned .lean file for /- USER: ... -/ comments for file-specific hints.
 
         CRITICAL WORKTREE RULES:
