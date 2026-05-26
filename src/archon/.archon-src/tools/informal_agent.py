@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Informal mathematical reasoning via external LLMs (OpenAI / Gemini / OpenRouter).
+"""Informal mathematical reasoning via external LLMs.
+
+Supported providers (all speak OpenAI-compatible chat completions unless noted):
+    openai      https://api.openai.com/v1        → OPENAI_API_KEY
+    gemini      Google Generative Language API   → GEMINI_API_KEY
+    openrouter  https://openrouter.ai/api/v1     → OPENROUTER_API_KEY
+    deepseek    https://api.deepseek.com/v1      → DEEPSEEK_API_KEY
+    kimi        https://api.moonshot.cn/v1       → MOONSHOT_API_KEY
+    auto        pick the best available key automatically (default)
 
 No dependencies beyond Python 3.10+ stdlib.
 
-Environment variables:
-    OPENAI_API_KEY      Required for --provider openai
-    GEMINI_API_KEY      Required for --provider gemini
-    OPENROUTER_API_KEY  Required for --provider openrouter
-
 Usage:
-    python3 archon-informal-agent.py --provider openai "Prove that ..."
+    python3 archon-informal-agent.py "Prove that ..."
+    python3 archon-informal-agent.py --provider deepseek "Prove that ..."
     python3 archon-informal-agent.py --provider gemini --think "Prove that ..."
-    python3 archon-informal-agent.py --provider openrouter "Prove that ..."
     python3 archon-informal-agent.py --provider openrouter --model deepseek/deepseek-r1 "..."
 
-OpenRouter (https://openrouter.ai) provides access to 200+ models through a single
-API key. Set OPENROUTER_API_KEY and use any model ID from their catalog, e.g.:
-    --provider openrouter --model google/gemini-3.1-pro-preview   (default)
-    --provider openrouter --model deepseek/deepseek-r1
-    --provider openrouter --model anthropic/claude-sonnet-4
+Check which keys are available before use:
+    env | grep -E "OPENAI|GEMINI|OPENROUTER|DEEPSEEK|MOONSHOT"
 """
 
 import argparse
@@ -32,6 +32,19 @@ DEFAULTS = {
     "openai": "gpt-5.4",
     "gemini": "gemini-3.1-pro-preview",
     "openrouter": "google/gemini-3.1-pro-preview",
+    "deepseek": "deepseek-reasoner",
+    "kimi": "kimi-k2",
+}
+
+# Auto-provider picks the first available key in this priority order.
+# deepseek-reasoner and kimi-k2 are particularly strong at formal math.
+_AUTO_PRIORITY = ["deepseek", "kimi", "openrouter", "openai", "gemini"]
+_AUTO_KEY = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
 }
 
 SYSTEM_PROMPT = (
@@ -94,6 +107,14 @@ def _openai_base() -> str:
     return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 
 
+def _deepseek_base() -> str:
+    return os.environ.get("DEEPSEEK_CHAT_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
+
+
+def _kimi_base() -> str:
+    return os.environ.get("MOONSHOT_CHAT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
+
+
 def call_openai(prompt: str, model: str, think: bool) -> str:
     key = _require_key("OPENAI_API_KEY")
     auth = {"Authorization": f"Bearer {key}"}
@@ -149,16 +170,46 @@ def call_openrouter(prompt: str, model: str, think: bool) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def call_deepseek(prompt: str, model: str, think: bool) -> str:
+    key = _require_key("DEEPSEEK_API_KEY")
+    return _openai_chat(prompt, model, {"Authorization": f"Bearer {key}"}, _deepseek_base())
+
+
+def call_kimi(prompt: str, model: str, think: bool) -> str:
+    key = _require_key("MOONSHOT_API_KEY")
+    return _openai_chat(prompt, model, {"Authorization": f"Bearer {key}"}, _kimi_base())
+
+
+def _auto_provider() -> str:
+    """Return the highest-priority provider whose API key is set."""
+    for provider in _AUTO_PRIORITY:
+        if os.environ.get(_AUTO_KEY[provider]):
+            return provider
+    keys = " / ".join(_AUTO_KEY.values())
+    sys.exit(f"Error: no API key found. Set one of: {keys}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("prompt")
-    p.add_argument("--provider", choices=["openai", "gemini", "openrouter"], required=True)
+    p.add_argument(
+        "--provider",
+        choices=["openai", "gemini", "openrouter", "deepseek", "kimi", "auto"],
+        default="auto",
+    )
     p.add_argument("--model", default=None)
     p.add_argument("--think", action="store_true")
     args = p.parse_args()
 
-    model = args.model or DEFAULTS[args.provider]
-    fn = {"gemini": call_gemini, "openai": call_openai, "openrouter": call_openrouter}[args.provider]
+    provider = _auto_provider() if args.provider == "auto" else args.provider
+    model = args.model or DEFAULTS[provider]
+    fn = {
+        "gemini": call_gemini,
+        "openai": call_openai,
+        "openrouter": call_openrouter,
+        "deepseek": call_deepseek,
+        "kimi": call_kimi,
+    }[provider]
     print(fn(args.prompt, model, args.think))
 
 

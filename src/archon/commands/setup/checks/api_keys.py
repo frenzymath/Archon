@@ -1,4 +1,4 @@
-"""Probe environment for informal-agent API keys (OPENAI / GEMINI / OPENROUTER)."""
+"""Probe environment for informal-agent API keys."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ from .base import DependencyCheck
 
 
 _KEYS = {
+    "DEEPSEEK_API_KEY": "DeepSeek",
+    "MOONSHOT_API_KEY": "Kimi (Moonshot)",
+    "OPENROUTER_API_KEY": "OpenRouter",
     "OPENAI_API_KEY": "OpenAI",
     "GEMINI_API_KEY": "Gemini",
-    "OPENROUTER_API_KEY": "OpenRouter",
 }
 
 

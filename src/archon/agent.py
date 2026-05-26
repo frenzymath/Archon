@@ -55,6 +55,7 @@ PROVIDER_ALIASES: dict[str, str] = {
     "kimi": "moonshot",
     "moonshot": "moonshot",
     "deepseek": "deepseek",
+    "openrouter": "openrouter",
 }
 
 
@@ -446,11 +447,24 @@ class ClaudeAgent:
         """
         if self.model not in PROVIDER_ALIASES:
             return self.model, {}, None
-        from archon.commands.tooling.env_loader import PROVIDERS, provider_env
+        from archon.commands.tooling.env_loader import (
+            PROVIDERS, openrouter_fallback_env, provider_env,
+        )
 
         provider = PROVIDER_ALIASES[self.model]
         env = provider_env(provider)
         if not env:
+            # Before giving up, try routing through OpenRouter if its key
+            # is set and the provider has a known model slug there.
+            if provider != 'openrouter':
+                fallback = openrouter_fallback_env(provider)
+                if fallback:
+                    real_model = fallback.get("ANTHROPIC_MODEL", self.model)
+                    log.info(
+                        f"No {provider} key found; "
+                        f"routing through OpenRouter ({real_model})."
+                    )
+                    return real_model, fallback, 'openrouter'
             key_name = PROVIDERS.get(provider, [provider.upper() + "_API_KEY"])[0]
             raise RuntimeError(
                 f"Model '{self.model}' resolves to provider '{provider}', "

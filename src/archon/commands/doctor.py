@@ -127,9 +127,11 @@ class ApiKeysDoctorCheck(DoctorCheck):
     title = "API keys"
 
     _KEYS = {
+        "DEEPSEEK_API_KEY": "DeepSeek",
+        "MOONSHOT_API_KEY": "Kimi (Moonshot)",
+        "OPENROUTER_API_KEY": "OpenRouter",
         "OPENAI_API_KEY": "OpenAI",
         "GEMINI_API_KEY": "Gemini",
-        "OPENROUTER_API_KEY": "OpenRouter",
     }
 
     def run(self) -> list[CheckRow]:

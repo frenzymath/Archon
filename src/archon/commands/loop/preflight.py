@@ -87,11 +87,18 @@ def warn_if_inner_dirty(project_path: Path) -> None:
 
 def check_informal_agent_keys() -> None:
     """Warn (don't fail) if no external-LLM key is set for the informal agent."""
-    keys = ("OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY")
+    keys = (
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+    )
     if not any(os.environ.get(k) for k in keys):
         log.warn(
             "No API keys for informal agent "
-            "(OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY)"
+            "(DEEPSEEK_API_KEY / MOONSHOT_API_KEY / OPENROUTER_API_KEY / "
+            "OPENAI_API_KEY / GEMINI_API_KEY)"
         )
         log.step(
             "Provers will work without it, but may struggle on hard sorries "

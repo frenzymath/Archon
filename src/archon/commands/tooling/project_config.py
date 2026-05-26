@@ -37,11 +37,13 @@ def default_config() -> dict[str, Any]:
             '_model_help': (
                 "Model alias used by the plan / prover / review agents. "
                 "Anthropic aliases: 'opus', 'sonnet', 'haiku' or any full "
-                "model id. Non-Anthropic providers: 'kimi' or 'deepseek' "
-                "— these require the matching credentials in .archon/.env "
-                "(MOONSHOT_API_KEY, DEEPSEEK_API_KEY). No settings file is "
-                "written to disk: env vars are injected into each "
-                "subprocess only."
+                "model id. Non-Anthropic providers: 'kimi', 'deepseek', or "
+                "'openrouter' — these require the matching credentials in "
+                ".archon/.env (MOONSHOT_API_KEY, DEEPSEEK_API_KEY, "
+                "OPENROUTER_API_KEY + OPENROUTER_MODEL). For kimi/deepseek, "
+                "openrouter is also tried automatically as a fallback when "
+                "the direct key is absent. No settings file is written to "
+                "disk: env vars are injected into each subprocess only."
             ),
             'max_iterations': 10,
             'parallel': True,
@@ -198,6 +200,12 @@ def default_config() -> dict[str, Any]:
                     'provider': 'deepseek',
                     '_env': "Set DEEPSEEK_API_KEY in .archon/.env (optional: DEEPSEEK_BASE_URL, DEEPSEEK_MODEL).",
                     '_extras': "No extras package needed — DeepSeek speaks the Anthropic API natively.",
+                },
+                "openrouter": {
+                    'lane_id': 'openrouter',
+                    'provider': 'openrouter',
+                    '_env': "Set OPENROUTER_API_KEY and OPENROUTER_MODEL in .archon/.env (optional: OPENROUTER_BASE_URL). ANTHROPIC_API_KEY is set to '' automatically so Claude Code uses the OpenRouter key instead of its own credentials.",
+                    '_extras': "No extras package needed — OpenRouter speaks the Anthropic API natively. Also used as an automatic fallback when kimi/deepseek keys are absent but OPENROUTER_API_KEY is set.",
                 },
             },
         },
