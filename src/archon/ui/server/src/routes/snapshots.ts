@@ -693,44 +693,64 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       const iterIdx = iterDirs.indexOf(safeId);
       const prevIterId = iterIdx > 0 ? iterDirs[iterIdx - 1] : undefined;
       const isLatestIter = iterIdx === iterDirs.length - 1;
+      const thisCommit = gitAvail ? commitByIter.get(safeId) : undefined;
 
-      // "Before" content: file at the previous iteration's commit
+      // "Before" content: the state of the file when the prover was dispatched.
+      //
+      // Priority: baseline.lean (captured at dispatch, most accurate) →
+      //           prev iter commit (git fallback) →
+      //           this iter's plan commit (last resort).
+      //
+      // Note: mapIterToCommit returns the LAST commit per iter, which for the
+      // current in-flight iter is the plan commit (provers haven't committed
+      // yet). So we must NOT use thisCommit for "before" — it is the plan
+      // baseline, not a prover result.
       let beforeContent = '';
-      if (prevIterId && gitAvail) {
+      const baselinePath = path.join(logsPath, safeId, 'snapshots', safeProver, 'baseline.lean');
+      if (fs.existsSync(baselinePath)) {
+        try { beforeContent = fs.readFileSync(baselinePath, 'utf-8'); } catch { /* ignore */ }
+      }
+      if (!beforeContent && prevIterId && gitAvail) {
         const prevCommit = commitByIter.get(prevIterId);
         if (prevCommit) {
           beforeContent = showFileAtCommit(gitDir, projectPath, prevCommit.sha, leanFile) ?? '';
         }
       }
-      // Fallback: use baseline.lean snapshot if no prev commit
-      if (!beforeContent) {
-        const baselinePath = path.join(logsPath, safeId, 'snapshots', safeProver, 'baseline.lean');
-        if (fs.existsSync(baselinePath)) {
-          beforeContent = fs.readFileSync(baselinePath, 'utf-8');
-        }
+      // Last resort: this iter's plan commit represents the pre-prover state
+      if (!beforeContent && thisCommit) {
+        beforeContent = showFileAtCommit(gitDir, projectPath, thisCommit.sha, leanFile) ?? '';
       }
 
-      // "After" content: file at this iteration's commit (past) or live (current)
+      // "After" content: the current / final state of the file.
+      //
+      // For the latest (in-flight) iter: live working-tree file is the most
+      // up-to-date, so check it FIRST — before falling back to the plan commit
+      // (which would give identical content to baseline, resulting in an empty
+      // diff even though the prover has already made progress).
+      //
+      // For past iters: latest snapshot step → git commit.
       let afterContent = '';
-      const thisCommit = commitByIter.get(safeId);
-      if (thisCommit && gitAvail) {
-        afterContent = showFileAtCommit(gitDir, projectPath, thisCommit.sha, leanFile) ?? '';
-      }
-      if (!afterContent && isLatestIter) {
-        // In-flight iter: read live working-tree file
+      if (isLatestIter) {
         const livePath = path.join(projectPath, leanFile);
         try {
           if (fs.existsSync(livePath)) afterContent = fs.readFileSync(livePath, 'utf-8');
         } catch { /* ignore */ }
       }
-      // Last fallback: latest snapshot step
+      // Latest snapshot step (best for past iters; also a fallback for live)
       if (!afterContent) {
         const snapDir = path.join(logsPath, safeId, 'snapshots', safeProver);
         if (fs.existsSync(snapDir)) {
           const stepFiles = fs.readdirSync(snapDir).filter(f => f.startsWith('step-') && f.endsWith('.lean')).sort();
           const last = stepFiles[stepFiles.length - 1];
-          if (last) afterContent = fs.readFileSync(path.join(snapDir, last), 'utf-8');
+          if (last) {
+            try { afterContent = fs.readFileSync(path.join(snapDir, last), 'utf-8'); } catch { /* ignore */ }
+          }
         }
+      }
+      // Fallback: git commit for this iter (plan commit for in-flight, or
+      // last-phase commit for completed iters)
+      if (!afterContent && thisCommit) {
+        afterContent = showFileAtCommit(gitDir, projectPath, thisCommit.sha, leanFile) ?? '';
       }
 
       const beforeMetrics: LeanMetrics = beforeContent ? countLeanMetrics(beforeContent) : { sorries: 0, loc: 0, locNoComments: 0, defs: 0, lemmas: 0, axioms: 0 };
@@ -751,7 +771,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
       // Extract objective from PROGRESS.md at the iter's commit
       let objective = '';
-      if (gitAvail && thisCommit) {
+      if (thisCommit) {
         const progressMd = showFileAtCommit(gitDir, projectPath, thisCommit.sha, '.archon/PROGRESS.md');
         if (progressMd) objective = extractObjective(progressMd, leanFile);
       }
