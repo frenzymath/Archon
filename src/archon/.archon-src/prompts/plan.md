@@ -306,12 +306,33 @@ What you may NEVER do: write a file named `references/<topic>-crosscheck.md` (or
 
 ## Prover failure modes
 
-- **"Mathlib doesn't have it"** — the #1 failure. Do not pass it back with "try harder". Find an alternative route via the catalog (a literature/reference-fetching subagent when enabled), `WebSearch`/`WebFetch`, or `archon-informal-agent.py --provider auto` for a proof-style sketch when any API key is set (`env | grep -E "DEEPSEEK|MOONSHOT|OPENROUTER|OPENAI|GEMINI"`). If the gap is in a definition, dispatch a write-capable structural subagent from your catalog. Update the chapter `.tex` with the re-routed proof before reassigning.
+- **"Mathlib doesn't have it"** — the #1 failure. Do not pass it back with "try harder". Find an alternative route via the catalog (a literature/reference-fetching subagent when enabled), `WebSearch`/`WebFetch`, or `archon-informal-agent.py --provider auto` for a proof-style sketch when any API key is set (`env | grep -E "DEEPSEEK|MOONSHOT|OPENROUTER|OPENAI|GEMINI"`). If the gap is in a definition, dispatch a write-capable structural subagent from your catalog. Update the chapter `.tex` with the re-routed proof before reassigning. For a **missing Mathlib lemma** (not a definition gap), see "Mathlib gradient strategy" below — build it project-side from available Mathlib, axiom-clean, rather than leaving a sorry gated on an upstream PR.
 - **Wrong construction** — instruct revert (single file) or dispatch a structural subagent (cross-file). Update the chapter first.
 - **Not using Web Search** — explicitly instruct: "use Web Search to find [arXiv ID], decompose into sub-lemmas, formalize step by step". Update the chapter with the retrieved sketch.
 - **Early stop on a hard problem** — reject the report. Break into sub-goals in the chapter, assign L1, then L2 after L1 lands.
 - **Tricks to bypass** (new axioms, ad-hoc weakenings) — reject. Document why this route was chosen and ensure it won't reproduce.
 - **Repeated blockers** — same blocker over consecutive iters means rewrite the chapter or dispatch a structural subagent. Do NOT re-dispatch the same lane with cosmetic recipe variation.
+
+## "Owed iter-N+" rule
+
+**Do NOT write "owed iter-N+" in an objective when a recipe already exists** (in `analogies/`, the blueprint chapter, or a prior task result). That phrase signals the prover to stop after achieving the hard bar and not attempt the body. Writing it when a concrete proof sketch exists is artificial throttling — the exact thing the dispatch guidance says to avoid.
+
+Use "owed iter-N+" ONLY when the proof body has NO concrete route yet (the blueprint chapter is empty for that step, no analogies file exists, and the informal agent hasn't produced a usable sketch). In all other cases, write "attempt the body; recipe: <path/to/file> <section>" so the prover uses remaining budget on the body and leaves partial progress if stuck.
+
+Partial progress from a real attempt (a partial tactic block, a named sub-goal that compiles, a helper lemma that closes) is far more valuable to the next iter than a clean typed-sorry pin with no attempt. The prover stops when it's genuinely stuck, not when the hard-bar checkbox is ticked.
+
+## Mathlib gradient strategy
+
+When a sorry's body depends on a Mathlib lemma or definition that does not yet exist in Mathlib, the default response is to leave the body as a sorry and wait for a Mathlib upstream PR. This is slow and blocks all downstream work. Use the **Mathlib gradient** approach instead:
+
+1. **Identify the missing ingredient.** Name it precisely: "we need `Ideal.sum_ramification_inertia` for Dedekind extensions" or "we need `Finsupp.posPart` for ordered groups".
+2. **Check if it's buildable from current Mathlib.** Use `archon-informal-agent.py` or `WebSearch` to find a proof using only today's Mathlib. Almost always possible for a single lemma.
+3. **Assign the prover with `[prover-mode: mathlib-build]`** to formalize that single ingredient axiom-clean in the project file that needs it. One lemma per iter if needed. The mode's strict no-sorry invariant ensures the output is either clean code or a precise decomposition — no sorry pins. The goal: each step only uses Mathlib + things already axiom-clean in the project.
+4. **Once the ingredient is axiom-clean, use `prove` mode to close the sorry** in the same or next iter.
+
+The invariant: every sorry body that is deferred must have EITHER (a) no known proof route (not yet in the literature, or requires genuinely novel mathematics) OR (b) a missing Mathlib ingredient that is itself the explicit next objective. A sorry gated on "waiting for Mathlib to add X" with no project-side build plan is a planning failure.
+
+This gradient approach converts the project from a chain of blocked sorries into a steady incremental flow where each iter adds axiom-clean content. It is especially important for algebraic geometry, where large swaths of Mathlib are absent — the project must build those swaths itself, one lemma at a time.
 
 ## Verification
 
@@ -341,7 +362,14 @@ If a counterexample turns up, the statement (or a missing hypothesis) is the bug
 
 ## Prover modes
 
-The available prover modes are auto-injected into this prompt above (under **Available prover modes**). The default mode for each stage is used when no tag is present. To override the mode for a specific file's objective, append `[prover-mode: <name>]` to the objective line.
+The available prover modes and their selection criteria are injected above under **Available prover modes**. Each mode's `dispatcher_notes` tell you exactly when to use it.
+
+**Mode selection is a required step, not optional.** For every file you add to `## Current Objectives`:
+
+1. Read the `dispatcher_notes` for each available mode (injected above).
+2. Pick the mode whose `dispatcher_notes` best match the file's situation.
+3. If a non-default mode fits, tag the objective line: `[prover-mode: <name>]`.
+4. If the default is correct, no tag is needed — but you must have consciously checked.
 
 ## Multi-agent coordination
 

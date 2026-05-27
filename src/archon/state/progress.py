@@ -209,32 +209,60 @@ def parse_objectives_with_modes(
     section_lines = _extract_section(text, "## Current Objectives")
 
     use_headings = bool(_extract_heading_candidates(section_lines))
-    raw_lines: list[str] = []
-    for line in section_lines:
+
+    def _is_objective_start(line: str) -> bool:
         if _has_stop_marker(line):
-            continue
+            return False
         if use_headings:
-            if _OBJECTIVE_HEADING.search(line):
-                raw_lines.append(line)
+            return bool(_OBJECTIVE_HEADING.search(line))
+        return bool(_OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line))
+
+    def _is_continuation(line: str) -> bool:
+        """True if this line is a non-empty indented/continuation line that
+        belongs to the preceding objective block (not a new objective start,
+        not a section heading, not a stop marker, not a blank line)."""
+        if not line.strip():
+            return False
+        if _has_stop_marker(line):
+            return False
+        if line.lstrip().startswith('#'):
+            return False
+        if _is_objective_start(line):
+            return False
+        return True
+
+    # Build (header_line, block_text) pairs: block_text includes the header
+    # line plus any continuation lines that follow before the next objective.
+    raw_blocks: list[tuple[str, str]] = []
+    i = 0
+    while i < len(section_lines):
+        line = section_lines[i]
+        if _is_objective_start(line):
+            block_lines = [line]
+            j = i + 1
+            while j < len(section_lines) and _is_continuation(section_lines[j]):
+                block_lines.append(section_lines[j])
+                j += 1
+            raw_blocks.append((line, "\n".join(block_lines)))
+            i = j
         else:
-            if _OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line):
-                raw_lines.append(line)
+            i += 1
 
     candidates: list[str] = []
     modes: list[str | None] = []
-    for line in raw_lines:
+    for header_line, block_text in raw_blocks:
         if use_headings:
-            m = _OBJECTIVE_HEADING.search(line)
+            m = _OBJECTIVE_HEADING.search(header_line)
         else:
-            m = _OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line)
+            m = _OBJECTIVE_BULLET.search(header_line) or _OBJECTIVE_NUMBERED.search(header_line)
         if not m:
             continue
         if not use_headings:
-            prefix = line[:m.start(1)]
+            prefix = header_line[:m.start(1)]
             if ':' in prefix:
                 continue
         candidates.append(m.group(1).strip())
-        mode_m = _PROVER_MODE_TAG.search(line)
+        mode_m = _PROVER_MODE_TAG.search(block_text)
         modes.append(mode_m.group(1).strip() if mode_m else None)
 
     paths = _resolve_candidate_paths(project_path, candidates)

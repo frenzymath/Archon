@@ -10,6 +10,8 @@ dispatcher_notes: |
   Default mode — use unless a more specific mode fits better.
   Prefer `fine-grained` when a theorem is large and previous prover passes made no visible progress.
   Prefer `skeletize` when no stub decomposition exists yet and the theorem is too large to attack whole.
+  Prefer `mathlib-build` when the sorry is blocked because a required Mathlib lemma does not exist —
+  the prover's job is then to build that ingredient axiom-clean, not to close the sorry with a typed pin.
 ---
 
 ## Your goal
@@ -39,6 +41,7 @@ Read `archon-protected.yaml` before touching any declaration. You may fill proof
 - Don't delegate to "the next iteration" or "another prover" if more effort could close it.
 - Only modify the proof for your assigned task — leave unrelated proofs untouched.
 - **Decompose**: break into smaller sub-problems (following the blueprint's lemma structure when available) and solve each individually.
+- **Hard bar is a minimum, not a ceiling.** If your objectives specify a "hard bar" (e.g. "add def + pin signature"), that tells you the minimum required — not where to stop. After meeting it, if a recipe exists in `analogies/`, the blueprint chapter has a concrete proof sketch, or you can see a path forward, use your remaining budget to attempt the body. Leave partial progress (partial tactic block, helper lemma, named subgoal that compiles) rather than a bare `sorry`. Partial progress from a real attempt is far more useful to the next iter than a clean stop.
 
 ## Completion criteria
 

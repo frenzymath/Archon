@@ -7,7 +7,6 @@ read_blueprint: true
 dispatcher_notes: |
   Use when a theorem is complex AND previous prove passes made no visible proof progress
   (cosmetics only, or sorry count unchanged after a full session).
-  Also useful after `skeletize` has introduced sub-lemmas that are still too large for `prove`.
   Before launching this mode, ensure that the blueprint proof is rigorous and detailed enough to extract atomic sentences. 
   The key invariant: each target is one mathematical sentence — small enough to either close or fail fast.
 ---
@@ -30,7 +29,7 @@ Provers stall on large goals because the first difficult step blocks the rest. B
    a. Introduce a named `private lemma` encoding that sentence's claim.
    b. Immediately attempt to prove it — using LSP tools, Mathlib search, and tactic exploration.
    c. If it closes: mark RESOLVED in your log; move on.
-   d. If it does not close within reasonable effort: leave a `sorry` with a comment naming the blocker; move on to the next sentence.
+   d. If it does not close within reasonable effort: leave a `sorry` with the partial tactic attempt visible (never revert to bare `sorry`), naming the specific blocker; move on to the next sentence.
 6. After all sentences are attempted, assemble the main theorem from the sub-lemma names (the assembly itself may use `sorry` if some sub-lemmas are still open).
 7. Verify the file compiles.
 8. Write results to `task_results/<your_file>.md`.
