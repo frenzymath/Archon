@@ -95,29 +95,49 @@ const CHART_METRICS: Array<{ key: keyof LeanMetrics; label: string; color: strin
   { key: 'defs',         label: 'defs',    color: '#d2a8ff', lowerBetter: false },
 ];
 
-function MetricsChart({ history, currentIterId }: {
+function MetricsChart({ history, currentIterId, currentMetrics }: {
   history: HistoryEntry[];
   currentIterId: string;
+  currentMetrics: LeanMetrics;
 }) {
-  const currentIdx = history.findIndex(h => h.iterId === currentIterId);
+  const currentIterNum = parseInt(currentIterId.replace('iter-', ''), 10);
+  const rawIdx = history.findIndex(h => h.iterId === currentIterId);
+
+  // Always show live metrics for the current iter — snapshot steps may lag
+  // behind the live file that the bar already reflects. If the current iter
+  // has no history entry at all (no snapshots yet), append a synthetic point.
+  let effectiveHistory: HistoryEntry[];
+  let currentIdx: number;
+  if (rawIdx >= 0) {
+    effectiveHistory = history.map((h, i) =>
+      i === rawIdx ? { ...h, metrics: currentMetrics } : h
+    );
+    currentIdx = rawIdx;
+  } else {
+    effectiveHistory = [
+      ...history,
+      { iterId: currentIterId, iterNum: currentIterNum, metrics: currentMetrics, hasSteps: false },
+    ];
+    currentIdx = effectiveHistory.length - 1;
+  }
 
   return (
     <div className={styles.chartGrid}>
-      {CHART_METRICS.map(({ key, label, color }) => {
-        const values = history.map(h => h.metrics[key]);
-        const latest = values[values.length - 1] ?? 0;
+      {CHART_METRICS.map(({ key, label, color, lowerBetter }) => {
+        const values = effectiveHistory.map(h => h.metrics[key]);
+        const current = values[currentIdx] ?? 0;
         const first = values[0] ?? 0;
-        const trend = latest - first;
+        const trend = current - first;
+        const trendColor = trend === 0 ? undefined
+          : (lowerBetter ? (trend < 0 ? '#3fb950' : '#f85149')
+                         : (trend > 0 ? '#3fb950' : '#f85149'));
         return (
           <div key={key} className={styles.chartCell}>
             <div className={styles.chartCellHeader}>
               <span className={styles.chartMetricLabel} style={{ color }}>{label}</span>
-              <span className={styles.chartMetricVal}>{latest}</span>
+              <span className={styles.chartMetricVal}>{current}</span>
               {trend !== 0 && (
-                <span
-                  className={styles.chartTrend}
-                  style={{ color: trend > 0 ? '#3fb950' : '#f85149' }}
-                >
+                <span className={styles.chartTrend} style={{ color: trendColor }}>
                   {trend > 0 ? `+${trend}` : trend}
                 </span>
               )}
@@ -127,7 +147,8 @@ function MetricsChart({ history, currentIterId }: {
         );
       })}
       <div className={styles.chartFooter}>
-        {history.length} iter{history.length !== 1 ? 's' : ''} · iter {history[0]?.iterNum}–{history[history.length - 1]?.iterNum}
+        {effectiveHistory.length} iter{effectiveHistory.length !== 1 ? 's' : ''} ·
+        iter {effectiveHistory[0]?.iterNum}–{effectiveHistory[effectiveHistory.length - 1]?.iterNum}
       </div>
     </div>
   );
@@ -175,6 +196,15 @@ export default function ProverMetaHeader({ iterId, proverSlug, isLive }: Props) 
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Reset cached history whenever the target prover changes so we never show
+  // stale data from a previously-selected log file.
+  useEffect(() => {
+    setHistory(null);
+    setShowChart(false);
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
+  }, [iterId, proverSlug]);
 
   const fetchSummary = useCallback(() => {
     fetch(`/api/iterations/${encodeURIComponent(iterId)}/snapshots/${encodeURIComponent(proverSlug)}/meta-summary`)
@@ -299,15 +329,15 @@ export default function ProverMetaHeader({ iterId, proverSlug, isLive }: Props) 
       )}
 
       {/* Hover sparkline chart — rendered in a portal so it isn't clipped */}
-      {showChart && chartPos && createPortal(
+      {showChart && chartPos && summary && createPortal(
         <div
           className={styles.chartPopover}
           style={{ top: chartPos.top, left: chartPos.left }}
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
         >
-          {history && history.length >= 2
-            ? <MetricsChart history={history} currentIterId={iterId} />
+          {history
+            ? <MetricsChart history={history} currentIterId={iterId} currentMetrics={summary.latest} />
             : <span className={styles.chartLoading}>loading…</span>}
         </div>,
         document.body,
