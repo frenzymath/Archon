@@ -47,7 +47,15 @@ Read `archon-protected.yaml` before touching any declaration. You may fill proof
   - A bare `sorry` with no attempt is only acceptable when the mathematical obstacle is explicitly named and at least one concrete approach has been tried and documented.
 - **After closing all assigned sorries, keep going.** Scan your file for other open `sorry`s that share the mathematical context you've just developed. If you can see a direct path to any of them using lemmas or infrastructure you've already built, attempt them. Stopping at the assigned task boundary when adjacent work is tractable is artificial throttling — you have write permission over your whole file.
 - **Comments are not progress. Code is.** If you can describe an approach precisely enough to write it as a comment or TODO, you can attempt it. Any `-- TODO: try X`, `-- could use Y here`, or `/- Next step: ... -/` you write is a sign you stopped too early — attempt X/Y first; only leave the comment if the attempt fails with a named error. The same applies to approaches proposed in task results: if you wrote it in your log as "a possible route", you should have tried it.
-- **Planner-safe scope**: after your assigned sorries, you may pursue adjacent sorries in the same file when you judge the planner would approve (same mathematical area, using helpers you already built). Do NOT touch other agents' files, protected declarations, or strategies the planner might reverse. When in doubt: attempt — a failing attempt in your file is still more valuable than a comment.
+- **Autonomous decision-making within your file.** You are fully authorized to make every tactical and mathematical decision within your assigned `.lean` file without waiting for the planner. This includes: choosing proof strategies, adding helper lemmas, attempting adjacent sorries, selecting alternative approaches, deciding proof structure. **Never write "I'll let the planner decide", "I'll defer to the next iteration", or "this requires planner input" for any choice that is entirely within your file.** The planner is not on call; deferring wastes the entire context-loading investment of this session.
+
+  The ONLY actions that require stopping rather than acting:
+  - Modifying a *signature* of a protected declaration (you may still fill its proof body).
+  - Editing another agent's `.lean` file.
+  - Removing an existing public declaration that other files import.
+  - Changing the type of an existing declaration in a way that would break other files.
+
+  Everything else — including trying a strategy the planner didn't explicitly endorse — is your call to make and attempt now.
 
 ## When to stop
 
@@ -57,7 +65,15 @@ Stop only when progress is blocked by a specific, named obstacle in one of these
 2. A definition or signature that requires another prover's output — name the specific declaration and file.
 3. A proof that requires fundamental restructuring of a protected or cross-file definition — name it.
 
-"It seems hard", "the proof is complex", or "I couldn't find the right lemma" are NOT valid stop reasons — they describe difficulty, not impossibility. Document the specific obstacle and keep trying. Only stop when you can write: "I tried approaches X, Y, Z; each fails because [specific mathematical reason]; the informal agent suggested [route] which requires [specific missing ingredient]."
+"It seems hard", "the proof is complex", "I couldn't find the right lemma", or "the planner should weigh in on this approach" are NOT valid stop reasons. Document the specific obstacle and keep trying. Only stop when you can write: "I tried approaches X, Y, Z; each fails because [specific mathematical reason]; the informal agent suggested [route] which requires [specific missing ingredient]."
+
+**Specifically banned stop phrases:**
+- "I'll wait for the planner to decide."
+- "This strategy should be confirmed by the next iteration."
+- "I'll defer this choice to the planner."
+- "The planner may want to reconsider the approach."
+
+If you find yourself writing any of these: delete the sentence, pick the most promising route, and attempt it. The planner will correct the choice next iter if it was wrong — a failed attempt costs nothing compared to an idle session.
 
 ## Completion criteria
 

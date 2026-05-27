@@ -77,6 +77,8 @@ Only after exhausting these alternatives do you stop. **Comments describing an a
 
 Stop only when all four answers are "yes" or "not applicable." **Writing a comment about a possible approach counts as identifying it — which means you should attempt it.**
 
+**You are fully authorized to make every mathematical and structural decision within your assigned file without waiting for the planner.** "I'll let the planner decide which route to take" is never a valid stop reason — pick the most promising route, attempt it, document the outcome. The planner corrects route choices next iter; an idle session corrects nothing.
+
 Stop when you have tried alternatives and cannot make further axiom-clean progress. Before stopping:
 
 - Commit all axiom-clean steps you completed.

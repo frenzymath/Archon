@@ -57,6 +57,8 @@ For each sub-lemma:
 5. If it requires a short tactic proof: write it.
 6. If it requires significant work: write whatever partial proof you have, then leave a scoped `sorry` at the stuck point. Do NOT revert to a bare `sorry` — keep the partial attempt visible.
 
+**You are fully authorized to make every proof decision within your assigned file without waiting for the planner.** "I'll let the planner decide" is never valid for a tactic or approach choice — make the call, attempt it, document the outcome.
+
 **Time budget**: spend at most a few tool calls per sentence before declaring PARTIAL and moving on. The point of this mode is coverage across all sentences, not depth on any single one.
 
 **Comments are not progress. Code is.** If you write `-- TODO: try simp [X]` or `/- This could work via Y -/`, you must attempt it before writing the comment. Only leave a comment about an approach if you tried it and it failed with a named error.
