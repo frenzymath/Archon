@@ -799,4 +799,69 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       };
     },
   );
+
+  // ── metrics history ────────────────────────────────────────────────────────
+  //
+  // Returns per-iteration metrics for a prover slug, used by the hover chart.
+  // Only includes iterations where this prover ran (has a snapshot directory).
+  // Uses the last snapshot step as "final state" — no git I/O needed.
+
+  fastify.get<{ Params: { slug: string } }>(
+    '/api/snapshot-files/:slug/metrics-history',
+    async (req) => {
+      const slug = safe(req.params.slug);
+      if (!fs.existsSync(logsPath)) return [];
+
+      const iterDirs = fs.readdirSync(logsPath)
+        .filter(d => d.startsWith('iter-') && fs.statSync(path.join(logsPath, d)).isDirectory())
+        .sort();
+
+      const result: Array<{
+        iterId: string;
+        iterNum: number;
+        metrics: LeanMetrics;
+        hasSteps: boolean;
+      }> = [];
+
+      for (const iterId of iterDirs) {
+        const snapshotsBase = path.join(logsPath, iterId, 'snapshots');
+        if (!fs.existsSync(snapshotsBase)) continue;
+
+        // Match exact slug AND any lane variants (slug__laneX)
+        let entries: string[] = [];
+        try { entries = fs.readdirSync(snapshotsBase); } catch { continue; }
+        const matching = entries.filter(d => d === slug || d.startsWith(slug + '__'));
+        if (matching.length === 0) continue;
+
+        // For lane variants pick the one with the most step files (most progress)
+        let bestContent = '';
+        let hasSteps = false;
+        let bestStepCount = -1;
+
+        for (const dir of matching) {
+          const snapDir = path.join(snapshotsBase, dir);
+          let steps: string[] = [];
+          try { steps = fs.readdirSync(snapDir).filter(f => f.startsWith('step-') && f.endsWith('.lean')).sort(); } catch { continue; }
+
+          if (steps.length > bestStepCount) {
+            const stepPath = steps.length > 0
+              ? path.join(snapDir, steps[steps.length - 1])
+              : path.join(snapDir, 'baseline.lean');
+            try {
+              const c = fs.readFileSync(stepPath, 'utf-8');
+              bestContent = c;
+              hasSteps = steps.length > 0;
+              bestStepCount = steps.length;
+            } catch { /* skip */ }
+          }
+        }
+
+        if (!bestContent) continue;
+        const iterNum = parseInt(iterId.replace('iter-', ''), 10);
+        result.push({ iterId, iterNum, metrics: countLeanMetrics(bestContent), hasSteps });
+      }
+
+      return result;
+    },
+  );
 }

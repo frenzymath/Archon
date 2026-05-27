@@ -668,15 +668,17 @@ export default function LogViewer() {
 
         {showSessionSummary && <RunSummaryBar entries={entries} />}
 
-        {proverHeaderInfo && (
-          <ProverMetaHeader
-            iterId={proverHeaderInfo.iterId}
-            proverSlug={proverHeaderInfo.proverSlug}
-            isLive={streaming}
-          />
-        )}
-
         <div className={styles.container}>
+          {/* ProverMetaHeader lives inside the scroll container so metrics row
+              sticks at the top while objective / diff scroll away */}
+          {proverHeaderInfo && (
+            <ProverMetaHeader
+              iterId={proverHeaderInfo.iterId}
+              proverSlug={proverHeaderInfo.proverSlug}
+              isLive={streaming}
+            />
+          )}
+
           {/* Render markdown artifacts inline */}
           {selectedIsArtifact && artifactContent && (
             <div className={styles.summaryBlock}>

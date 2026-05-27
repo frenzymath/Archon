@@ -1,16 +1,29 @@
+/* Wrapper — no border; the component now lives inside the scroll container */
 .header {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 14px 0;
   font-size: 12px;
-  background: rgba(99, 102, 241, 0.04);
 }
 
+/* Sticky metrics row — stays at the top of the scroll container */
 .metricsRow {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
   align-items: center;
-  padding-bottom: 10px;
+  padding: 9px 14px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  cursor: default;
+}
+/* Faint indigo tint on the sticky bar to visually anchor it */
+.metricsRow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(99, 102, 241, 0.04);
+  pointer-events: none;
 }
 
 .metric {
@@ -66,7 +79,7 @@
 
 /* Objective block — matches summaryBlock / summaryLabel from LogViewer */
 .objectiveBlock {
-  margin: 0 0 10px;
+  margin: 10px 14px;
   padding: 10px 14px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
@@ -92,8 +105,74 @@
 
 /* Diff block — separate collapsible section */
 .diffBlock {
-  margin: 0 0 10px;
+  margin: 0 14px 10px;
   max-height: 400px;
   overflow-y: auto;
   border-radius: 6px;
+}
+
+/* ── Hover sparkline chart popover ── */
+.chartPopover {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  min-width: 300px;
+  pointer-events: all;
+}
+
+.chartGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+}
+
+.chartCell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chartCellHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chartMetricLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 36px;
+}
+
+.chartMetricVal {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chartTrend {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+.chartFooter {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  text-align: center;
+}
+
+.chartLoading {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 4px;
 }
