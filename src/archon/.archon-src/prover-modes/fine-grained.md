@@ -59,6 +59,8 @@ For each sub-lemma:
 
 **Time budget**: spend at most a few tool calls per sentence before declaring PARTIAL and moving on. The point of this mode is coverage across all sentences, not depth on any single one.
 
+**Comments are not progress. Code is.** If you write `-- TODO: try simp [X]` or `/- This could work via Y -/`, you must attempt it before writing the comment. Only leave a comment about an approach if you tried it and it failed with a named error.
+
 ## Protected declarations
 
 Read `archon-protected.yaml` before touching any declaration. Do not change protected signatures.
@@ -116,13 +118,21 @@ The `archon-lean-lsp` server exposes Lean LSP operations as **MCP tool calls** (
 
 ## End-of-session handoff
 
-Before stopping:
+**Before declaring done, run this self-review:**
+
+1. Did I attempt every approach I wrote in a comment or TODO? If not, go back and attempt them.
+2. After all sentences, did I try to fully assemble the main theorem? Even with sorry sub-lemmas, a structured assembly often reveals which sub-lemmas are actually easy.
+3. Are there open sub-lemmas I judged "too hard" without a genuine attempt? Spend one more round on each.
+
+Before writing results:
 
 1. Verify the file compiles.
 2. Write `task_results/<your_file>.md` with one entry per identified sentence: name, type (brief), result (RESOLVED / PARTIAL / sorry with blocker).
-3. **Write a `## Why I stopped` section** with one of:
-   - `Real progress`: M/N sentences closed; list which ones and which remain.
-   - `Partial progress`: measurable forward movement; list open sentences with their specific blockers.
-   - `Blueprint sentences not identifiable`: the informal proof is too vague to extract atomic sentences — describe what's missing and suggest what the blueprint needs.
+3. **Write a `## Summary` section**: N/M sentences closed, sorry count before → after, which sentences are open and exactly why.
+4. **Write a `## Why I stopped` section** — be honest; only closed sub-lemma proofs count as progress. Sub-lemmas extracted with only `sorry` bodies and no proof attempt are cosmetics:
+   - `Real progress`: M/N sentences closed — list which ones and sorry count before → after.
+   - `Partial progress`: measurable code advance (partial proof bodies, one branch closed); list open sentences with their specific blockers (not "it's hard" — the exact type mismatch or missing ingredient).
+   - `Approaches written but not attempted`: identified routes in comments or log but did not attempt — name each. Planner will re-assign with directive to attempt them.
+   - `Blueprint sentences not identifiable`: the informal proof is too vague to extract atomic sentences — describe what's missing and what the blueprint needs.
    - `All sentences already proved`: file had no sorry to decompose.
    - `Directive not followed`: explain the deviation.

@@ -41,7 +41,23 @@ Read `archon-protected.yaml` before touching any declaration. You may fill proof
 - Don't delegate to "the next iteration" or "another prover" if more effort could close it.
 - Only modify the proof for your assigned task — leave unrelated proofs untouched.
 - **Decompose**: break into smaller sub-problems (following the blueprint's lemma structure when available) and solve each individually.
-- **Hard bar is a minimum, not a ceiling.** If your objectives specify a "hard bar" (e.g. "add def + pin signature"), that tells you the minimum required — not where to stop. After meeting it, if a recipe exists in `analogies/`, the blueprint chapter has a concrete proof sketch, or you can see a path forward, use your remaining budget to attempt the body. Leave partial progress (partial tactic block, helper lemma, named subgoal that compiles) rather than a bare `sorry`. Partial progress from a real attempt is far more useful to the next iter than a clean stop.
+- **Hard bar is a minimum, not a ceiling.** If your objectives specify a "hard bar" (e.g. "add def + pin signature"), that tells you the minimum required — not where to stop. After meeting it:
+  - If a recipe exists in `analogies/`, the blueprint chapter has a concrete proof sketch, or you can reason about an approach: attempt the proof body immediately.
+  - If no recipe exists: formulate a strategy, attempt it, and leave a partial tactic block at the stuck point. A failed attempt with a `by ... sorry` is far more useful than a clean `sorry`.
+  - A bare `sorry` with no attempt is only acceptable when the mathematical obstacle is explicitly named and at least one concrete approach has been tried and documented.
+- **After closing all assigned sorries, keep going.** Scan your file for other open `sorry`s that share the mathematical context you've just developed. If you can see a direct path to any of them using lemmas or infrastructure you've already built, attempt them. Stopping at the assigned task boundary when adjacent work is tractable is artificial throttling — you have write permission over your whole file.
+- **Comments are not progress. Code is.** If you can describe an approach precisely enough to write it as a comment or TODO, you can attempt it. Any `-- TODO: try X`, `-- could use Y here`, or `/- Next step: ... -/` you write is a sign you stopped too early — attempt X/Y first; only leave the comment if the attempt fails with a named error. The same applies to approaches proposed in task results: if you wrote it in your log as "a possible route", you should have tried it.
+- **Planner-safe scope**: after your assigned sorries, you may pursue adjacent sorries in the same file when you judge the planner would approve (same mathematical area, using helpers you already built). Do NOT touch other agents' files, protected declarations, or strategies the planner might reverse. When in doubt: attempt — a failing attempt in your file is still more valuable than a comment.
+
+## When to stop
+
+Stop only when progress is blocked by a specific, named obstacle in one of these categories:
+
+1. A genuinely missing Mathlib ingredient — named precisely, attempted via informal agent, no workaround found.
+2. A definition or signature that requires another prover's output — name the specific declaration and file.
+3. A proof that requires fundamental restructuring of a protected or cross-file definition — name it.
+
+"It seems hard", "the proof is complex", or "I couldn't find the right lemma" are NOT valid stop reasons — they describe difficulty, not impossibility. Document the specific obstacle and keep trying. Only stop when you can write: "I tried approaches X, Y, Z; each fails because [specific mathematical reason]; the informal agent suggested [route] which requires [specific missing ingredient]."
 
 ## Completion criteria
 
@@ -63,11 +79,13 @@ When the substantive type is unattainable this iter, leave `sorry` with the **in
 
 ## When infrastructure is missing
 
-Do NOT report "Mathlib lacks X" and stop. Before giving up:
+Do NOT report "Mathlib lacks X" and stop. Before filing "Infrastructure missing":
 
-1. **Use the informal agent** (`.claude/tools/archon-informal-agent.py`): "Prove [goal] without using [missing infrastructure], only Mathlib." Even an imperfect sketch is valuable.
-2. Formalize whatever the informal agent suggests.
-3. **If you still can't**: write the alternative sketch to `informal/<theorem_name>.md` and record what you tried, why it failed, AND the alternative route you found.
+1. **Use the informal agent** if an API key is available (check `env | grep -E "DEEPSEEK|MOONSHOT|OPENROUTER|OPENAI|GEMINI"` first): call `.claude/tools/archon-informal-agent.py` with "Prove [goal] using only current Mathlib." Formalize whatever it suggests. If no key is set, skip to step 2.
+2. **If the missing ingredient is ≤~100 LOC**: write it as a project-local helper — typed signature plus a genuine proof attempt. A partial proof body is better than a documented gap.
+3. **Only after steps 1–2 are exhausted**: write the alternative sketch to `informal/<theorem_name>.md` with what you tried, why it failed, and the precise statement of the missing ingredient for the plan agent to assign in `mathlib-build` mode.
+
+"Infrastructure missing" as a verdict requires: informal agent called (or key unavailable, documented), local helper attempted if in scope. "I don't see how" is not evidence — a failed attempt with `sorry` at the stuck step IS evidence.
 
 When stuck more generally: break into smaller subgoals, search Mathlib more thoroughly, prove missing helpers yourself, try alternative strategies, re-read the blueprint, use Web Search for published proofs.
 
@@ -132,14 +150,25 @@ One section per theorem/lemma. Each attempt: approach, result (RESOLVED / FAILED
 
 ## End-of-session handoff
 
-Before stopping:
+**Before declaring done, run this self-review:**
+
+1. Did I attempt every approach I wrote down as a comment, TODO, or "possible route"? If not, go back and attempt them.
+2. Are there other open `sorry`s in my file I could attempt with the tools and lemmas I just developed?
+3. Did I call the informal agent (or document that no key was available) before filing "Infrastructure missing"?
+4. Is there any approach I thought of but skipped because "it would take too long" or "the planner should decide"? If it's in my file's scope, attempt it.
+
+Only proceed to write the task result when all four answers are "yes" or "not applicable."
+
+Before writing results:
 
 1. Write `task_results/<your_file>.md` with current result, lemmas discovered, concrete next step, dead-end warnings.
 2. Save all changes; ensure the file compiles.
-3. **Write a `## Why I stopped` section** in your task result with one of the following verdicts — be honest, the planner reads this:
-   - `Real progress`: closed N sorries, specific ones named.
-   - `Partial progress`: made measurable progress (e.g. decomposed into sub-lemmas, closed one branch) but did not fully close.
-   - `Cosmetics only`: changed formatting/comments/style with no proof progress — say so explicitly.
+3. **Write a `## Summary` section** stating: sorry count before → after; exact names of sorries closed; exact names of sorries still open and why; whether you attempted adjacent sorries beyond the assigned ones.
+4. **Write a `## Why I stopped` section** — be brutally honest; the planner reads this. **Only Lean code changes count as progress** — a sorry closed, a helper lemma that compiles, a partial tactic block at a specific stuck point. Comments, docstrings, TODO notes, and task result prose do NOT count. If you wrote approaches in comments that you didn't attempt, say so explicitly:
+   - `Real progress`: closed N sorries — name each one. State the sorry count before and after.
+   - `Partial progress`: made measurable code progress (decomposed into sub-lemmas with proof bodies, closed one branch of a case split) but did not fully close. Name the specific advance and the specific remaining blocker. Decomposing a `sorry` into N named `sorry`s with only comments in their bodies is NOT partial progress unless the bodies contain genuine proof attempts.
+   - `Cosmetics only`: changed formatting/comments/style with no proof progress — say so explicitly. **Renaming a `sorry` to a named helper lemma, adding a docstring, or extracting it to a separate declaration with a `sorry` body is `Cosmetics only` unless the body contains a genuine proof attempt.**
+   - `Approaches written but not attempted`: you identified routes (in comments, TODOs, or log prose) but did not attempt them — name each one and why you stopped before trying. This is a valid but weak verdict; the planner will re-assign with a directive to attempt them.
    - `Avoided the goal`: attempted something adjacent but not the assigned target — explain why and what you tried instead.
-   - `Infrastructure missing`: a specific Mathlib gap was the blocker — name it, describe the alternative attempted.
+   - `Infrastructure missing`: a specific Mathlib gap was the blocker — name it precisely, confirm the informal agent was called (or key unavailable), describe what it suggested, why it failed, and state the exact missing ingredient statement.
    - `Directive not followed`: explain which part of the planner's directive you deviated from and why.

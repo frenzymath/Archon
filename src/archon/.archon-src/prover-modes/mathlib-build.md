@@ -60,13 +60,22 @@ Push as far as you can. Each axiom-clean step you add is permanent progress.
 Before declaring a step impossible:
 
 1. **Try a different proof route.** Reformulate the statement, weaken to a special case you can prove, use a detour through an equivalent form.
-2. **Use the informal agent** (`.claude/tools/archon-informal-agent.py`): "Prove [goal] using only current Mathlib." Formalize whatever it suggests.
+2. **Use the informal agent** if an API key is available (check `env | grep -E "DEEPSEEK|MOONSHOT|OPENROUTER|OPENAI|GEMINI"` first): `.claude/tools/archon-informal-agent.py` "Prove [goal] using only current Mathlib." Formalize whatever it suggests. If no key is set, skip to step 3.
 3. **Search more broadly.** The lemma you need might exist under a different name or in a namespace you haven't checked.
 4. **Prove a strictly smaller sub-step** that is axiom-clean and genuinely useful — something that shrinks the remaining gap.
 
-Only after exhausting these alternatives do you stop.
+Only after exhausting these alternatives do you stop. **Comments describing an approach you haven't tried are not exhausted alternatives — attempt them first.**
 
 ### 5. Stopping
+
+**Before stopping, run this self-review:**
+
+1. Did I attempt every approach I wrote in a comment, TODO, or log entry? If not, go back and attempt them.
+2. Are there adjacent declarations in the chain I could attempt with the infrastructure I just built?
+3. Did I call the informal agent (or document that no key was available) before declaring the step impossible?
+4. Is there any approach I thought of but skipped? Attempt it — a failed attempt with a named error is better than a comment.
+
+Stop only when all four answers are "yes" or "not applicable." **Writing a comment about a possible approach counts as identifying it — which means you should attempt it.**
 
 Stop when you have tried alternatives and cannot make further axiom-clean progress. Before stopping:
 
@@ -128,9 +137,12 @@ One section per declaration attempted. For each: approach, result (RESOLVED / FA
 
 ## End-of-session handoff
 
-The `## Why I stopped` section must use one of:
+**Write a `## Summary` section** before the verdicts: declarations added (count + names), declarations blocked (count + why), sorry count before → after across your file.
 
-- `Real progress`: named the N axiom-clean declarations added.
-- `Partial progress`: added some steps, named the specific blocker for the next one.
-- `Blocked — alternatives exhausted`: named what was tried, why each failed, and the precise statement of the next needed ingredient so the planner can assign it.
-- `Infrastructure already exists`: the scouting found that Mathlib already has what was needed — cite the exact lemma name.
+**Write a `## Why I stopped` section** — be brutally honest. Only axiom-clean Lean declarations count as progress. Comments, sketches, and log prose do NOT. If you wrote down approaches you didn't attempt, say so:
+
+- `Real progress`: N axiom-clean declarations added — name each one with its line number.
+- `Partial progress`: added some declarations, hit a specific blocker on the next — name the blocker precisely (not "it's complex", but the exact type or missing ingredient).
+- `Approaches written but not attempted`: identified routes in comments or log but did not attempt them — name each. This is valid but weak; the planner will re-assign with a directive to attempt them.
+- `Blocked — alternatives exhausted`: informal agent called (or key unavailable, documented), alternative routes tried, all failed — name what was tried, why each failed, and the exact type statement of the next needed ingredient.
+- `Infrastructure already exists`: Mathlib has what was needed — cite the exact lemma name and namespace.
