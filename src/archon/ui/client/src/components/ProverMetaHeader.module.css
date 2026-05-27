@@ -1,0 +1,95 @@
+.header {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  font-size: 12px;
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.metricsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.metricLabel {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.metricValue {
+  font-family: var(--font-mono, monospace);
+}
+
+.delta {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.deltaGood { color: var(--green, #3fb950); }
+.deltaBad  { color: var(--red,   #f85149); }
+.deltaNeutral { color: var(--text-muted); }
+
+.toggleBtn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 7px;
+  margin-left: auto;
+}
+.toggleBtn:hover { background: rgba(255,255,255,0.05); }
+
+.objectiveRow {
+  margin-top: 4px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 5em;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+.objectiveRow.expanded {
+  max-height: none;
+}
+
+.diffBlock {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.diffLine {
+  padding: 0 8px;
+  white-space: pre;
+  line-height: 1.5;
+}
+.diffAdd  { background: rgba(63, 185, 80, 0.12); color: var(--green, #3fb950); }
+.diffDel  { background: rgba(248, 81, 73, 0.12); color: var(--red,   #f85149); }
+.diffCtx  { color: var(--text-muted); }
+.diffHunk { color: var(--blue, #58a6ff); background: rgba(88,166,255,0.06); }
+
+.commentToggle {
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  margin-left: 6px;
+}
+.commentToggle:hover { color: var(--text); }

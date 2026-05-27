@@ -7,6 +7,7 @@ import type { LogEntry, LogGroup } from '../types';
 import { fmtDuration, primaryModel, truncateSubject } from '../utils/format';
 import LogEntryLine from '../components/LogEntryLine';
 import MarkdownBlock from '../components/MarkdownBlock';
+import ProverMetaHeader from '../components/ProverMetaHeader';
 import styles from './LogViewer.module.css';
 
 // --- Sidebar components ---
@@ -560,6 +561,15 @@ export default function LogViewer() {
   // For .md artifacts the server returns a single entry with event="text"
   const artifactContent = selectedIsArtifact && entries.length > 0 ? (entries[0].content || '') : '';
 
+  // Parse iter ID + prover slug from a prover JSONL path like
+  // "iter-NNN/provers/<slug>[__lane].jsonl"
+  const proverHeaderInfo = useMemo(() => {
+    if (selectedRole !== 'prover' || selectedIsArtifact || !selectedFile) return null;
+    const m = selectedFile.match(/^(iter-\d+)\/provers\/(.+?)(?:__[^/]+)?\.jsonl$/);
+    if (!m) return null;
+    return { iterId: m[1], proverSlug: m[2] };
+  }, [selectedFile, selectedRole, selectedIsArtifact]);
+
   return (
     <div className={styles.root}>
       {/* Sidebar */}
@@ -657,6 +667,14 @@ export default function LogViewer() {
         </div>
 
         {showSessionSummary && <RunSummaryBar entries={entries} />}
+
+        {proverHeaderInfo && (
+          <ProverMetaHeader
+            iterId={proverHeaderInfo.iterId}
+            proverSlug={proverHeaderInfo.proverSlug}
+            isLive={streaming}
+          />
+        )}
 
         <div className={styles.container}>
           {/* Render markdown artifacts inline */}

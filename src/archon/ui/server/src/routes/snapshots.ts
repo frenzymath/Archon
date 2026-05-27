@@ -22,6 +22,7 @@ import path from 'path';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectPaths } from './project.js';
 import { mapIterToCommit, lsLeanFilesAtCommit, showFileAtCommit, hasInnerGit } from '../utils/innerGit.js';
+import { countLeanMetrics, type LeanMetrics } from '../utils/sorryCount.js';
 
 /** Canonical slug → Lean file mapping: "Foo/Bar.lean" ↔ "Foo_Bar". */
 function slugToFile(slug: string): string {
@@ -620,6 +621,160 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       }
 
       return diffs;
+    },
+  );
+
+  // ── meta-summary ───────────────────────────────────────────────────────────
+  //
+  // Returns before/after metrics + diff + objective text for a prover session.
+  //
+  // "Before" = iter N-1 git commit state of the file.
+  // "After"  = iter N git commit state (past iters) OR live working-tree file
+  //            (current/in-flight iter where no commit exists yet).
+  //
+  // This is the single endpoint the ProverMetaHeader component polls.
+
+  /** Extract the objective text for a specific lean file from PROGRESS.md text.
+   *  Returns the full multi-line objective block (heading + continuation lines). */
+  function extractObjective(progressMd: string, leanFile: string): string {
+    const lines = progressMd.split('\n');
+    // Find the ## Current Objectives section
+    let inSection = false;
+    const objectiveLines: string[] = [];
+    let capturing = false;
+    const fileBasename = leanFile.split('/').pop() ?? '';
+
+    for (const line of lines) {
+      if (/^##\s+Current Objectives/i.test(line)) { inSection = true; continue; }
+      if (!inSection) continue;
+      if (/^##\s/.test(line)) break; // next section
+
+      if (!capturing) {
+        // Look for a numbered or bulleted objective line that mentions this file
+        if (line.includes(leanFile) || line.includes(fileBasename)) {
+          capturing = true;
+          objectiveLines.push(line);
+        }
+      } else {
+        // Continuation: stop at the next objective start or empty line followed
+        // by a non-indented line (blank separator between objectives)
+        if (/^\s*\d+\.\s+\*\*`/.test(line) || /^\s*[-*]\s+\*\*`/.test(line)) break;
+        if (line.trim() === '' && objectiveLines.length > 1) break;
+        objectiveLines.push(line);
+      }
+    }
+    return objectiveLines.join('\n').trim();
+  }
+
+  fastify.get<{ Params: { id: string; prover: string } }>(
+    '/api/iterations/:id/snapshots/:prover/meta-summary',
+    async (req, reply) => {
+      const { id, prover } = req.params;
+      if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
+
+      const safeId = safe(id);
+      const safeProver = safe(prover);
+
+      // Resolve the lean file path for this prover slug
+      let leanFile: string | undefined;
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(logsPath, safeId, 'meta.json'), 'utf-8'));
+        leanFile = (meta.provers || {})[safeProver]?.file;
+      } catch { /* ignore */ }
+      if (!leanFile) leanFile = slugToFile(safeProver);
+
+      const commitByIter = mapIterToCommit(gitDir, projectPath);
+      const gitAvail = hasInnerGit(gitDir);
+
+      // Collect all iter dirs sorted
+      const iterDirs = fs.existsSync(logsPath)
+        ? fs.readdirSync(logsPath).filter(d => d.startsWith('iter-') && fs.statSync(path.join(logsPath, d)).isDirectory()).sort()
+        : [];
+      const iterIdx = iterDirs.indexOf(safeId);
+      const prevIterId = iterIdx > 0 ? iterDirs[iterIdx - 1] : undefined;
+      const isLatestIter = iterIdx === iterDirs.length - 1;
+
+      // "Before" content: file at the previous iteration's commit
+      let beforeContent = '';
+      if (prevIterId && gitAvail) {
+        const prevCommit = commitByIter.get(prevIterId);
+        if (prevCommit) {
+          beforeContent = showFileAtCommit(gitDir, projectPath, prevCommit.sha, leanFile) ?? '';
+        }
+      }
+      // Fallback: use baseline.lean snapshot if no prev commit
+      if (!beforeContent) {
+        const baselinePath = path.join(logsPath, safeId, 'snapshots', safeProver, 'baseline.lean');
+        if (fs.existsSync(baselinePath)) {
+          beforeContent = fs.readFileSync(baselinePath, 'utf-8');
+        }
+      }
+
+      // "After" content: file at this iteration's commit (past) or live (current)
+      let afterContent = '';
+      const thisCommit = commitByIter.get(safeId);
+      if (thisCommit && gitAvail) {
+        afterContent = showFileAtCommit(gitDir, projectPath, thisCommit.sha, leanFile) ?? '';
+      }
+      if (!afterContent && isLatestIter) {
+        // In-flight iter: read live working-tree file
+        const livePath = path.join(projectPath, leanFile);
+        try {
+          if (fs.existsSync(livePath)) afterContent = fs.readFileSync(livePath, 'utf-8');
+        } catch { /* ignore */ }
+      }
+      // Last fallback: latest snapshot step
+      if (!afterContent) {
+        const snapDir = path.join(logsPath, safeId, 'snapshots', safeProver);
+        if (fs.existsSync(snapDir)) {
+          const stepFiles = fs.readdirSync(snapDir).filter(f => f.startsWith('step-') && f.endsWith('.lean')).sort();
+          const last = stepFiles[stepFiles.length - 1];
+          if (last) afterContent = fs.readFileSync(path.join(snapDir, last), 'utf-8');
+        }
+      }
+
+      const beforeMetrics: LeanMetrics = beforeContent ? countLeanMetrics(beforeContent) : { sorries: 0, loc: 0, locNoComments: 0, defs: 0, lemmas: 0, axioms: 0 };
+      const afterMetrics: LeanMetrics = afterContent ? countLeanMetrics(afterContent) : { sorries: 0, loc: 0, locNoComments: 0, defs: 0, lemmas: 0, axioms: 0 };
+
+      const diff = (beforeContent || afterContent)
+        ? computeUnifiedDiff(beforeContent, afterContent, `a/${leanFile}`, `b/${leanFile}`)
+        : '';
+      const { added: diffAddedLines, removed: diffRemovedLines } = countDiffLines(diff);
+
+      // Count snapshots
+      const snapDir = path.join(logsPath, safeId, 'snapshots', safeProver);
+      const totalSteps = fs.existsSync(snapDir)
+        ? fs.readdirSync(snapDir).filter(f => f.startsWith('step-') && f.endsWith('.lean')).length
+        : 0;
+
+      // Extract objective from PROGRESS.md at the iter's commit
+      let objective = '';
+      if (gitAvail && thisCommit) {
+        const progressMd = showFileAtCommit(gitDir, projectPath, thisCommit.sha, '.archon/PROGRESS.md');
+        if (progressMd) objective = extractObjective(progressMd, leanFile);
+      }
+      // Fallback: live PROGRESS.md
+      if (!objective) {
+        const liveProg = path.join(projectPath, '.archon', 'PROGRESS.md');
+        try {
+          if (fs.existsSync(liveProg)) {
+            objective = extractObjective(fs.readFileSync(liveProg, 'utf-8'), leanFile);
+          }
+        } catch { /* ignore */ }
+      }
+
+      return {
+        leanFile,
+        baseline: beforeMetrics,
+        latest: afterMetrics,
+        totalSteps,
+        diff,
+        diffAddedLines,
+        diffRemovedLines,
+        objective,
+        hasBeforeContent: !!beforeContent,
+        hasAfterContent: !!afterContent,
+      };
     },
   );
 }
