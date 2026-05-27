@@ -1,32 +1,32 @@
 <!--
-USER_HINTS.md — strategic hints for the next plan agent.
+USER_HINTS.md — two sections with different lifecycles.
 
-How this file works:
-  - The Archon loop reads this file BEFORE each plan phase and injects
-    its content into the plan agent's prompt.
-  - After the plan phase completes successfully, the loop resets the
-    file to this template. Hints you wrote for iter N do not carry
-    over into iter N+1 — write fresh ones each cycle.
-  - The HTML comment you are reading is stripped before injection; the
-    planner sees only the bullets you add below.
-  - The plan agent never reads or writes this file directly. Just add
-    bullets here — they reach the agent automatically.
+## Temporary hints
+  Consumed by the next plan phase and then cleared. Use for one-shot
+  steering: "try route X this iter", "skip Lane F this round".
 
-Format (one hint per bullet, timestamped, most recent first):
+## Persistent hints
+  NEVER auto-cleared. These are standing directives that survive every
+  iteration reset. The plan agent treats them as HIGHER PRIORITY than
+  any conflicting instruction in its own prompt or in
+  .archon/prompts/plan.md. Use for project-wide constraints:
+    - "never accept axiom X"
+    - "don't touch theorem Y until I say so"
+    - "always run mathlib-build mode on Lane I"
 
-  - [2026-05-19T14:23:00Z] try the cohomology route this iter; the
-    étale-cover route is blocked upstream.
-  - [2026-05-19T14:25:00Z] do NOT touch `archon-protected.yaml`.
+Format for both sections (one bullet per hint, timestamped):
+  - [YYYY-MM-DDTHH:MM:SSZ] hint text
 
-Tips:
-  - This is your async override channel. Archon never pauses to ask:
-    it makes strategy decisions itself and reports them in TO_USER.md.
-    Leaving this file empty = "I'm fine with whatever you decided."
-    Add a bullet only when you want to steer differently next iter.
-  - Multi-line bullets are fine — indent continuation lines.
-  - File-specific hints (one .lean file only) belong as
-    `/- USER: ... -/` comments inside that file, NOT here.
-  - For verification work, name the SOURCE you want consulted —
-    e.g. "cross-check against Hartshorne III.5.1 verbatim" — so the
-    planner can dispatch the right tool instead of synthesizing.
+Hints are written by 'archon discuss' or directly by you. In discuss,
+the agent will ask which section to target; in a direct edit, place your
+bullet under the appropriate heading.
+
+File-specific hints (one .lean file only) belong as /- USER: ... -/
+comments inside that file — NOT here.
 -->
+
+## Temporary hints
+
+
+## Persistent hints
+

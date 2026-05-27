@@ -14,6 +14,7 @@ agent to do it:
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -52,34 +53,60 @@ def _capture_user_hints(state_dir: Path) -> str | None:
         return None
 
 
+_PERSISTENT_HEADING = re.compile(r"^##\s+Persistent hints\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _split_hints(text: str) -> tuple[str, str]:
+    """Split USER_HINTS.md text into (temporary_body, persistent_block).
+
+    ``persistent_block`` is everything from the ``## Persistent hints``
+    heading to EOF (heading line included).  ``temporary_body`` is the
+    rest.  Returns (text, "") when no persistent section is found.
+    """
+    m = _PERSISTENT_HEADING.search(text)
+    if not m:
+        return text, ""
+    return text[: m.start()], text[m.start():]
+
+
 def _clear_user_hints(state_dir: Path) -> None:
-    """Reset USER_HINTS.md to the bundled template after the plan phase
-    consumed its content.
+    """Selectively reset USER_HINTS.md after the plan phase consumed it.
 
-    The bundled template lives at
-    ``.archon-src/archon-template/USER_HINTS.md`` and contains an
-    HTML-comment preamble showing the user the expected hint format
-    (timestamped bullets) plus zero actual hint bullets. The init state
-    and the cleared state both equal this template — every plan-phase
-    "user hints" snapshot sees the same clean preamble unless the user
-    (or a plan-validate corrective hint) has appended live content
-    since the prior iter. The plan-prompt renderer strips HTML comments
-    before deciding whether content is present, so the preamble alone
-    renders as "no hints" to the planner. Reading the template at
-    clear time (instead of hard-coding empty) means future template
-    tweaks propagate without a code change.
+    Only the ``## Temporary hints`` section is cleared; the
+    ``## Persistent hints`` section (standing user directives) is
+    preserved verbatim across iterations. The cleared temporary section
+    is replaced with the corresponding part of the bundled template so
+    the HTML-comment preamble and section headings are always present.
 
-    Falls back to writing an empty string when the template is
-    unreadable for any reason — the cleared state must never carry
-    over stale content from the iter we just consumed.
+    Falls back to a full template reset when the template is unreadable
+    or the file cannot be parsed, so a missing-template scenario never
+    carries stale content into the next iter.
     """
     hints_file = state_dir / "USER_HINTS.md"
     try:
         template = _read_user_hints_template()
     except Exception:
         template = ""
+
+    # Read the current file to preserve any persistent hints.
+    current = ""
     try:
-        hints_file.write_text(template, encoding="utf-8")
+        current = hints_file.read_text(encoding="utf-8")
+    except OSError:
+        pass
+
+    _, persistent_block = _split_hints(current)
+
+    if persistent_block:
+        # Rebuild: fresh template up to (but not including) the persistent
+        # section, then the preserved persistent section.
+        template_temporary, _ = _split_hints(template)
+        new_content = template_temporary + persistent_block
+    else:
+        new_content = template
+
+    try:
+        hints_file.write_text(new_content, encoding="utf-8")
     except OSError as e:
         log.warn(f"could not clear {hints_file}: {e}")
 

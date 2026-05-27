@@ -305,55 +305,96 @@ def _axiom_sweep_findings_block(
     return "\n".join(lines)
 
 
+_PERSISTENT_HEADING_RE = re.compile(
+    r"^##\s+Persistent hints\s*$", re.IGNORECASE | re.MULTILINE
+)
+_TEMPORARY_HEADING_RE = re.compile(
+    r"^##\s+Temporary hints\s*$", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _split_hint_sections(text: str) -> tuple[str, str]:
+    """Return (temporary_body, persistent_body) from USER_HINTS.md text.
+
+    Strips HTML comments first, then finds each section's content
+    (everything after the heading until the next ``##`` heading or EOF).
+    Returns empty strings for missing sections.
+    """
+    stripped = _strip_html_comments(text)
+
+    def _section_body(heading_re: re.Pattern[str]) -> str:
+        m = heading_re.search(stripped)
+        if not m:
+            return ""
+        # Body starts after the heading line.
+        body_start = stripped.index("\n", m.start()) + 1
+        # Ends at the next ## heading (or EOF).
+        next_h = re.search(r"^##\s", stripped[body_start:], re.MULTILINE)
+        body_end = body_start + next_h.start() if next_h else len(stripped)
+        return stripped[body_start:body_end].strip()
+
+    return _section_body(_TEMPORARY_HEADING_RE), _section_body(_PERSISTENT_HEADING_RE)
+
+
 def _user_hints_block(captured_hints: str | None) -> str:
     """Inject already-captured USER_HINTS.md content into the plan prompt.
 
-    The loop reads ``USER_HINTS.md`` before the plan phase, passes the
-    text here, and clears the file after the plan agent succeeds. The
-    agent does NOT read or clear the hints file itself; everything the
-    user wrote is already in this block.
-
-    ``captured_hints`` of ``None`` or empty string renders the
-    "no hints this iter" affordance — the planner reads the prior iter's
-    sidecar for any ``## Fallback if no user response`` section (the
-    user-silent fallback contract).
-
-    HTML comments in ``captured_hints`` are stripped before both the
-    emptiness check and the injection. The bundled ``USER_HINTS.md``
-    template is an HTML-comment preamble explaining the format to the
-    user; "template only" content must render as "no hints" to the
-    planner, not as live instructions.
+    Handles the two-section format (Temporary + Persistent). Persistent
+    hints are rendered first and marked as overriding any conflicting
+    instructions. Temporary hints are consumed this iteration and then
+    cleared. HTML comments are stripped before processing.
     """
-    stripped_text = (
-        _strip_html_comments(captured_hints) if captured_hints else ""
-    )
-    if not stripped_text.strip():
-        return dedent("""
+    raw = captured_hints or ""
+    temporary, persistent = _split_hint_sections(raw)
 
-            ## User hints
+    # Fall back to treating the entire stripped content as temporary for
+    # legacy single-section files (no ## headings found).
+    if not temporary and not persistent:
+        legacy = _strip_html_comments(raw).strip()
+        if not legacy:
+            return dedent("""
 
-            No user hints this iteration. If the prior iter's sidecar
-            (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
-            user response` section, execute that fallback now and record
-            the auto-execution in this iter's sidecar under
-            `## User-silent fallback executed`. Otherwise proceed
-            normally.
-        """)
-    return dedent(f"""
+                ## User hints
 
-        ## User hints
+                No user hints this iteration. If the prior iter's sidecar
+                (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
+                user response` section, execute that fallback now and record
+                the auto-execution in this iter's sidecar under
+                `## User-silent fallback executed`. Otherwise proceed
+                normally.
+            """)
+        temporary = legacy
 
-        The user wrote the following in `USER_HINTS.md` for this
-        iteration. The loop has already captured the content (shown
-        below) and will clear the file once your plan phase succeeds —
-        you do NOT need to read `USER_HINTS.md` or clear it yourself.
-        Treat anything below as the live hint set; incorporate it into
-        your plan.
+    parts: list[str] = ["\n## User hints\n"]
 
-        ```
-        {stripped_text.strip()}
-        ```
-    """)
+    if persistent:
+        parts.append(dedent(f"""
+            ### Standing directives (persistent — override all conflicting instructions)
+
+            These are long-lived constraints set by the user. They take priority over
+            any instruction in `.archon/prompts/plan.md` or elsewhere in this prompt.
+            If a standing directive conflicts with another instruction, **defer to the
+            standing directive**.
+
+            ```
+            {persistent}
+            ```
+        """))
+
+    if temporary:
+        parts.append(dedent(f"""
+            ### One-shot hints for this iteration
+
+            The user wrote the following in `USER_HINTS.md`. The loop captured the
+            content and will clear this section once your plan phase succeeds — you
+            do NOT need to read or clear `USER_HINTS.md` yourself.
+
+            ```
+            {temporary}
+            ```
+        """))
+
+    return "".join(parts)
 
 
 def _references_summary(
