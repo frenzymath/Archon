@@ -1,6 +1,6 @@
 .header {
   border-bottom: 1px solid var(--border);
-  padding: 10px 14px;
+  padding: 10px 14px 0;
   font-size: 12px;
   background: rgba(99, 102, 241, 0.04);
 }
@@ -10,7 +10,7 @@
   flex-wrap: wrap;
   gap: 14px;
   align-items: center;
-  margin-bottom: 6px;
+  padding-bottom: 10px;
 }
 
 .metric {
@@ -50,41 +50,6 @@
 }
 .toggleBtn:hover { background: rgba(255,255,255,0.05); }
 
-.objectiveRow {
-  margin-top: 4px;
-  color: var(--text-muted);
-  line-height: 1.45;
-  font-size: 11px;
-  white-space: pre-wrap;
-  max-height: 5em;
-  overflow: hidden;
-  cursor: pointer;
-  user-select: none;
-}
-.objectiveRow.expanded {
-  max-height: none;
-}
-
-.diffBlock {
-  margin-top: 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow-x: auto;
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.diffLine {
-  padding: 0 8px;
-  white-space: pre;
-  line-height: 1.5;
-}
-.diffAdd  { background: rgba(63, 185, 80, 0.12); color: var(--green, #3fb950); }
-.diffDel  { background: rgba(248, 81, 73, 0.12); color: var(--red,   #f85149); }
-.diffCtx  { color: var(--text-muted); }
-.diffHunk { color: var(--blue, #58a6ff); background: rgba(88,166,255,0.06); }
-
 .commentToggle {
   font-size: 10px;
   color: var(--text-muted);
@@ -93,3 +58,44 @@
   margin-left: 6px;
 }
 .commentToggle:hover { color: var(--text); }
+
+.snapCount {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Objective block — matches summaryBlock / summaryLabel from LogViewer */
+.objectiveBlock {
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-left: 3px solid #6366f1;
+  border-radius: 6px;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.objectiveLabel {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6366f1;
+  margin-bottom: 8px;
+}
+
+.objectiveContent {
+  font-size: 12px;
+}
+
+/* Diff block — separate collapsible section */
+.diffBlock {
+  margin: 0 0 10px;
+  max-height: 400px;
+  overflow-y: auto;
+  border-radius: 6px;
+}

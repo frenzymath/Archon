@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import MarkdownBlock from './MarkdownBlock';
+import DiffView from './DiffView';
 import styles from './ProverMetaHeader.module.css';
 
 interface LeanMetrics {
@@ -53,25 +55,10 @@ function MetricDelta({ label, before, after, lowerIsBetter = false }: {
   );
 }
 
-function DiffView({ diff }: { diff: string }) {
-  return (
-    <div className={styles.diffBlock}>
-      {diff.split('\n').map((line, i) => {
-        let cls = styles.diffCtx;
-        if (line.startsWith('+') && !line.startsWith('+++')) cls = styles.diffAdd;
-        else if (line.startsWith('-') && !line.startsWith('---')) cls = styles.diffDel;
-        else if (line.startsWith('@@')) cls = styles.diffHunk;
-        return <div key={i} className={`${styles.diffLine} ${cls}`}>{line}</div>;
-      })}
-    </div>
-  );
-}
-
 export default function ProverMetaHeader({ iterId, proverSlug, isLive }: Props) {
   const [summary, setSummary] = useState<MetaSummary | null>(null);
-  const [showDiff, setShowDiff] = useState(false);
   const [showComments, setShowComments] = useState(true);
-  const [objExpanded, setObjExpanded] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchSummary = () => {
@@ -95,6 +82,7 @@ export default function ProverMetaHeader({ iterId, proverSlug, isLive }: Props) 
   const { baseline, latest, diff, diffAddedLines, diffRemovedLines, objective, totalSteps } = summary;
   const locBefore = showComments ? baseline.loc : baseline.locNoComments;
   const locAfter  = showComments ? latest.loc  : latest.locNoComments;
+  const hasDiffContent = summary.hasBeforeContent || summary.hasAfterContent;
 
   return (
     <div className={styles.header}>
@@ -113,32 +101,43 @@ export default function ProverMetaHeader({ iterId, proverSlug, isLive }: Props) 
         >
           {showComments ? 'excl. comments' : 'incl. comments'}
         </span>
-        {diff && (
+        {hasDiffContent && (
           <button
             className={styles.toggleBtn}
             onClick={() => setShowDiff(v => !v)}
           >
-            {showDiff ? 'hide diff' : `show diff (+${diffAddedLines} -${diffRemovedLines})`}
+            {showDiff
+              ? 'hide diff'
+              : diff
+                ? `show diff (+${diffAddedLines} -${diffRemovedLines})`
+                : 'show diff (no changes yet)'}
           </button>
         )}
         {totalSteps > 0 && (
-          <span className={styles.metric} style={{ marginLeft: 'auto', fontSize: '11px' }}>
+          <span className={styles.snapCount}>
             {totalSteps} snapshot{totalSteps !== 1 ? 's' : ''}
           </span>
         )}
       </div>
 
       {objective && (
-        <div
-          className={`${styles.objectiveRow} ${objExpanded ? styles.expanded : ''}`}
-          onClick={() => setObjExpanded(v => !v)}
-          title={objExpanded ? 'Click to collapse' : 'Click to expand'}
-        >
-          {objective}
+        <div className={styles.objectiveBlock}>
+          <span className={styles.objectiveLabel}>Objective</span>
+          <MarkdownBlock content={objective} className={styles.objectiveContent} />
         </div>
       )}
 
-      {showDiff && diff && <DiffView diff={diff} />}
+      {showDiff && hasDiffContent && (
+        <div className={styles.diffBlock}>
+          <DiffView
+            diff={diff}
+            fromFile={`prev/${summary.leanFile}`}
+            toFile={`curr/${summary.leanFile}`}
+            addedLines={diffAddedLines}
+            removedLines={diffRemovedLines}
+          />
+        </div>
+      )}
     </div>
   );
 }

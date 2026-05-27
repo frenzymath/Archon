@@ -736,7 +736,9 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       const beforeMetrics: LeanMetrics = beforeContent ? countLeanMetrics(beforeContent) : { sorries: 0, loc: 0, locNoComments: 0, defs: 0, lemmas: 0, axioms: 0 };
       const afterMetrics: LeanMetrics = afterContent ? countLeanMetrics(afterContent) : { sorries: 0, loc: 0, locNoComments: 0, defs: 0, lemmas: 0, axioms: 0 };
 
-      const diff = (beforeContent || afterContent)
+      // Only diff when both sides are present — diffing against an empty
+      // string produces a misleading "everything deleted" output.
+      const diff = (beforeContent && afterContent)
         ? computeUnifiedDiff(beforeContent, afterContent, `a/${leanFile}`, `b/${leanFile}`)
         : '';
       const { added: diffAddedLines, removed: diffRemovedLines } = countDiffLines(diff);
