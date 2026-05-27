@@ -156,6 +156,12 @@
   color: var(--text-muted);
 }
 
+.chartMetricVal2 {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
 .chartTrend {
   font-family: var(--font-mono, monospace);
   font-size: 10px;

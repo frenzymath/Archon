@@ -41,58 +41,71 @@ interface Props {
 
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 
-function Sparkline({ values, color, currentIdx, w = 120, h = 32 }: {
+function Sparkline({ values, values2, color, color2 = '#93c5fd', currentIdx, w = 120, h = 32 }: {
   values: number[];
+  values2?: number[];
   color: string;
+  color2?: string;
   currentIdx: number;
   w?: number;
   h?: number;
 }) {
   if (values.length === 0) return <svg width={w} height={h} />;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+
+  // Shared Y range across both series so they're directly comparable
+  const allVals = values2 ? [...values, ...values2] : values;
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
   const range = max - min || 1;
   const pad = 3;
 
   const px = (i: number) => pad + (i / Math.max(values.length - 1, 1)) * (w - pad * 2);
   const py = (v: number) => pad + (1 - (v - min) / range) * (h - pad * 2);
 
-  const pts = values.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+  const pts1 = values.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+  const pts2 = values2?.map((v, i) => `${px(i)},${py(v)}`).join(' ');
 
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ overflow: 'visible' }}>
-      {/* baseline grid line */}
       <line x1={pad} y1={py(min)} x2={w - pad} y2={py(min)} stroke="var(--border)" strokeWidth="0.5" />
-      <polyline
-        points={pts}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+      {/* secondary series: dashed, drawn first so primary sits on top */}
+      {pts2 && (
+        <polyline points={pts2} fill="none" stroke={color2}
+          strokeWidth="1.5" strokeDasharray="3,2"
+          strokeLinejoin="round" strokeLinecap="round" />
+      )}
+      <polyline points={pts1} fill="none" stroke={color}
+        strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      {/* dots for primary */}
       {values.map((v, i) => (
-        <circle
-          key={i}
-          cx={px(i)}
-          cy={py(v)}
+        <circle key={i} cx={px(i)} cy={py(v)}
           r={i === currentIdx ? 3.5 : 1.5}
           fill={i === currentIdx ? color : 'var(--bg-primary)'}
-          stroke={color}
-          strokeWidth={i === currentIdx ? 0 : 1}
-        />
+          stroke={color} strokeWidth={i === currentIdx ? 0 : 1} />
       ))}
+      {/* dot for secondary at current iter */}
+      {values2 && currentIdx >= 0 && currentIdx < values2.length && (
+        <circle cx={px(currentIdx)} cy={py(values2[currentIdx])}
+          r={3} fill={color2} stroke="none" />
+      )}
     </svg>
   );
 }
 
 // ── MetricsChart popover ───────────────────────────────────────────────────────
 
-const CHART_METRICS: Array<{ key: keyof LeanMetrics; label: string; color: string; lowerBetter: boolean }> = [
-  { key: 'sorries',      label: 'sorry',   color: '#f85149', lowerBetter: true  },
-  { key: 'loc',          label: 'LOC',     color: '#58a6ff', lowerBetter: false },
-  { key: 'lemmas',       label: 'lemmas',  color: '#3fb950', lowerBetter: false },
-  { key: 'defs',         label: 'defs',    color: '#d2a8ff', lowerBetter: false },
+const CHART_METRICS: Array<{
+  key: keyof LeanMetrics;
+  key2?: keyof LeanMetrics;   // secondary series overlaid as dashed line
+  label: string;
+  color: string;
+  color2?: string;
+  lowerBetter: boolean;
+}> = [
+  { key: 'sorries',  label: 'sorry',  color: '#f85149', lowerBetter: true  },
+  { key: 'loc', key2: 'locNoComments', label: 'LOC', color: '#58a6ff', color2: '#93c5fd', lowerBetter: false },
+  { key: 'lemmas',   label: 'lemmas', color: '#3fb950', lowerBetter: false },
+  { key: 'defs',     label: 'defs',   color: '#d2a8ff', lowerBetter: false },
 ];
 
 function MetricsChart({ history, currentIterId, currentMetrics }: {
@@ -123,9 +136,11 @@ function MetricsChart({ history, currentIterId, currentMetrics }: {
 
   return (
     <div className={styles.chartGrid}>
-      {CHART_METRICS.map(({ key, label, color, lowerBetter }) => {
-        const values = effectiveHistory.map(h => h.metrics[key]);
-        const current = values[currentIdx] ?? 0;
+      {CHART_METRICS.map(({ key, key2, label, color, color2, lowerBetter }) => {
+        const values  = effectiveHistory.map(h => h.metrics[key]);
+        const values2 = key2 ? effectiveHistory.map(h => h.metrics[key2]) : undefined;
+        const current  = values[currentIdx]  ?? 0;
+        const current2 = values2 ? (values2[currentIdx] ?? 0) : undefined;
         const first = values[0] ?? 0;
         const trend = current - first;
         const trendColor = trend === 0 ? undefined
@@ -136,13 +151,16 @@ function MetricsChart({ history, currentIterId, currentMetrics }: {
             <div className={styles.chartCellHeader}>
               <span className={styles.chartMetricLabel} style={{ color }}>{label}</span>
               <span className={styles.chartMetricVal}>{current}</span>
+              {current2 !== undefined && (
+                <span className={styles.chartMetricVal2} style={{ color: color2 }}>/{current2}</span>
+              )}
               {trend !== 0 && (
                 <span className={styles.chartTrend} style={{ color: trendColor }}>
                   {trend > 0 ? `+${trend}` : trend}
                 </span>
               )}
             </div>
-            <Sparkline values={values} color={color} currentIdx={currentIdx} />
+            <Sparkline values={values} values2={values2} color={color} color2={color2} currentIdx={currentIdx} />
           </div>
         );
       })}
