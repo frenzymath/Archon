@@ -65,6 +65,7 @@ class DiscussionContext:
             "task_done": _read_if_exists(self.state_dir / "task_done.md"),
             "project_status": _read_if_exists(self.state_dir / "PROJECT_STATUS.md"),
             "user_hints": _read_if_exists(self.state_dir / "USER_HINTS.md", max_chars=1000),
+            "archon_memory": _read_if_exists(self.state_dir / "ARCHON_MEMORY.md", max_chars=800),
             "sorry_info": self._sorry_summary(),
             "journal_summary": self._latest_journal_summary(),
         }
@@ -185,6 +186,7 @@ FOCUS: The mathematician wants to discuss **{self.focus}** specifically.
         task_pending = context["task_pending"]
         task_done = context["task_done"]
         user_hints = context["user_hints"]
+        archon_memory = context.get("archon_memory", "")
         journal_summary = context["journal_summary"]
 
         return textwrap.dedent(f"""\
@@ -283,6 +285,13 @@ This format is compatible with `archon hint show` and `archon hint clear`.
 
 ### USER_HINTS.md (pending hints)
 {user_hints if user_hints else "(no pending hints)"}
+
+### ARCHON_MEMORY.md (condensed project knowledge — you may update this file)
+{archon_memory if archon_memory else "(empty — no project knowledge recorded yet)"}
+
+You may update `ARCHON_MEMORY.md` during this session to record important project-level
+insights (dead ends, hazards, protected invariants). Hard limits: ≤10 bullets, ≤600 chars.
+Prune before adding. Get user confirmation before writing.
 
 ## How to behave
 

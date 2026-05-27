@@ -397,6 +397,58 @@ def _user_hints_block(captured_hints: str | None) -> str:
     return "".join(parts)
 
 
+def _archon_memory_block(state_dir: Path | None, *, writable: bool = False) -> str:
+    """Inject ARCHON_MEMORY.md content into an agent prompt.
+
+    When ``writable=True`` (plan agent, discuss), the block includes
+    write instructions. When ``writable=False`` (provers, review,
+    refactor), the block is read-only context.
+
+    Returns an empty string when the file is missing or contains only
+    the HTML-comment preamble (no actual bullets).
+    """
+    if state_dir is None:
+        return ""
+    memory_file = state_dir / "ARCHON_MEMORY.md"
+    if not memory_file.exists():
+        return ""
+    try:
+        raw = memory_file.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    content = _strip_html_comments(raw).strip()
+    if not content:
+        return ""
+
+    if writable:
+        return dedent(f"""
+
+            ## Archon memory
+
+            Condensed project knowledge carried across iterations. You MAY update
+            `{memory_file}` during this session. Rules:
+            - Hard limits: **≤10 bullets**, **≤600 chars total** in the file.
+            - Prune the least important bullet before adding a new one.
+            - One-line bullets only. No prose, no sub-bullets.
+            - Only keep things that would surprise an agent reading the code fresh
+              (dead ends, hazards, Mathlib gaps, protected invariants).
+              Do NOT note things already obvious from the codebase or PROGRESS.md.
+
+            Current contents:
+            ```
+            {content}
+            ```
+        """)
+    return dedent(f"""
+
+        ## Archon memory (read only — do NOT modify this file)
+
+        ```
+        {content}
+        ```
+    """)
+
+
 def _references_summary(
     state_dir: Path | None,
     project_path: Path | None = None,
@@ -934,6 +986,7 @@ def build_plan_prompt(
     user_hints_block = _user_hints_block(captured_user_hints)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
+    memory_block = _archon_memory_block(state_dir, writable=True)
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
@@ -946,7 +999,7 @@ def build_plan_prompt(
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
-        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + memory_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(
@@ -956,6 +1009,7 @@ def build_prover_prompt(
     mode_name: str | None = None,
     mode_content: str | None = None,
 ) -> str:
+    memory_block = _archon_memory_block(state_dir, writable=False)
     if mode_content:
         mode_block = (
             f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
@@ -969,7 +1023,7 @@ def build_prover_prompt(
             Project state directory: {state_dir}
             Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
             All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-            + mode_block \
+            + memory_block + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
@@ -978,7 +1032,8 @@ def build_prover_prompt(
         Project directory: {project_path}
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
-        All state files are in {state_dir}/. The .lean files are in {project_path}/.""") + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+        All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
+        + memory_block + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
@@ -1003,6 +1058,8 @@ def build_parallel_prover_prompt(
         if hint:
             bp_hint = "\n\n" + hint
 
+    memory_block = _archon_memory_block(state_dir, writable=False)
+
     if mode_content:
         mode_block = (
             f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
@@ -1023,7 +1080,7 @@ def build_parallel_prover_prompt(
             - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
             - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
             - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-            + bp_hint + mode_block \
+            + bp_hint + memory_block + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
     stage_path = normalize_stage_for_prompt_path(stage)
@@ -1040,7 +1097,8 @@ def build_parallel_prover_prompt(
         - Write your results to {state_dir}/task_results/<your_file>.md when done.
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
-        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") + bp_hint + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
+        + bp_hint + memory_block + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(
@@ -1054,6 +1112,7 @@ def build_refactor_prompt(
     fixed slug ``"cli"``; the autonomous loop generates a kebab-case
     slug per call.
     """
+    memory_block = _archon_memory_block(state_dir, writable=False)
     return dedent(f"""\
         You are the refactor agent for project '{project_name}'.
         Archon iteration: {iter_num:03d}.
@@ -1067,7 +1126,8 @@ def build_refactor_prompt(
 
         Execute this directive. Keep all files compiling (insert sorry at broken proof sites).
         Document every change in {state_dir}/task_results/refactor-{slug}.md
-        (include the slug as the `## Slug` field at the top of the report).""") + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
+        (include the slug as the `## Slug` field at the top of the report).""") \
+        + memory_block + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
 
 
 def _blueprint_doctor_block(state_dir: Path, iter_num: int) -> str:
@@ -1155,6 +1215,7 @@ def build_review_prompt(
     catalog_block = _subagent_catalog_block(project_path, role="review")
     doctor_block = _blueprint_doctor_block(state_dir, iter_num)
     sync_block = _sync_leanok_block(state_dir, iter_num)
+    memory_block = _archon_memory_block(state_dir, writable=False)
 
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
@@ -1170,4 +1231,6 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + doctor_block + sync_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
+          {state_dir}/PROJECT_STATUS.md""") \
+        + memory_block + sidecar_block + catalog_block + doctor_block + sync_block \
+        + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)

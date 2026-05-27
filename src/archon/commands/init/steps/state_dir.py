@@ -12,6 +12,7 @@ _USER_STATE_FILES = (
     "PROGRESS.md",
     "STRATEGY.md",
     "USER_HINTS.md",
+    "ARCHON_MEMORY.md",
     "task_pending.md",
     "task_done.md",
 )
