@@ -31,12 +31,15 @@ Upgrading from v0.1.0? See [MIGRATION.md](MIGRATION.md#7-upgrading-from-v010-to-
   [MULTILANE.md](https://github.com/frenzymath/Archon/blob/main/src/archon/.archon-src/archon-template/MULTILANE.md)
   for setup. Multilane is opt-in via `.archon/config.json`; the default is a
   single Anthropic lane.
-- **Refactor agent** + `archon refactor`: when the plan agent identifies
-  structural issues (wrong definitions, signature changes, file splits), it
-  writes a directive into `.archon/REFACTOR_DIRECTIVE.md`. The next loop
-  iteration picks it up and runs a refactor agent that may edit any `.lean`
-  file (subject to `archon-protected.yaml`). The plan agent then runs a
-  post-refactor verification pass.
+- **Refactor agent** + `archon refactor`: structural changes (wrong
+  definitions, signature changes, file splits) are handled by a dedicated
+  refactor agent that may edit any `.lean` file (subject to
+  `archon-protected.yaml`). In the autonomous loop the plan agent dispatches
+  the `refactor` subagent directly via the Agent tool, passing the directive
+  inline — nothing is staged in a file. For hands-on use, the interactive
+  `archon refactor draft` command interviews you and writes
+  `.archon/REFACTOR_DIRECTIVE.md`, and `archon refactor run` then executes
+  it.
 - **`archon-protected.yaml`** at the project root: declares signatures that
   are frozen by the mathematician. No agent may rename or re-sign listed
   declarations; the refactor agent may move them between files.
@@ -113,11 +116,20 @@ Upgrading from v0.1.0? See [MIGRATION.md](MIGRATION.md#7-upgrading-from-v010-to-
   The phase is auto-detected from the prior iter's `meta.json`, and
   per-phase session ids are now captured so Claude Code re-attaches to the
   right session.
-- **Blueprint-doctor phase**: runs at the top of each iteration and
-  reports orphan files, broken `\uses{}`, missing `\lean{...}` blocks, and
-  other blueprint structural drift directly into the plan agent's prompt
-  under `## Blueprint doctor — live structural findings`. No separate
+- **Blueprint-doctor phase**: runs each iteration between the prover and
+  review phases (after the `\leanok` sync) and reports orphan chapters,
+  broken `\ref{}` / `\uses{}` references, malformed (empty) annotations,
+  stray `axiom` declarations, and `% archon:covers` integrity problems. It
+  writes `.archon/logs/iter-NNN/blueprint-doctor.{md,json}`; the same iter's
+  review agent reads it and the next iter's plan agent sees the findings
+  inline under `## Blueprint doctor — live structural findings`. No separate
   command needed.
+- **Axiom-sweep phase** (opt-in via `loop.axiom_sweep` in
+  `.archon/config.json`): runs between the blueprint-doctor and review
+  phases to catch `sorryAx` laundering — declarations that compile with no
+  `sorry` warning yet still depend on `sorryAx` through a clean-compiling
+  delegate, which the warning-based sorry count misses. Writes
+  `.archon/logs/iter-NNN/axiom-sweep.{md,json}`; never blocks the loop.
 - **Plan-validate post-plan step**: catches common `PROGRESS.md` heading
   drift (`## Strategy` → `## Current Objectives`), auto-fixes it, and
   warns the planner instead of silently wasting a prover round.

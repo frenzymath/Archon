@@ -408,9 +408,9 @@ in when you are ready.
 
 | Command | What it does |
 |---------|--------------|
-| `archon refactor /path/to/project` | Run only the refactor phase against the current `REFACTOR_DIRECTIVE.md`. |
+| `archon refactor run /path/to/project` | Execute the refactor agent against the directive in `.archon/REFACTOR_DIRECTIVE.md`. Create that directive interactively first with `archon refactor draft /path/to/project`. |
 | `archon discuss /path/to/project` | Open Claude Code interactively with full Archon context loaded — for debugging or brainstorming without firing the loop. |
-| `archon branch <name> /path/to/project` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). |
+| `archon branch <name> /path/to/project --from <commit>` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). Without `--from`, switches to an existing branch named `<name>`. |
 | `archon version /path/to/project` | Show the Archon CLI version and, in a project, the project version. |
 
 ### 7.6 Enabling subagents (optional)
@@ -472,15 +472,19 @@ starting the dashboard standalone.)
 
 | Flag | What it does |
 |------|--------------|
-| `--resume` | When a previous `archon loop` was interrupted mid-iteration, resume the in-flight iteration at its last completed phase. The phase is auto-detected from `.archon/iter/iter-NNN/meta.json`. |
+| `--resume` | When a previous `archon loop` was interrupted mid-iteration, resume the in-flight iteration at its last completed phase. The phase is auto-detected from `.archon/logs/iter-NNN/meta.json`. |
 
 ### 7.10 New blueprint-doctor phase
 
-Runs automatically at the top of each iteration. It scans `blueprint/src/`
-for orphan files, broken `\uses{...}` references, and missing
-`\lean{...}` blocks; the plan agent then sees the findings inline under
-`## Blueprint doctor — live structural findings`. No configuration is
-needed — it's silently included in every iteration.
+Runs automatically each iteration, between the prover and review phases
+(right after the deterministic `\leanok` sync). It scans `blueprint/src/`
+for orphan chapters, broken `\ref{...}` / `\uses{...}` / `\cref{...}`
+references, malformed (empty) annotations, stray `axiom` declarations, and
+`% archon:covers` integrity problems, writing a report to
+`.archon/logs/iter-NNN/blueprint-doctor.{md,json}`. The same iteration's
+review agent reads the report, and the next iteration's plan agent sees the
+findings inline under `## Blueprint doctor — live structural findings`. No
+configuration is needed — it's silently included in every iteration.
 
 ---
 
