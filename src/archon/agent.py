@@ -346,18 +346,134 @@ class ClaudeBackend:
         flags: list[str],
         resume_session_id: str | None,
         base_env: dict[str, str],
+        log_base: "Path | str | None" = None,
     ) -> tuple[list[str], dict[str, str]]:
         """Return ``(command, env)`` for the headless ``claude -p`` call.
 
         ``base_env`` is already the fully merged environment (OS env +
         provider overrides + caller-supplied overrides + IS_SANDBOX).
         Subclasses may return a modified copy.
+
+        ``log_base`` is the phase log stem (e.g. ``…/iter-001/plan``) so
+        subclasses can place sidecar diagnostics next to the JSONL. The
+        base implementation ignores it.
         """
         cmd = ["claude"]
         if resume_session_id:
             cmd.extend(["--resume", resume_session_id])
         cmd.extend(["-p", prompt, *flags])
         return cmd, base_env
+
+
+class ClaudePBackend(ClaudeBackend):
+    """Uses ``claude-p`` instead of ``claude -p`` for headless invocations.
+
+    ``claude-p`` is a drop-in ``claude -p`` replacement backed by the
+    interactive Claude Code TUI — useful when the standard headless path
+    is rate-limited or unavailable on a subscription account.  It accepts
+    the same flags (``--model``, ``--resume``, ``--permission-mode``,
+    ``--output-format stream-json``, ``--verbose``) but the prompt is
+    positional rather than the argument to ``-p``.
+
+    ``config_dir`` pins ``CLAUDE_CONFIG_DIR`` for the spawned process,
+    selecting which Claude Code login / account to use.  When ``None``,
+    the value already in the environment is used as-is.
+
+    ``timeout_sec`` overrides claude-p's ``--timeout-sec`` (default 90 s —
+    far too short for multi-tool-call plan/prover agents).  Archon's own
+    idle watchdog provides the outer kill; set this to a comfortable margin
+    above the longest expected agent run.
+
+    ``quiet_after_sec`` overrides claude-p's ``--quiet-after-sec`` (default
+    3 s).  Raised slightly to avoid premature exit during gaps between tool
+    calls (e.g. lake build).
+    """
+
+    _DEFAULT_TIMEOUT_SEC = 1800   # 30 min — archon's idle watchdog is 15 min
+    _DEFAULT_QUIET_AFTER_SEC = 15  # allow gaps between tool calls
+
+    def __init__(
+        self,
+        config_dir: str | None = None,
+        timeout_sec: int | None = None,
+        quiet_after_sec: int | None = None,
+    ) -> None:
+        self.config_dir = config_dir
+        self.timeout_sec = timeout_sec or self._DEFAULT_TIMEOUT_SEC
+        self.quiet_after_sec = quiet_after_sec or self._DEFAULT_QUIET_AFTER_SEC
+
+    def build_headless(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        flags: list[str],
+        resume_session_id: str | None,
+        base_env: dict[str, str],
+        log_base: "Path | str | None" = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        cmd = ["claude-p"]
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
+        cmd.extend([
+            prompt, *flags,
+            "--timeout-sec", str(self.timeout_sec),
+            "--quiet-after-sec", str(self.quiet_after_sec),
+            # Emit assistant text as it appears in the TUI instead of
+            # buffering until the session ends — gives the dashboard
+            # something to show mid-run.
+            "--live-tui-deltas",
+        ])
+        # Capture claude-p's raw PTY transcript next to the phase JSONL.
+        # This is the single most useful artifact when a run stalls: it
+        # shows the actual interactive screen (auth prompts, rate-limit
+        # banners, the bypass-permissions menu, MCP startup errors) that
+        # the stream-json output never surfaces.
+        if log_base is not None:
+            raw_log = f"{log_base}.claude-p-raw.log"
+            cmd.extend(["--raw-log", raw_log])
+            log.info(f"claude-p raw transcript: {raw_log}")
+        if self.config_dir:
+            env = {**base_env, "CLAUDE_CONFIG_DIR": self.config_dir}
+        else:
+            env = base_env
+        self._ensure_bypass_setting(env.get("CLAUDE_CONFIG_DIR"))
+        return cmd, env
+
+    @staticmethod
+    def _ensure_bypass_setting(config_dir: str | None) -> None:
+        """Suppress interactive `claude`'s one-time "Bypass Permissions mode"
+        acceptance menu by setting ``skipDangerousModePermissionPrompt`` in the
+        target config dir's ``settings.json``.
+
+        Headless ``claude -p`` never shows that menu, but claude-p drives the
+        real TUI, which stalls on it indefinitely (no assistant output until
+        ``--timeout-sec``) because there's no human to press "Yes, I accept".
+        The key is merged in idempotently — the file is created if absent and
+        all other keys are preserved.
+        """
+        base = Path(config_dir).expanduser() if config_dir else Path.home() / ".claude"
+        settings_path = base / "settings.json"
+        try:
+            data = (
+                json.loads(settings_path.read_text())
+                if settings_path.exists() else {}
+            )
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict) or data.get("skipDangerousModePermissionPrompt") is True:
+            return
+        data["skipDangerousModePermissionPrompt"] = True
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            tmp = settings_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            os.replace(tmp, settings_path)  # atomic: avoids torn writes under parallel provers
+            log.info(
+                f"claude-p: enabled skipDangerousModePermissionPrompt in {settings_path}"
+            )
+        except OSError:
+            pass
 
 
 class EntrypointBackend(ClaudeBackend):
@@ -380,6 +496,7 @@ class EntrypointBackend(ClaudeBackend):
         flags: list[str],
         resume_session_id: str | None,
         base_env: dict[str, str],
+        log_base: "Path | str | None" = None,
     ) -> tuple[list[str], dict[str, str]]:
         env = (
             {**base_env, "CLAUDE_CODE_ENTRYPOINT": self.entrypoint}
@@ -556,6 +673,7 @@ class ClaudeAgent:
             flags=self._build_flags(real_model),
             resume_session_id=resume_session_id,
             base_env=base_env,
+            log_base=log_base,
         )
         if extra_args:
             cmd.extend(extra_args)
@@ -883,6 +1001,6 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
 
 
 __all__ = [
-    "ClaudeAgent", "ClaudeBackend", "EntrypointBackend",
+    "ClaudeAgent", "ClaudeBackend", "ClaudePBackend", "EntrypointBackend",
     "DEFAULT_MODEL", "RunOutcome", "QuotaExhaustedError",
 ]

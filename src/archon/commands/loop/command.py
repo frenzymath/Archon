@@ -129,7 +129,7 @@ class LoopCommand:
         progress_file = state_dir / "PROGRESS.md"
         log_dir = state_dir / "logs"
 
-        preflight(resolved, state_dir, opts.dry_run)
+        preflight(resolved, state_dir, opts.dry_run, backend=opts.backend)
 
         if not opts.dry_run:
             log_dir.mkdir(parents=True, exist_ok=True)

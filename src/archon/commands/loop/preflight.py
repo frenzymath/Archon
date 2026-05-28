@@ -14,22 +14,40 @@ from archon.commands.tooling.inner_git import InnerGit
 from archon.state import read_stage
 
 
-def preflight(project_path: Path, state_dir: Path, dry_run: bool) -> None:
-    """Verify claude is installed/auth'd and the project has been init'd."""
+def preflight(project_path: Path, state_dir: Path, dry_run: bool, backend=None) -> None:
+    """Verify claude is installed/auth'd and the project has been init'd.
+
+    ``backend`` is the resolved :class:`~archon.agent.ClaudeBackend`. When it
+    is a ``ClaudePBackend``, the auth probe must NOT run plain ``claude -p``
+    against the default config dir — that uses a different account (often the
+    one without credit) and prints a misleading failure. For claude-p we only
+    check the binary is installed; auth lives in the interactive session under
+    the backend's own ``CLAUDE_CONFIG_DIR``, surfaced live in the run itself.
+    """
     progress = state_dir / "PROGRESS.md"
 
     if not dry_run:
-        if not shutil.which("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
-        r = subprocess.run(
-            ["claude", "-p", "reply with OK", "--no-session-persistence"],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            log.error("Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network.")
-            # raise typer.Exit(1)
-        log.success("Claude Code is authenticated and ready")
+        from archon.agent import ClaudePBackend
+
+        if isinstance(backend, ClaudePBackend):
+            if not shutil.which("claude-p"):
+                log.error("claude-p is not installed. Run: pip install claude-p")
+                raise typer.Exit(1)
+            cfg = backend.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
+            log.success(f"Using claude-p backend (auth via Claude Code session in {cfg})")
+        else:
+            if not shutil.which("claude"):
+                log.error("Claude Code is not installed. Run: archon setup")
+                raise typer.Exit(1)
+            r = subprocess.run(
+                ["claude", "-p", "reply with OK", "--no-session-persistence"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                log.error("Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network.")
+                # raise typer.Exit(1)
+            else:
+                log.success("Claude Code is authenticated and ready")
 
     if not progress.exists():
         log.error(f"No project state found. Run: archon init {project_path}")

@@ -362,29 +362,45 @@ _CLAUDE_BACKEND_ENTRYPOINTS: dict[str, str | None] = {
     "desktop": "claude-desktop",
 }
 
+# Backends that need their own class rather than just an entrypoint env var.
+_CLAUDE_BACKEND_SPECIAL = {"claude-p"}
+
 
 def resolve_claude_backend(
     cfg: ProjectConfig,
     *,
     cli_value: str | None = None,
+    claude_p_config_dir: str | None = None,
 ) -> "ClaudeBackend":
     """Return a :class:`~archon.agent.ClaudeBackend` from CLI or config.
 
     Precedence: ``cli_value`` (``--claude-backend`` flag) > ``loop.
     claude_backend`` in ``config.json`` > built-in default (``"default"``).
     Unknown values fall back to ``"default"`` with a warning.
+
+    ``claude_p_config_dir`` sets ``CLAUDE_CONFIG_DIR`` for ``ClaudePBackend``.
+    Precedence: CLI ``--claude-p-config-dir`` > ``loop.claude_p_config_dir``
+    in ``config.json`` > ``CLAUDE_CONFIG_DIR`` already in the environment.
     """
-    from archon.agent import ClaudeBackend, EntrypointBackend
+    from archon.agent import ClaudeBackend, ClaudePBackend, EntrypointBackend
     from archon import log as _log
 
+    valid = set(_CLAUDE_BACKEND_ENTRYPOINTS) | _CLAUDE_BACKEND_SPECIAL
     section = cfg.loop_section()
     raw = (cli_value or section.get("claude_backend") or "default").strip().lower()
-    if raw not in _CLAUDE_BACKEND_ENTRYPOINTS:
+    if raw not in valid:
         _log.warn(
             f"Unknown claude_backend '{raw}'; valid values: "
-            f"{', '.join(_CLAUDE_BACKEND_ENTRYPOINTS)}. Using 'default'."
+            f"{', '.join(sorted(valid))}. Using 'default'."
         )
         raw = "default"
+    if raw == "claude-p":
+        config_dir = (
+            claude_p_config_dir
+            or section.get("claude_p_config_dir")
+            or None
+        )
+        return ClaudePBackend(config_dir=config_dir)
     entrypoint = _CLAUDE_BACKEND_ENTRYPOINTS[raw]
     if entrypoint is not None:
         return EntrypointBackend(entrypoint)

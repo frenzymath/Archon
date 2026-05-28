@@ -140,7 +140,18 @@ def loop(
             "'default': plain claude -p. "
             "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
             "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "'claude-p': use the claude-p TUI-backed wrapper instead of claude -p "
+            "(useful when the headless API is rate-limited on a subscription account). "
             "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
+    claude_p_config_dir: Optional[str] = typer.Option(
+        None, "--claude-p-config-dir",
+        help=(
+            "CLAUDE_CONFIG_DIR to use when --claude-backend=claude-p. "
+            "Selects which Claude Code login / account claude-p uses. "
+            "(default from .archon/config.json loop.claude_p_config_dir "
+            "or the CLAUDE_CONFIG_DIR env var already in the environment)"
         ),
     ),
 ) -> None:
@@ -188,7 +199,11 @@ def loop(
     debug_feedback = _resolve(
         debug_feedback, section=loop_cfg, key='debug_feedback', default=False,
     )
-    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    backend = resolve_claude_backend(
+        project_config,
+        cli_value=claude_backend,
+        claude_p_config_dir=claude_p_config_dir,
+    )
 
     # Multi-lane execution fires automatically when config.json has it
     # enabled with at least one lane defined. The old --multilane-execute
