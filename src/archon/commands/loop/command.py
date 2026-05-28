@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from archon import log
+from archon.agent import QuotaExhaustedError
 from archon.dispatch import (
     MAX_PARALLEL_ENV_VAR,
     SLOTS_ENV_VAR,
@@ -106,7 +107,15 @@ class LoopCommand:
         ctx.prev_sorry = ctx.initial_sorry
 
         for i in range(self.options.max_iterations):
-            if not self._run_iteration(i):
+            try:
+                if not self._run_iteration(i):
+                    break
+            except QuotaExhaustedError as exc:
+                log.error(
+                    f"API quota exhausted: {exc}\n"
+                    f"Stopping the loop to avoid polluting logs. "
+                    f"Resume with `archon loop --from plan` after the limit resets."
+                )
                 break
 
         self._summarize()

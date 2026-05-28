@@ -62,16 +62,27 @@ PROVIDER_ALIASES: dict[str, str] = {
 class RunOutcome(enum.Enum):
     """Result of a single ``_run_with_logging`` attempt.
 
-    Distinguishing IDLE_TIMEOUT from FAILED matters: the retry loop in
-    :meth:`ClaudeAgent.run` only restarts on idle timeouts. Restarting
-    on real failures (bad prompt, auth error, etc.) would double the
-    token bill without fixing anything.
+    Distinguishing outcomes matters:
+    - IDLE_TIMEOUT: provider went silent; restart the same prompt.
+    - OVERLOADED: 529 server overload; wait + retry with backoff.
+    - QUOTA_EXHAUSTED: hard weekly/session limit; stop the loop.
+    - FAILED: real failure (bad prompt, auth, etc.); no retry.
     """
 
     SUCCESS = "success"
     FAILED = "failed"
     IDLE_TIMEOUT = "idle_timeout"
     CANCELLED = "cancelled"
+    OVERLOADED = "overloaded"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+
+
+class QuotaExhaustedError(RuntimeError):
+    """Raised when the API reports a hard usage-limit (weekly or session).
+
+    Callers that run a loop should catch this and stop iterating — retrying
+    will just hit the same wall and pollute the logs with empty iterations.
+    """
 
 
 def _now_iso() -> str:
@@ -559,8 +570,18 @@ class ClaudeAgent:
         if max_attempts < 1:
             max_attempts = 1
 
+        # Separate retry budgets: idle-timeout retries are caller-controlled
+        # via max_attempts; overload retries are always enabled with their
+        # own cap and exponential back-off so transient 529s don't abort work.
+        _OVERLOAD_MAX_RETRIES = 5
+        _OVERLOAD_BASE_SLEEP_S = 30
+
         last_outcome: RunOutcome = RunOutcome.FAILED
-        for attempt in range(1, max_attempts + 1):
+        idle_attempt = 0
+        overload_attempt = 0
+
+        while idle_attempt < max_attempts:
+            idle_attempt += 1
             outcome = self._run_with_logging(
                 cmd,
                 cwd=cwd,
@@ -570,7 +591,7 @@ class ClaudeAgent:
                 cancel_event=cancel_event,
                 jsonl_model=real_model,
                 idle_timeout_s=idle_timeout_s,
-                attempt=attempt,
+                attempt=idle_attempt,
                 prompt=prompt,
                 resume_session_id=resume_session_id,
             )
@@ -580,20 +601,47 @@ class ClaudeAgent:
                 return True
             if outcome is RunOutcome.CANCELLED:
                 return False
+            if outcome is RunOutcome.QUOTA_EXHAUSTED:
+                raise QuotaExhaustedError(
+                    "API quota exhausted — stop the loop and wait for the "
+                    "limit to reset before resuming."
+                )
             if outcome is RunOutcome.FAILED:
                 # A real failure — retrying won't fix it and would just
                 # burn tokens. Stop here.
                 return False
+            if outcome is RunOutcome.OVERLOADED:
+                overload_attempt += 1
+                if overload_attempt > _OVERLOAD_MAX_RETRIES:
+                    log.error(
+                        f"API still overloaded after {_OVERLOAD_MAX_RETRIES} "
+                        f"retries; giving up."
+                    )
+                    return False
+                wait_s = min(
+                    _OVERLOAD_BASE_SLEEP_S * (2 ** (overload_attempt - 1)),
+                    300,
+                )
+                log.warn(
+                    f"API overloaded (retry {overload_attempt}/"
+                    f"{_OVERLOAD_MAX_RETRIES}); waiting {wait_s}s."
+                )
+                if cancel_event is not None and cancel_event.is_set():
+                    return False
+                time.sleep(wait_s)
+                # Don't count this against the idle-timeout budget.
+                idle_attempt -= 1
+                continue
 
             # outcome is IDLE_TIMEOUT: provider went silent. Retry the
             # same prompt unless the caller asked us to stop or we've
             # hit the attempt cap.
             if cancel_event is not None and cancel_event.is_set():
                 return False
-            if attempt < max_attempts:
+            if idle_attempt < max_attempts:
                 log.warn(
                     f"Run idle for {idle_timeout_s}s on attempt "
-                    f"{attempt}/{max_attempts}; restarting same prompt."
+                    f"{idle_attempt}/{max_attempts}; restarting same prompt."
                 )
             else:
                 log.error(
@@ -804,6 +852,7 @@ class ClaudeAgent:
         # before flagging the run as failed.
         from archon.session_log import (
             read_last_session_end,
+            session_end_failure_kind,
             session_end_indicates_success,
         )
 
@@ -812,6 +861,12 @@ class ClaudeAgent:
         session_end = read_last_session_end(jsonl)
         if session_end_indicates_success(session_end):
             return RunOutcome.SUCCESS
+        # Refine the failure so the retry loop can act on it.
+        kind = session_end_failure_kind(session_end)
+        if kind == 'overloaded':
+            return RunOutcome.OVERLOADED
+        if kind == 'quota_exhausted':
+            return RunOutcome.QUOTA_EXHAUSTED
         return RunOutcome.FAILED
 
 
@@ -827,4 +882,7 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
-__all__ = ["ClaudeAgent", "ClaudeBackend", "EntrypointBackend", "DEFAULT_MODEL", "RunOutcome"]
+__all__ = [
+    "ClaudeAgent", "ClaudeBackend", "EntrypointBackend",
+    "DEFAULT_MODEL", "RunOutcome", "QuotaExhaustedError",
+]

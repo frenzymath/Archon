@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend
+from archon.agent import ClaudeAgent, ClaudeBackend, QuotaExhaustedError
 from archon.prompts import (
     build_parallel_prover_prompt,
     build_prover_prompt,
@@ -418,6 +418,8 @@ class ParallelProverRunner:
                 rel, slug = futures[future]
                 try:
                     ok = future.result()
+                except QuotaExhaustedError:
+                    raise  # propagate — stop the loop immediately
                 except Exception:
                     ok = False
                 # Stamp the session id from the prover's JSONL — works
