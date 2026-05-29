@@ -86,9 +86,9 @@ archon update
 | `archon dashboard` | Start the web monitoring interface (auto-launched by `loop` by default). |
 | `archon doctor` | Verify the full Archon setup and health. |
 | `archon prove` | Directly prove an inline statement. |
-| `archon refactor` | Run only the refactor agent against the current `REFACTOR_DIRECTIVE.md`. |
+| `archon refactor run` | Execute the refactor agent against the directive in `.archon/REFACTOR_DIRECTIVE.md` (write that directive interactively with `archon refactor draft`). |
 | `archon discuss` | Open Claude Code interactively in the project with full Archon context — for debugging or brainstorming without firing the loop. |
-| `archon branch` | Create a branch in the inner git (`.archon/git-dir/`) from any historical agent commit. |
+| `archon branch <name> --from <commit>` | Create a branch in the inner git (`.archon/git-dir/`) from any historical agent commit. Without `--from`, switches to an existing branch named `<name>`. |
 | `archon version` | Show the Archon CLI version and, inside a project, the project version. |
 | `archon setup` | Install required system dependencies. |
 | `archon update` | Update Archon to the latest published version. |
