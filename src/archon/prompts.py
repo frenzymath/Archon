@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -921,6 +923,73 @@ def _prover_modes_catalog_block(state_dir: Path) -> str:
 # ── prompt builders ───────────────────────────────────────────────────
 
 
+def _blueprint_frontier_block(project_path: Path) -> str:
+    """Compute and inject the blueprint frontier into the plan prompt.
+
+    Calls ``dependency_graph.py --format=frontier-summary`` against the
+    current project, so the plan agent receives a deterministic, token-cheap
+    view of which declarations have all their \\uses{} deps satisfied and
+    are ready to prove — without having to parse the blueprint itself.
+
+    Returns an empty string when the project has no blueprint directory,
+    when the script is missing, or when the script fails (e.g. no
+    declarations yet).  Silently swallowed on any error so a broken
+    blueprint can't block the loop.
+    """
+    chapters_dir = project_path / "blueprint" / "src" / "chapters"
+    if not chapters_dir.is_dir():
+        return ""
+    try:
+        from archon.commands.init.utils import data_path
+        script = data_path("skills/lean4/lib/scripts/dependency_graph.py")
+    except Exception:
+        return ""
+    if not script.is_file():
+        return ""
+    try:
+        r = subprocess.run(
+            [sys.executable, str(script), str(project_path),
+             "--format=frontier-summary", "--max-frontier=20"],
+            capture_output=True, text=True, timeout=30,
+        )
+        out = r.stdout.strip()
+        if not out or r.returncode != 0:
+            return ""
+    except Exception:
+        return ""
+
+    return dedent(f"""
+
+        ## Blueprint frontier — ready-to-prove declarations
+
+        The following is computed deterministically from the current blueprint
+        (\\lean{{...}}, \\uses{{...}}, \\leanok markers after the last sync_leanok run).
+        **Frontier nodes** have every \\uses{{}} dep already \\leanok — dispatch these
+        first. Near-frontier nodes unblock as soon as the frontier nodes above them close.
+
+        ```
+        {out}
+        ```
+
+        **Blueprint maintenance rules (act on these before dispatching provers):**
+        - "Ready but missing \\lean{{}}" entries need a \\lean{{Name}} added to the
+          blueprint chapter before a prover can be dispatched. Do this as part of
+          your planning pass.
+        - "Broken \\uses{{}}" entries reference a label that exists in no chapter.
+          Either the dependency is wrong (remove it) or the dependency is real but
+          lacks a blueprint entry (add the corresponding \\begin{{lemma/definition}}
+          block with \\label{{}}, \\lean{{}}, and \\uses{{}} in the appropriate chapter).
+          Fix broken refs before dispatching work that depends on them.
+        - If a declaration on the frontier looks like it SHOULD depend on something
+          that is not yet \\leanok, add the missing \\uses{{label}} to the blueprint
+          so the DAG reflects the true mathematical dependency. Do not dispatch
+          a prover to a declaration whose \\uses{{}} list is incomplete.
+
+        You do NOT need to re-parse the blueprint to derive this ordering.
+        For the full JSON graph: python3 $LEAN4_SCRIPTS/dependency_graph.py . --format=frontier
+    """)
+
+
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int,
@@ -986,6 +1055,7 @@ def build_plan_prompt(
     user_hints_block = _user_hints_block(captured_user_hints)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
+    frontier_block = _blueprint_frontier_block(project_path)
     memory_block = _archon_memory_block(state_dir, writable=True)
 
     return dedent(f"""\
@@ -999,7 +1069,8 @@ def build_plan_prompt(
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
-        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + memory_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
+        - The blueprint frontier (which declarations are ready to prove) is injected below under `## Blueprint frontier`. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def build_prover_prompt(

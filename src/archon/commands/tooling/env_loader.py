@@ -142,12 +142,17 @@ def render_env_template(*, shell_env: dict[str, str] | None = None) -> str:
         '# For full setup details, see .archon/MULTILANE.md.',
         '',
         '# ── Informal agent (one key is enough; pick whichever you have) ──',
-        '# Used by the archon informal agent for blueprint sketches, etc.',
+        '# Used by archon-informal-agent.py for proof sketches via direct API calls.',
+        '# NOTE: Kimi-for-Coding keys (sk-kimi-...) do NOT work here — they are',
+        '#       coding-agent-only and only usable via the Moonshot multilane section',
+        '#       below. For Kimi/Moonshot informal agent use, get a standard key from',
+        '#       platform.moonshot.cn (starts with sk-, not sk-kimi-).',
     ]
     for key in INFORMAL_AGENT_KEYS:
         lines.append(_line(key))
     lines.append('')
     lines.append('# ── Multi-lane providers (non-Anthropic prover lanes) ──')
+    lines.append('# These use Anthropic-compatible APIs and are separate from the informal agent.')
     for provider, keys in PROVIDERS.items():
         lines.append(f'# {provider.title()}')
         for key in keys:

@@ -17,18 +17,25 @@ hand-rolling the same graph by reading every file — saves tokens and
 avoids drift.
 
 Usage:
-    dependency_graph.py [project-path] [--format=json|dot|summary] [--out FILE]
-                        [--include-deps]
+    dependency_graph.py [project-path] [--format=json|dot|summary|frontier|frontier-summary]
+                        [--out FILE] [--include-deps]
 
 Defaults:
     project-path: current working directory
     --format:     json (machine-readable; the planner prompt expects this)
     --out:        stdout
 
+Format notes:
+    frontier        JSON with frontier (all deps leanok), near-frontier,
+                    blocked, and broken \\uses{} refs.
+    frontier-summary  Compact text; auto-injected into the plan prompt each
+                    iteration so the planner knows what is ready to prove.
+
 Examples:
     dependency_graph.py
     dependency_graph.py /path/to/project --format=summary
     dependency_graph.py . --format=dot --out deps.dot
+    dependency_graph.py . --format=frontier-summary
     dependency_graph.py . --include-deps      # include .lake/ subprojects
 """
 
@@ -259,6 +266,236 @@ def render_dot(modules: list[Module], blueprint: list[BlueprintFile]) -> str:
     return '\n'.join(lines) + '\n'
 
 
+# ── Frontier computation ──────────────────────────────────────────────
+#
+# "Frontier" = declarations that are:
+#   - not yet \leanok  (still needs a proof)
+#   - not \notready    (not explicitly parked)
+#   - all \uses{} deps are \leanok  (every prerequisite is done)
+#
+# "Near-frontier" = not leanok, every blocking dep is itself on the frontier.
+# "Blocked"       = not leanok, at least one dep is neither leanok nor frontier.
+# "Broken \uses{}" = \uses{label} where label has no \label{} in any chapter.
+
+
+@dataclass
+class FrontierEntry:
+    label: str | None
+    lean_name: str | None       # from \lean{}, None if missing
+    chapter_file: str           # repo-relative .tex path
+    lean_file: str | None       # guessed .lean path (None if file absent)
+    kind: str                   # theorem / lemma / definition / …
+    uses: list[str]             # all \uses{} labels
+    depth: int                  # topological depth (0 = no deps)
+
+
+def _topo_depths(label_to_uses: dict[str, list[str]]) -> dict[str, int]:
+    """Compute topological depth for each label (iterative BFS / Kahn's)."""
+    # in-degree for each label that appears as a target
+    in_deg: dict[str, int] = {lbl: 0 for lbl in label_to_uses}
+    children: dict[str, list[str]] = {lbl: [] for lbl in label_to_uses}
+    for lbl, deps in label_to_uses.items():
+        for dep in deps:
+            if dep in label_to_uses:
+                in_deg[lbl] = in_deg.get(lbl, 0)  # ensure key exists
+                children.setdefault(dep, []).append(lbl)
+
+    depths: dict[str, int] = {}
+    queue = [lbl for lbl, d in in_deg.items() if d == 0]
+    for lbl in queue:
+        depths.setdefault(lbl, 0)
+
+    while queue:
+        nxt: list[str] = []
+        for lbl in queue:
+            for child in children.get(lbl, []):
+                new_depth = depths.get(lbl, 0) + 1
+                if new_depth > depths.get(child, 0):
+                    depths[child] = new_depth
+                nxt.append(child)
+        queue = nxt
+
+    # Nodes not reached (cycles or disconnected) get depth 0.
+    for lbl in label_to_uses:
+        depths.setdefault(lbl, 0)
+    return depths
+
+
+def compute_frontier(blueprint: list[BlueprintFile]) -> dict:
+    """Return a dict with keys: frontier, near_frontier, blocked, broken_uses, stats."""
+    # Global label → (decl, chapter_file, lean_file_guess)
+    label_map: dict[str, tuple[BlueprintDecl, str, str | None]] = {}
+    for bf in blueprint:
+        for d in bf.declarations:
+            if d.label:
+                label_map[d.label] = (d, bf.chapter_file, bf.lean_file_guess)
+
+    leanok_labels: set[str] = {lbl for lbl, (d, _, __) in label_map.items() if d.leanok}
+
+    # Topological depth — only over declared labels
+    label_to_uses = {
+        lbl: [u for u in d.uses if u in label_map]
+        for lbl, (d, _, __) in label_map.items()
+    }
+    depths = _topo_depths(label_to_uses)
+
+    frontier: list[FrontierEntry] = []
+    pre_blocked: list[tuple[FrontierEntry, list[str]]] = []  # (entry, missing_leanok_labels)
+    broken_uses: list[dict] = []  # {chapter, label, missing_labels}
+
+    for bf in blueprint:
+        for d in bf.declarations:
+            if d.leanok or d.notready:
+                continue
+
+            # Separate broken refs from valid (but possibly unproved) deps
+            unknown = [u for u in d.uses if u not in label_map]
+            missing = [u for u in d.uses if u in label_map and u not in leanok_labels]
+
+            if unknown:
+                broken_uses.append({
+                    'chapter': bf.chapter_file,
+                    'label': d.label,
+                    'missing_labels': unknown,
+                })
+
+            entry = FrontierEntry(
+                label=d.label,
+                lean_name=d.name,
+                chapter_file=bf.chapter_file,
+                lean_file=bf.lean_file_guess,
+                kind=d.kind,
+                uses=d.uses,
+                depth=depths.get(d.label, 0) if d.label else 0,
+            )
+            if not missing:
+                frontier.append(entry)
+            else:
+                pre_blocked.append((entry, missing))
+
+    # Separate near-frontier from hard-blocked
+    frontier_labels = {e.label for e in frontier if e.label}
+    near_frontier: list[tuple[FrontierEntry, list[str]]] = []
+    blocked: list[tuple[FrontierEntry, list[str]]] = []
+    for entry, missing in pre_blocked:
+        if all(m in frontier_labels for m in missing):
+            near_frontier.append((entry, missing))
+        else:
+            blocked.append((entry, missing))
+
+    # Sort frontier: depth asc, then uses-count asc (simpler proofs first)
+    frontier.sort(key=lambda e: (e.depth, len(e.uses), e.lean_name or e.label or ""))
+
+    total = sum(len(bf.declarations) for bf in blueprint)
+    return {
+        'frontier': [asdict(e) for e in frontier],
+        'near_frontier': [
+            {'entry': asdict(e), 'waiting_for': miss}
+            for e, miss in near_frontier
+        ],
+        'blocked': [
+            {'entry': asdict(e), 'waiting_for': miss}
+            for e, miss in blocked
+        ],
+        'broken_uses': broken_uses,
+        'stats': {
+            'total': total,
+            'leanok': len(leanok_labels),
+            'frontier': len(frontier),
+            'near_frontier': len(near_frontier),
+            'blocked': len(blocked),
+            'broken_uses': len(broken_uses),
+        },
+    }
+
+
+def render_frontier_json(result: dict) -> str:
+    return json.dumps(result, indent=2) + '\n'
+
+
+def render_frontier_summary(result: dict, *, max_frontier: int = 30) -> str:
+    s = result['stats']
+    frontier_all = result['frontier']
+
+    # Split into prover-dispatchable (has real \lean{} name) vs. blueprint-only.
+    # Filter out "..." placeholders that appear when the author writes \lean{...}
+    # as a stub before filling in the actual name.
+    def _is_real_lean_name(name: str | None) -> bool:
+        return bool(name) and name.strip('.').strip() != ""
+
+    frontier_lean = [e for e in frontier_all if _is_real_lean_name(e['lean_name'])]
+    frontier_informal = [e for e in frontier_all if not _is_real_lean_name(e['lean_name'])]
+
+    lines: list[str] = []
+    lines.append(
+        f"Total: {s['total']} declarations — "
+        f"{s['leanok']} ✓ leanok, "
+        f"{len(frontier_lean)} ready (Lean), "
+        f"{len(frontier_informal)} ready (informal/no \\lean{{}}), "
+        f"{s['near_frontier']} near-frontier, "
+        f"{s['blocked']} blocked"
+    )
+
+    if frontier_lean:
+        lines.append("")
+        lines.append("## Ready to prove — prover-dispatchable (all \\uses{} deps \\leanok, has \\lean{}):")
+        for e in frontier_lean[:max_frontier]:
+            file_hint = f"  [{e['lean_file']}]" if e['lean_file'] else ""
+            uses_str = (
+                "uses: " + ", ".join(e['uses'])
+                if e['uses'] else "no \\uses{} deps"
+            )
+            lines.append(f"  {e['lean_name']}{file_hint}  ({uses_str})")
+        if len(frontier_lean) > max_frontier:
+            lines.append(f"  … and {len(frontier_lean) - max_frontier} more")
+    else:
+        lines.append("")
+        lines.append("## Ready to prove: (none with \\lean{} — either all leanok or all have unmet deps)")
+
+    if frontier_informal:
+        # Only show those that at least have a \label{} so we can identify them.
+        informal_labeled = [e for e in frontier_informal if e['label']]
+        informal_unlabeled = len(frontier_informal) - len(informal_labeled)
+        lines.append("")
+        lines.append(
+            f"## Ready but missing \\lean{{}} ({len(frontier_informal)} decls) — "
+            f"blueprint-writer should add \\lean{{Name}} before dispatching:"
+        )
+        for e in informal_labeled[:10]:
+            chapter = e['chapter_file'].split('/')[-1].replace('.tex', '')
+            lines.append(f"  [{chapter}] \\label{{{e['label']}}}  (no \\lean{{}} name)")
+        if len(informal_labeled) > 10:
+            lines.append(f"  … and {len(informal_labeled) - 10} more labeled")
+        if informal_unlabeled:
+            lines.append(f"  + {informal_unlabeled} with neither \\label{{}} nor \\lean{{}}")
+
+    near = result['near_frontier']
+    if near:
+        lines.append("")
+        lines.append("## Near-frontier (blocked only by ready nodes above):")
+        for item in near[:15]:
+            e = item['entry']
+            lean = e['lean_name'] or f"[{e['label'] or '?'}]"
+            waiting = ", ".join(item['waiting_for'])
+            lines.append(f"  {lean}  →  waiting for: {waiting}")
+        if len(near) > 15:
+            lines.append(f"  … and {len(near) - 15} more")
+
+    broken = result['broken_uses']
+    if broken:
+        lines.append("")
+        lines.append("## Broken \\uses{} (label not in any blueprint chapter — add the blueprint or fix the ref):")
+        for item in broken[:10]:
+            chapter = item['chapter'].split('/')[-1].replace('.tex', '')
+            lbl = item['label'] or '?'
+            miss = ", ".join(item['missing_labels'])
+            lines.append(f"  [{chapter}] {lbl}  →  unknown: {miss}")
+        if len(broken) > 10:
+            lines.append(f"  … and {len(broken) - 10} more")
+
+    return '\n'.join(lines) + '\n'
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
@@ -267,6 +504,7 @@ def main(argv: list[str]) -> int:
     fmt = 'json'
     out_path: Path | None = None
     include_deps = False
+    max_frontier = 30
 
     i = 0
     while i < len(argv):
@@ -284,6 +522,12 @@ def main(argv: list[str]) -> int:
             out_path = Path(argv[i + 1]); i += 1
         elif arg == '--include-deps':
             include_deps = True
+        elif arg.startswith('--max-frontier='):
+            try:
+                max_frontier = int(arg.split('=', 1)[1])
+            except ValueError:
+                print(f"--max-frontier requires an integer", file=sys.stderr)
+                return 2
         elif not arg.startswith('-'):
             project = Path(arg).resolve()
         else:
@@ -304,6 +548,10 @@ def main(argv: list[str]) -> int:
         out = render_summary(modules, blueprint)
     elif fmt == 'dot':
         out = render_dot(modules, blueprint)
+    elif fmt == 'frontier':
+        out = render_frontier_json(compute_frontier(blueprint))
+    elif fmt == 'frontier-summary':
+        out = render_frontier_summary(compute_frontier(blueprint), max_frontier=max_frontier)
     else:
         print(f"Unknown format: {fmt}", file=sys.stderr)
         return 2

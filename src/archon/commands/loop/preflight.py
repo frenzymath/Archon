@@ -103,8 +103,45 @@ def warn_if_inner_dirty(project_path: Path) -> None:
     )
 
 
+def _probe_informal_key(var: str, url: str, timeout: int = 6) -> str | None:
+    """Return None if the key is valid (or unreachable), an error string otherwise.
+
+    Makes a GET /models request — zero tokens, no model needed.  Only
+    flags definitive auth failures (HTTP 401/403); network errors and
+    timeouts are silently ignored so a flaky connection never blocks a run.
+    """
+    import urllib.error
+    import urllib.request
+
+    key = os.environ.get(var, "")
+    if not key:
+        return None
+    try:
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {key}"}
+        )
+        urllib.request.urlopen(req, timeout=timeout)
+        return None  # success
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return f"HTTP {e.code}"
+        return None  # other HTTP errors are not auth failures
+    except Exception:
+        return None  # network / timeout — don't block
+
+
+# MOONSHOT_API_KEY keys whose prefix indicates they are Kimi-for-Coding
+# keys (Anthropic-compatible, coding-agent-only) and won't work for
+# direct OpenAI-compatible informal-agent calls.
+_KIMI_CODING_PREFIXES = ("sk-kimi-",)
+
+
 def check_informal_agent_keys() -> None:
-    """Warn (don't fail) if no external-LLM key is set for the informal agent."""
+    """Warn (don't fail) if no usable external-LLM key exists for the informal agent.
+
+    Checks both key presence and, for Moonshot/DeepSeek, a quick /models
+    probe to catch coding-agent-only or invalid keys early.
+    """
     keys = (
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",
@@ -112,7 +149,8 @@ def check_informal_agent_keys() -> None:
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
     )
-    if not any(os.environ.get(k) for k in keys):
+    set_keys = [k for k in keys if os.environ.get(k)]
+    if not set_keys:
         log.warn(
             "No API keys for informal agent "
             "(DEEPSEEK_API_KEY / MOONSHOT_API_KEY / OPENROUTER_API_KEY / "
@@ -122,3 +160,42 @@ def check_informal_agent_keys() -> None:
             "Provers will work without it, but may struggle on hard sorries "
             "where external LLM help would be useful."
         )
+        return
+
+    # Validate Moonshot key — "sk-kimi-" prefix means Kimi-for-Coding
+    # (Anthropic-compatible, only accessible through coding agents like
+    # Claude Code). Direct OpenAI-compatible calls return 401.
+    moonshot_key = os.environ.get("MOONSHOT_API_KEY", "")
+    if moonshot_key and any(moonshot_key.startswith(p) for p in _KIMI_CODING_PREFIXES):
+        log.warn(
+            "Informal-agent tool is unavailable (optional dependency). "
+            "MOONSHOT_API_KEY starts with 'sk-kimi-' — this is a "
+            "Kimi-for-Coding key that only works through Claude Code's "
+            "Anthropic-compatible interface (used by multilane). Direct "
+            "OpenAI-compatible calls from archon-informal-agent.py return "
+            "HTTP 401. To use the informal agent with Kimi, get a standard "
+            "Moonshot key from platform.moonshot.cn (starts with 'sk-', "
+            "not 'sk-kimi-') and set MOONSHOT_API_KEY to that value, or "
+            "use a different provider (DeepSeek / OpenRouter / OpenAI / Gemini)."
+        )
+        # Remove it from the "usable" set for the remaining checks.
+        set_keys = [k for k in set_keys if k != "MOONSHOT_API_KEY"]
+
+    # Quick /models probe for keys that look plausible but may still be invalid.
+    _PROBES = {
+        "MOONSHOT_API_KEY": "https://api.moonshot.cn/v1/models",
+        "DEEPSEEK_API_KEY": "https://api.deepseek.com/v1/models",
+    }
+    for var, probe_url in _PROBES.items():
+        if var not in set_keys:
+            continue
+        err = _probe_informal_key(var, probe_url)
+        if err:
+            log.warn(
+                f"{var} is set but returns {err} (invalid auth) — "
+                f"archon-informal-agent.py cannot use it. "
+                f"Set a valid key (standard Moonshot from platform.moonshot.cn / "
+                f"DeepSeek / OpenRouter / OpenAI / Gemini) if you want the "
+                f"informal-agent tool live."
+            )
+            set_keys = [k for k in set_keys if k != var]

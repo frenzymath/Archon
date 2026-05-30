@@ -173,6 +173,8 @@ If retrieval fails (paywall, broken link, no API key, not available online): mar
 - **Document every change** in your report, including which `references/<file>.md` files you opened (under "References consulted").
 
 ### What you MUST NOT do
+- **Do NOT reference project history.** No "since iteration N," "after our failed attempt," or session narrative. The blueprint must read as a standalone mathematical document.
+- **Do NOT include Lean implementation details.** No tactic suggestions, typeclass wiring notes, or Lean code structure hints in the prose. If a Lean note is needed, it belongs in `.lean` files (the plan agent will use `lean-scaffolder` for that).
 - **Do NOT add `\leanok` or `\mathlibok` markers.** Those are managed by the `sync_leanok` phase + the review agent — never by you.
 - **Do NOT edit other chapters.** Even when you spot a related issue, flag it in "Notes for Plan Agent" instead of fixing it.
 - **Do NOT edit `content.tex`** (the top-level blueprint file that `\input`s the chapters).

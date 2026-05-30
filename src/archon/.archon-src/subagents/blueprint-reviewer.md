@@ -372,6 +372,7 @@ Apply these rules verbatim:
   - A route under "Multi-route coverage" is reported as MISSING.
   - **Any chapter has `complete: partial | false` OR `correct: partial | false`** — even if the strategy "does not require" that chapter this iter.
   - **Any chapter whose `\lean{...}` hint** is marked "Lean difficulty quality: poor" AND the named target is part of an active prover route in PROGRESS.md.
+  - **Blueprint purity violations** — any chapter containing Lean syntax or project history must be cleaned before provers run.
   - **Broken `\uses{}` cross-references** that point at non-existent labels.
   - **Citation-discipline findings on blocks feeding an active prover route**.
   - **Unstarted-phase proposals** — each proposed chapter lands here as `unstarted-phase proposal: <phase name> — dispatch blueprint-writer for <proposed chapter filename> or record deferral`. These are must-act because an unwritten blueprint is an unparallelisable, unpreviewable phase; writing it early is the cheapest action in the loop.
@@ -404,4 +405,5 @@ Keep the inline return short. The plan agent reads the full report.
 - **You are read-only.** No project source, no blueprint, no state files (except your own report).
 - **You audit against the directive's context**, not your own ideas of what the project should look like — but you ARE critical of weak prose and under-specified Lean hints.
 - **You flag, you don't fix.** Even when the fix is obvious, the plan agent decides what changes next iter.
-- **The per-chapter shape is fixed**: `complete`, `correct`, `notes`. Don't reshape. The plan agent depends on this format.
+- **The per-chapter shape is fixed**: `complete`, `correct`, `notes`. Don't reshape. The plan agent depends on this format.changes next iter.
+- **The per-chapter shape is fixed**: `complete`, `correct`, `notes`. Don't reshape. The plan agent depends on this format. this format.
