@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Informal mathematical reasoning via external LLMs.
 
-Supported providers (all speak OpenAI-compatible chat completions unless noted):
-    openai      https://api.openai.com/v1        → OPENAI_API_KEY
-    gemini      Google Generative Language API   → GEMINI_API_KEY
-    openrouter  https://openrouter.ai/api/v1     → OPENROUTER_API_KEY
-    deepseek    https://api.deepseek.com/v1      → DEEPSEEK_API_KEY
-    kimi        https://api.moonshot.cn/v1       → MOONSHOT_API_KEY
-    auto        pick the best available key automatically (default)
+Supported providers:
+    openai          https://api.openai.com/v1              → OPENAI_API_KEY
+    gemini          Google Generative Language API          → GEMINI_API_KEY
+    openrouter      https://openrouter.ai/api/v1           → OPENROUTER_API_KEY
+    deepseek        https://api.deepseek.com/v1            → DEEPSEEK_API_KEY
+    kimi            https://api.moonshot.cn/v1  (OpenAI-compatible)   → MOONSHOT_API_KEY
+    kimi-anthropic  https://api.moonshot.cn/v1  (Anthropic-compatible) → MOONSHOT_API_KEY
+    auto            pick the best available key automatically (default)
 
 No dependencies beyond Python 3.10+ stdlib.
 
@@ -15,6 +16,7 @@ Usage:
     python3 archon-informal-agent.py "Prove that ..."
     python3 archon-informal-agent.py --provider deepseek "Prove that ..."
     python3 archon-informal-agent.py --provider gemini --think "Prove that ..."
+    python3 archon-informal-agent.py --provider kimi-anthropic --think "Prove that ..."
     python3 archon-informal-agent.py --provider openrouter --model deepseek/deepseek-r1 "..."
 
 Check which keys are available before use:
@@ -34,6 +36,7 @@ DEFAULTS = {
     "openrouter": "google/gemini-3.1-pro-preview",
     "deepseek": "deepseek-reasoner",
     "kimi": "kimi-k2",
+    "kimi-anthropic": "kimi-k2",
 }
 
 # Auto-provider picks the first available key in this priority order.
@@ -180,6 +183,44 @@ def call_kimi(prompt: str, model: str, think: bool) -> str:
     return _openai_chat(prompt, model, {"Authorization": f"Bearer {key}"}, _kimi_base())
 
 
+def _kimi_anthropic_base() -> str:
+    # Moonshot exposes an Anthropic-compatible endpoint at the same domain.
+    # Override via MOONSHOT_ANTHROPIC_BASE_URL if the hostname ever changes.
+    base = os.environ.get("MOONSHOT_ANTHROPIC_BASE_URL", "https://api.moonshot.cn").rstrip("/")
+    return base
+
+
+def call_kimi_anthropic(prompt: str, model: str, think: bool) -> str:
+    """Call Kimi via Moonshot's Anthropic-compatible Messages endpoint.
+
+    Uses MOONSHOT_API_KEY (same key as the OpenAI-compatible route) but
+    speaks the Anthropic Messages API wire format so models that expose
+    extended-thinking only on that endpoint can be reached with --think.
+    """
+    key = _require_key("MOONSHOT_API_KEY")
+    base = _kimi_anthropic_base()
+    body: dict = {
+        "model": model,
+        "max_tokens": 16000,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if think:
+        body["thinking"] = {"type": "enabled", "budget_tokens": 10000}
+    data = _post(
+        f"{base}/v1/messages",
+        {"x-api-key": key, "anthropic-version": "2023-06-01"},
+        body,
+    )
+    out = []
+    for block in data.get("content", []):
+        if block.get("type") == "thinking":
+            out.append(f"[Thinking]\n{block['thinking']}\n[/Thinking]")
+        elif block.get("type") == "text":
+            out.append(block["text"])
+    return "\n\n".join(out) if out else json.dumps(data, indent=2)
+
+
 def _auto_provider() -> str:
     """Return the highest-priority provider whose API key is set."""
     for provider in _AUTO_PRIORITY:
@@ -194,7 +235,7 @@ def main():
     p.add_argument("prompt")
     p.add_argument(
         "--provider",
-        choices=["openai", "gemini", "openrouter", "deepseek", "kimi", "auto"],
+        choices=["openai", "gemini", "openrouter", "deepseek", "kimi", "kimi-anthropic", "auto"],
         default="auto",
     )
     p.add_argument("--model", default=None)
@@ -209,6 +250,7 @@ def main():
         "openrouter": call_openrouter,
         "deepseek": call_deepseek,
         "kimi": call_kimi,
+        "kimi-anthropic": call_kimi_anthropic,
     }[provider]
     print(fn(args.prompt, model, args.think))
 

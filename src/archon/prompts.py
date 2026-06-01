@@ -349,22 +349,33 @@ def _user_hints_block(captured_hints: str | None) -> str:
     raw = captured_hints or ""
     temporary, persistent = _split_hint_sections(raw)
 
+    _NO_HINTS_MSG = dedent("""
+
+        ## User hints
+
+        No user hints this iteration. If the prior iter's sidecar
+        (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
+        user response` section, execute that fallback now and record
+        the auto-execution in this iter's sidecar under
+        `## User-silent fallback executed`. Otherwise proceed
+        normally.
+    """)
+
     # Fall back to treating the entire stripped content as temporary for
     # legacy single-section files (no ## headings found).
     if not temporary and not persistent:
-        legacy = _strip_html_comments(raw).strip()
+        stripped_no_comment = _strip_html_comments(raw)
+        # If the new two-section headings are present (even with empty bodies)
+        # this is a template-only file with no real hints — not a legacy file.
+        has_section_headings = bool(
+            _TEMPORARY_HEADING_RE.search(stripped_no_comment)
+            or _PERSISTENT_HEADING_RE.search(stripped_no_comment)
+        )
+        if has_section_headings:
+            return _NO_HINTS_MSG
+        legacy = stripped_no_comment.strip()
         if not legacy:
-            return dedent("""
-
-                ## User hints
-
-                No user hints this iteration. If the prior iter's sidecar
-                (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
-                user response` section, execute that fallback now and record
-                the auto-execution in this iter's sidecar under
-                `## User-silent fallback executed`. Otherwise proceed
-                normally.
-            """)
+            return _NO_HINTS_MSG
         temporary = legacy
 
     parts: list[str] = ["\n## User hints\n"]

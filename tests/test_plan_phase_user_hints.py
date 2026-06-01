@@ -92,20 +92,24 @@ class ClearUserHintsTest(unittest.TestCase):
 
     def test_template_ships_with_html_comment_preamble(self):
         # The template ships with an HTML-comment preamble explaining
-        # the hint format to the user. The preamble is stripped by
-        # _user_hints_block in prompts.py before injection, so a
-        # template-only file renders as "no hints" to the planner.
-        # The preamble is the format guide; if you remove it, also
-        # update _user_hints_block's comment-stripping contract.
+        # the hint format to the user. The section headings (## Temporary
+        # hints / ## Persistent hints) sit outside the comment so the user
+        # can see them when editing the file directly. _user_hints_block
+        # recognises that both section bodies are empty and renders the
+        # template as "no hints" — the planner never sees the headings as
+        # hint content. The preamble is the format guide; if you remove it,
+        # also update _user_hints_block's comment-stripping contract.
+        from archon.prompts import _user_hints_block, _strip_html_comments  # type: ignore
+        import re
         tmpl = _read_user_hints_template()
         self.assertTrue(tmpl.lstrip().startswith("<!--"))
         self.assertIn("USER_HINTS.md", tmpl)
-        # No actual hint bullets — the preamble must contain zero
-        # `- [<timestamp>]` lines that are NOT inside the comment.
-        # We check this by confirming the only content outside the
-        # HTML comment is whitespace.
-        from archon.prompts import _strip_html_comments  # type: ignore
-        self.assertEqual(_strip_html_comments(tmpl).strip(), "")
+        # Template-only content must render as "no hints" to the planner.
+        self.assertIn("No user hints", _user_hints_block(tmpl))
+        # No actual hint bullets outside the HTML comment.
+        outside_comment = _strip_html_comments(tmpl)
+        bullet_re = re.compile(r"^- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]", re.MULTILINE)
+        self.assertFalse(bullet_re.search(outside_comment))
 
 
 class TemplateConsistencyTest(unittest.TestCase):
@@ -127,11 +131,17 @@ class TemplateConsistencyTest(unittest.TestCase):
                 template_content, encoding="utf-8",
             )
             init_state = (state / "USER_HINTS.md").read_text(encoding="utf-8")
-            # Simulate iter cycle: user adds a hint, planner consumes,
-            # loop clears.
-            (state / "USER_HINTS.md").write_text(
-                template_content + "- [ts] some live hint\n", encoding="utf-8",
+            # Simulate iter cycle: user adds a TEMPORARY hint under the
+            # correct heading, planner consumes it, loop clears.
+            # Place the hint under "## Temporary hints" (not at EOF, which
+            # would land it in the persistent section and correctly preserve it).
+            hint_line = "- [2026-01-01T00:00:00Z] some live hint\n"
+            file_with_hint = template_content.replace(
+                "## Temporary hints\n\n",
+                "## Temporary hints\n\n" + hint_line,
+                1,
             )
+            (state / "USER_HINTS.md").write_text(file_with_hint, encoding="utf-8")
             _clear_user_hints(state)
             cleared_state = (state / "USER_HINTS.md").read_text(encoding="utf-8")
             self.assertEqual(init_state, cleared_state)

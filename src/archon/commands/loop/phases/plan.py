@@ -54,6 +54,7 @@ def _capture_user_hints(state_dir: Path) -> str | None:
 
 
 _PERSISTENT_HEADING = re.compile(r"^##\s+Persistent hints\s*$", re.IGNORECASE | re.MULTILINE)
+_HTML_COMMENT_END_RE = re.compile(r"-->")
 
 
 def _split_hints(text: str) -> tuple[str, str]:
@@ -62,8 +63,17 @@ def _split_hints(text: str) -> tuple[str, str]:
     ``persistent_block`` is everything from the ``## Persistent hints``
     heading to EOF (heading line included).  ``temporary_body`` is the
     rest.  Returns (text, "") when no persistent section is found.
+
+    HTML comment blocks are skipped before searching so that a heading
+    mentioned inside the comment preamble (e.g. the template's format
+    guide) is not mistaken for the actual section boundary.
     """
-    m = _PERSISTENT_HEADING.search(text)
+    # Start searching after the last HTML comment end marker so headings
+    # mentioned inside the comment preamble are ignored.
+    search_from = 0
+    for cm in _HTML_COMMENT_END_RE.finditer(text):
+        search_from = cm.end()
+    m = _PERSISTENT_HEADING.search(text, search_from)
     if not m:
         return text, ""
     return text[: m.start()], text[m.start():]
