@@ -2,6 +2,29 @@
 
 All notable changes to Archon are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Harness router (Phase 1, opt-in seam)**: a "responsibility → harness"
+  routing layer that lets plan / prover / review / each subagent / each lane
+  be pointed at a named *harness* (an engine). This phase introduces only the
+  decision point — a `build_runner(...)` factory behind a new `AgentRunner`
+  protocol that `ClaudeAgent` now implements, plus per-role
+  (`resolve_role_harness`) and per-subagent (`resolve_subagent_harness`)
+  resolvers that mirror the existing `resolve_subagent_model` precedence
+  (`loop.roles.<role>` / `subagents.<name>.harness` > `loop.harness` >
+  built-in). Config is additive: an optional `harnesses.<name>` descriptor
+  table and `loop.harness` / `loop.roles` keys. The only registered runner is
+  still `claude-code`; an unknown harness raises a clear error rather than
+  silently downgrading. **Default behavior is unchanged**: with no new config
+  keys present, `build_runner` short-circuits to exactly
+  `ClaudeAgent(model=…, role=…)`, so the default single-Anthropic path never
+  touches the new resolution code. `SubagentDescriptor` gains an optional
+  `harness:` frontmatter field and `LaneConfig` gains a forward-compat
+  `harness` field (parsed but not yet rewired into lane dispatch). Non-Anthropic
+  (codex / gemini) runners arrive in a later phase.
+
 ## [0.2.0] — 2026-05
 
 This release adds **multi-lane parallel proving**, a dedicated **refactor agent**,

@@ -488,6 +488,26 @@ configuration is needed — it's silently included in every iteration.
 
 ---
 
+## 8. Harness router (Phase 1) — no action required
+
+A new opt-in "responsibility → harness" routing seam lets you (in a later
+phase) point plan / prover / review / a subagent / a lane at a different
+engine. **Existing projects need to do nothing.** The new config keys —
+`loop.harness`, `loop.roles.<role>`, the top-level `harnesses` table, and
+the optional `harness:` subagent frontmatter / `LaneConfig.harness` field
+— are all **absent by default**, and when they're absent every
+responsibility resolves to the built-in `claude-code` engine. With no new
+keys present the loop runs the exact same single-Anthropic shape as
+v0.2.0; `archon init` adds no new files for this phase.
+
+This phase ships only the routing decision point — the only available
+runner is still `claude-code`. If you do add a `harnesses` entry naming an
+engine other than `claude-code`, Archon raises a clear error rather than
+silently falling back (non-Anthropic codex / gemini runners arrive in a
+later phase).
+
+---
+
 ## Questions or issues
 
 Please open an issue on the
