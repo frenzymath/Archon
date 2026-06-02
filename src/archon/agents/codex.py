@@ -50,6 +50,16 @@ _GATEWAY_PROVIDER = "harness-gateway"
 _GATEWAY_KEY_ENV = "CODEX_GATEWAY_API_KEY"
 
 
+class PartialGatewayConfigError(ValueError):
+    """A codex harness gateway is half-configured (base URL XOR key set).
+
+    Raised instead of silently falling back to native ``~/.codex`` login —
+    mirrors the bash runner's loud
+    ``CODEX_BASE_URL set but CODEX_API_KEY missing`` guard so a typo'd /
+    unexported key env can't quietly route the run to the wrong provider.
+    """
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -95,16 +105,48 @@ class CodexAgent:
         the gateway base URL and key (e.g. ``CODEX_BASE_URL`` /
         ``CZ_API_KEY``); the values come from the process environment (or
         ``.archon/.env``, already merged into ``os.environ`` by
-        ``env_loader``). Returns ``(None, None)`` when ``base_url_env`` is
-        unconfigured → codex uses its native ``~/.codex`` login.
+        ``env_loader``). Returns ``(None, None)`` when the descriptor does
+        not configure a gateway (``base_url_env`` unset) → codex uses its
+        native ``~/.codex`` login.
+
+        **Fails loud on a partial gateway configuration.** The descriptor
+        configures a gateway by naming ``base_url_env`` (and ``key_env``);
+        once configured, *both* env vars must resolve to non-empty values.
+        Mirroring the bash runner's
+        ``: "${CODEX_API_KEY:?CODEX_BASE_URL set but CODEX_API_KEY missing}"``
+        guard, a half-set gateway (base URL present but key absent, or
+        vice-versa) raises :class:`PartialGatewayConfigError` naming the
+        missing env var rather than silently falling back to native login —
+        which would route to the wrong provider with no warning.
         """
         src = env_source if env_source is not None else os.environ
         d = self.descriptor
         if not d.base_url_env:
+            # Gateway not configured at all → native login (unchanged).
             return None, None
+
         base_url = src.get(d.base_url_env) or None
         key = src.get(d.key_env) if d.key_env else None
-        return base_url, (key or None)
+        key = key or None
+
+        # Gateway IS configured (base_url_env named). Require both values.
+        if base_url and not key:
+            missing = d.key_env or "key_env"
+            raise PartialGatewayConfigError(
+                f"codex harness {d.name!r}: {d.base_url_env} is set but the "
+                f"gateway key env {missing!r} is missing/empty — refusing to "
+                f"fall back to native ~/.codex login (would route to the "
+                f"wrong provider). Set {missing} or unset {d.base_url_env}."
+            )
+        if key and not base_url:
+            raise PartialGatewayConfigError(
+                f"codex harness {d.name!r}: gateway key env "
+                f"{d.key_env!r} is set but {d.base_url_env} is missing/empty "
+                f"— refusing to half-apply the gateway. Set {d.base_url_env} "
+                f"or unset {d.key_env}."
+            )
+        # Both set → gateway; neither set → native login.
+        return base_url, key
 
     def build_argv(
         self,
@@ -128,8 +170,10 @@ class CodexAgent:
 
         Gateway ``-c`` flags are appended only when both ``base_url_env``
         and ``key_env`` resolve to set values (via ``env_source`` /
-        ``os.environ``). ``--ephemeral`` keeps rollouts off disk (v1 never
-        resumes). The prompt is always the final positional arg.
+        ``os.environ``); a *partial* gateway config raises
+        :class:`PartialGatewayConfigError` (see :meth:`_gateway_creds`).
+        ``--ephemeral`` keeps rollouts off disk (v1 never resumes). The
+        prompt is always the final positional arg.
         """
         argv: list[str] = [
             "codex",
@@ -405,4 +449,4 @@ class CodexAgent:
         return RunOutcome.FAILED
 
 
-__all__ = ["CodexAgent"]
+__all__ = ["CodexAgent", "PartialGatewayConfigError"]

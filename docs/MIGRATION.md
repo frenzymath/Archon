@@ -550,7 +550,12 @@ built-in engine.
    ```
 
    Leave `base_url_env` / `key_env` unset to use codex's native `~/.codex`
-   login instead of a gateway.
+   login instead of a gateway. Once you name `base_url_env`, the gateway is
+   *configured*: setting the base URL but leaving the key env empty (or
+   vice-versa) now fails loud with `PartialGatewayConfigError` naming the
+   missing var — mirroring the bash runner's `CODEX_BASE_URL set but
+   CODEX_API_KEY missing` guard — rather than silently routing to the wrong
+   provider.
 
 This mirrors the FormalQualBench `codex-gpt-5.5` harness config flag-for-flag,
 so a Lean run that proves cleanly there proves the same way here. You can also

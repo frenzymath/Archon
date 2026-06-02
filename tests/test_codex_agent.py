@@ -26,7 +26,7 @@ import shutil
 import unittest
 
 from archon.agent import ClaudeAgent, build_runner
-from archon.agents.codex import CodexAgent
+from archon.agents.codex import CodexAgent, PartialGatewayConfigError
 from archon.commands.tooling.project_config import (
     HarnessDescriptor,
     ProjectConfig,
@@ -253,6 +253,84 @@ class CodexEnvBuilderTest(unittest.TestCase):
         )
         env = agent.build_env()
         self.assertNotIn("CODEX_GATEWAY_API_KEY", env)
+
+
+# ── partial gateway config fails loud (mirror run_session.sh) ────────
+
+
+class CodexPartialGatewayTest(unittest.TestCase):
+    """A half-configured gateway must raise, not silently go native.
+
+    Mirrors the bash runner's
+    ``: "${CODEX_API_KEY:?CODEX_BASE_URL set but CODEX_API_KEY missing}"``
+    guard. The descriptor configures a gateway by naming ``base_url_env``;
+    once configured, both env vars must resolve.
+    """
+
+    def setUp(self):
+        self.agent = CodexAgent(descriptor=_codex_descriptor(), role="prover")
+
+    def test_base_url_set_key_missing_raises_naming_key_env(self):
+        # base_url resolves, key env absent → loud failure naming CZ_API_KEY.
+        env = {"CODEX_BASE_URL": "https://gw.example/v1"}
+        with self.assertRaises(PartialGatewayConfigError) as cm:
+            self.agent.build_argv("p", env_source=env)
+        self.assertIn("CZ_API_KEY", str(cm.exception))
+        self.assertIn("CODEX_BASE_URL", str(cm.exception))
+
+    def test_base_url_set_key_empty_string_raises(self):
+        # An exported-but-empty key is treated as missing, like bash's `:?`.
+        env = {"CODEX_BASE_URL": "https://gw.example/v1", "CZ_API_KEY": ""}
+        with self.assertRaises(PartialGatewayConfigError):
+            self.agent.build_argv("p", env_source=env)
+
+    def test_key_set_base_url_missing_raises(self):
+        # Symmetric vice-versa: key present, base_url absent → refuse to
+        # half-apply the gateway.
+        env = {"CZ_API_KEY": "SECRET"}
+        with self.assertRaises(PartialGatewayConfigError) as cm:
+            self.agent.build_argv("p", env_source=env)
+        self.assertIn("CODEX_BASE_URL", str(cm.exception))
+
+    def test_build_env_also_fails_loud_on_partial(self):
+        # The env builder shares _gateway_creds, so a partial config is
+        # caught at child-env assembly time too (before spawning codex).
+        saved = {k: os.environ.get(k) for k in ("CODEX_BASE_URL", "CZ_API_KEY")}
+        os.environ.pop("CZ_API_KEY", None)
+        os.environ["CODEX_BASE_URL"] = "https://gw.example/v1"
+        try:
+            with self.assertRaises(PartialGatewayConfigError):
+                self.agent.build_env()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_both_set_still_builds_gateway(self):
+        # Regression guard: the both-set case is unchanged (no raise).
+        env = {
+            "CODEX_BASE_URL": "https://gw.example/v1",
+            "CZ_API_KEY": "SECRET",
+        }
+        argv = self.agent.build_argv("p", env_source=env)
+        self.assertIn('model_provider="harness-gateway"', argv)
+
+    def test_neither_set_stays_native(self):
+        # Gateway configured by descriptor but neither env var present →
+        # native login, no raise, no provider -c flags.
+        argv = self.agent.build_argv("p", env_source={})
+        self.assertFalse(any("model_provider" in a for a in argv))
+
+    def test_unconfigured_descriptor_never_raises(self):
+        # No base_url_env at all → gateway not configured; partial-config
+        # guard does not apply even if a stray key env happens to be set.
+        agent = CodexAgent(
+            descriptor=HarnessDescriptor(name="c", runner="codex", model="m")
+        )
+        argv = agent.build_argv("p", env_source={"CZ_API_KEY": "stray"})
+        self.assertFalse(any("model_provider" in a for a in argv))
 
 
 # ── run_interactive is headless-only ─────────────────────────────────
