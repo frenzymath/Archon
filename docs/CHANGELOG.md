@@ -6,6 +6,39 @@ All notable changes to Archon are documented here.
 
 ### Added
 
+- **Codex runner (Phase 2, opt-in)**: the harness router can now route a
+  responsibility — in practice the `prover` — to OpenAI **Codex**
+  (`codex exec`, e.g. gpt-5.5) instead of Claude Code. Add a
+  `harnesses.<name>` block with `runner: "codex"` and point a role at it via
+  `loop.roles.prover`; gateway creds go in `.archon/.env`. The new
+  `CodexAgent` implements the same `AgentRunner` protocol as `ClaudeAgent`
+  and **reuses the exact same subprocess supervision** (cancel-event,
+  idle-timeout watchdog + retry, ordered teardown) via a shared
+  `supervise_streamed_run` helper — so a hung codex provider auto-restarts
+  just like a hung Kimi/DeepSeek lane does. The `codex exec` invocation
+  mirrors the FormalQualBench bash runner flag-for-flag (`--json
+  --skip-git-repo-check --ignore-user-config -m <model> -c
+  model_reasoning_effort=… --sandbox <mode> --ephemeral` + a `-c`-injected
+  custom gateway provider built from the descriptor's `base_url_env` /
+  `key_env`); the API key is passed via `CODEX_GATEWAY_API_KEY` in the child
+  env, never on the command line. The resolved `HarnessDescriptor` (a frozen,
+  picklable dataclass extended with `effort` / `sandbox` / `prompt_variant` /
+  `base_url_env` / `key_env` / `wire_api`) is now threaded — as the descriptor
+  itself, not a bare name — into the prover process pool, subagents, and lanes,
+  so a pool worker rebuilds a fully-configured codex runner with no config
+  re-read. **Default behavior is unchanged**: an unconfigured project still
+  short-circuits to exactly `ClaudeAgent(model=…, role=…)`. **v1 limitations**
+  (see [MIGRATION.md](MIGRATION.md)): no MCP for codex (no `archon-lean-lsp`,
+  slower inner-loop feedback — codex runs `lake`/verify via shell); the codex
+  `--json` stream is logged **raw**, so the dashboard does not parse codex
+  cost/session; no true session resume (a passed resume runs fresh with a
+  warning); `run_interactive` is unsupported (interactive sites stay on
+  claude-code); the default prover prompt may reference Claude-only tool names
+  (an optional `prompt_variant` descriptor field is the hook for a codex prompt
+  but none ships yet). Because codex is more adversarial, gate codex proofs
+  behind the comparator before trusting them. The `gemini` runner remains
+  unimplemented and raises a clear error.
+
 - **Harness router (Phase 1, opt-in seam)**: a "responsibility → harness"
   routing layer that lets plan / prover / review / each subagent / each lane
   be pointed at a named *harness* (an engine). This phase introduces only the

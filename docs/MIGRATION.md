@@ -500,11 +500,90 @@ responsibility resolves to the built-in `claude-code` engine. With no new
 keys present the loop runs the exact same single-Anthropic shape as
 v0.2.0; `archon init` adds no new files for this phase.
 
-This phase ships only the routing decision point — the only available
-runner is still `claude-code`. If you do add a `harnesses` entry naming an
-engine other than `claude-code`, Archon raises a clear error rather than
-silently falling back (non-Anthropic codex / gemini runners arrive in a
-later phase).
+Phase 1 shipped only the routing decision point. Phase 2 (below) adds the
+first non-Anthropic runner — **codex**. A `harnesses` entry naming an engine
+that still has no implementation (e.g. `gemini`) raises a clear error rather
+than silently falling back.
+
+---
+
+## 9. Codex runner (Phase 2) — opt-in, no action required to keep claude-code
+
+You can now route a responsibility — in practice the **prover** — to OpenAI
+**Codex** (`codex exec`, e.g. gpt-5.5) instead of Claude Code. This is fully
+opt-in: **existing projects keep running on `claude-code` unchanged**, because
+with no `harnesses` block present every responsibility still resolves to the
+built-in engine.
+
+### 9.1 Opt in
+
+1. Make sure `codex` is on `PATH` (`codex-cli`).
+2. Add a codex harness block and route the prover to it in
+   `.archon/config.json`:
+
+   ```jsonc
+   {
+     "loop": {
+       "roles": { "prover": "codex-gpt" }
+     },
+     "harnesses": {
+       "codex-gpt": {
+         "runner": "codex",
+         "model": "gpt-5.5-xhigh",
+         "effort": "xhigh",
+         "sandbox": "danger-full-access",
+         "base_url_env": "CODEX_BASE_URL",
+         "key_env": "CZ_API_KEY",
+         "wire_api": "responses"
+       }
+     }
+   }
+   ```
+
+3. Put the gateway credentials in `.archon/.env` (existing shell vars still
+   win; the secret is never written to a settings file and is passed to codex
+   via `CODEX_GATEWAY_API_KEY` in the child env, never on the command line):
+
+   ```
+   CODEX_BASE_URL=https://apicz.boyuerichdata.com/v1
+   CZ_API_KEY=sk-...
+   ```
+
+   Leave `base_url_env` / `key_env` unset to use codex's native `~/.codex`
+   login instead of a gateway.
+
+This mirrors the FormalQualBench `codex-gpt-5.5` harness config flag-for-flag,
+so a Lean run that proves cleanly there proves the same way here. You can also
+route a subagent (`subagents.<name>.harness`) or a multilane lane
+(`lanes[].harness`) at the codex harness the same way.
+
+### 9.2 Honest v1 limitations
+
+This is a deliberately lean first cut. Know these before trusting codex proofs:
+
+- **No MCP.** Codex does **not** get the `archon-lean-lsp` MCP server. It uses
+  its native `exec_command` / `apply_patch` / `read_file` tools and runs
+  `lake` / verify via the shell. Lean verification still works, but the
+  inner-loop feedback is slower than the claude-code prover's LSP.
+- **No dashboard cost / session parity.** Codex's `--json` event stream has a
+  different schema from Claude Code's `stream-json`. Archon writes the codex
+  stream to the iteration log **raw** and does **not** synthesize the
+  dashboard's cost / token / `session_end` rows for codex runs. The dashboard
+  still shows the run, but cost columns will be blank for codex.
+- **No true resume.** Codex mints its own `thread_id` and resumes via a
+  separate subcommand; v1 does not implement it. Passing `--resume` to a
+  codex-routed phase logs a warning and runs a fresh session.
+- **No interactive mode.** `archon discuss` / `refactor draft` and any other
+  foreground site stay on claude-code — codex is headless-only here.
+- **Prompt tool-name mismatch (follow-up).** The default prover prompt may
+  reference Claude-only tool names. The descriptor accepts an optional
+  `prompt_variant` field as the hook for a codex-specific prompt, but **no
+  codex prompt ships yet** — until one does, codex reads the default prompt and
+  ignores instructions about tools it doesn't have.
+- **Codex is more adversarial.** It is more willing to satisfy a goal by
+  weakening a statement or gaming the check. **Gate codex proofs behind the
+  comparator** (the design doc's comparator step) before promoting them; do not
+  trust a codex `verify` exit 0 the way you'd trust a claude-code one.
 
 ---
 
