@@ -196,24 +196,25 @@ class BuildRunnerTest(unittest.TestCase):
         self.assertEqual(r.model, "haiku")
 
     def test_unknown_harness_raises(self):
+        # `gemini` is named but has no runner implementation in this
+        # version (codex now does — see CodexBuildRunnerTest).
         cfg = ProjectConfig(
             raw={
-                "harnesses": {"codex-gpt": {"runner": "codex"}},
-                "loop": {"harness": "codex-gpt"},
+                "harnesses": {"gem": {"runner": "gemini"}},
+                "loop": {"harness": "gem"},
             }
         )
         with self.assertRaises(UnknownHarnessError) as cm:
             build_runner(role="prover", model="opus", cfg=cfg)
         msg = str(cm.exception)
-        self.assertIn("codex", msg)
+        self.assertIn("gemini", msg)
         self.assertIn(DEFAULT_HARNESS, msg)
 
     def test_unknown_harness_passed_directly_raises(self):
-        # The harness string can be passed pre-resolved (e.g. by the
-        # prover pool worker). An unknown one must still raise even with
-        # no cfg.
+        # The harness name can be passed pre-resolved (e.g. by the prover
+        # pool worker). An unknown one must still raise even with no cfg.
         with self.assertRaises(UnknownHarnessError):
-            build_runner(role="prover", model="opus", harness="codex-gpt")
+            build_runner(role="prover", model="opus", harness="gemini-cli")
 
     def test_direct_claude_code_harness_short_circuits(self):
         got = build_runner(role="prover", model="opus", harness="claude-code")
