@@ -26,8 +26,19 @@ class CopyPromptsStep(InitStep):
 
         new = 0
         preserved = 0
-        for f in sorted(prompts_src.glob("*.md")):
-            dst = prompts_dst / f.name
+        # Top-level prompts plus the harness prompt-variants subdir
+        # (variants/*.md). Variants are copied — not symlinked — into the
+        # project so an existing project re-init (merge/overwrite) picks
+        # up a newly-shipped variant (e.g. the codex prover tail) and can
+        # then edit its local copy, which the runner prefers over the
+        # bundled file.
+        sources = sorted(prompts_src.glob("*.md")) + sorted(
+            prompts_src.glob("variants/*.md")
+        )
+        for f in sources:
+            rel = f.relative_to(prompts_src)
+            dst = prompts_dst / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
             # Whether fresh or not, a legacy symlink must be unlinked
             # before copy_file — shutil.copy2 follows symlinks and would
             # raise SameFileError when ``dst`` points back at ``f``.
