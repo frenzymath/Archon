@@ -252,9 +252,13 @@ class CodexEnvBuilderTest(unittest.TestCase):
         self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "ABC-TOKEN")
 
     def test_env_overrides_merged_and_win(self):
-        env = self.agent.build_env({"PARENT_SLUG": "foo", "CODEX_GATEWAY_API_KEY": "OVERRIDE"})
+        # Overrides merge in, and an override of the descriptor's key_env
+        # (CZ_API_KEY) wins: gateway creds are resolved from the merged env,
+        # so CODEX_GATEWAY_API_KEY is derived from the overridden source key
+        # (not the ambient ABC-TOKEN). This keeps build_env consistent with
+        # build_argv, which reads the same merged env.
+        env = self.agent.build_env({"PARENT_SLUG": "foo", "CZ_API_KEY": "OVERRIDE"})
         self.assertEqual(env["PARENT_SLUG"], "foo")
-        # caller override wins over the resolved gateway key
         self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "OVERRIDE")
 
     def test_no_gateway_key_when_unconfigured(self):
@@ -263,6 +267,93 @@ class CodexEnvBuilderTest(unittest.TestCase):
         )
         env = agent.build_env()
         self.assertNotIn("CODEX_GATEWAY_API_KEY", env)
+
+
+# ── build_env / build_argv resolve gateway creds from the SAME env ────
+
+
+class CodexEnvOverrideConsistencyTest(unittest.TestCase):
+    """``build_env`` must resolve gateway creds from the *merged* env.
+
+    Regression for PR #10: when a lane supplies gateway creds via
+    ``env_overrides`` (e.g. ``LaneConfig.env`` → ``env_overrides``),
+    ``build_env`` previously resolved creds from the pre-merge
+    ``os.environ`` and never set ``CODEX_GATEWAY_API_KEY``, while
+    ``build_argv`` (reading the post-merge env passed by ``run()``) still
+    injected the gateway provider that reads that var → auth failure. The
+    two methods must agree on a single env snapshot.
+    """
+
+    def setUp(self):
+        self.agent = CodexAgent(descriptor=_codex_descriptor(), role="prover")
+        # Clear ambient gateway env so env_overrides is the only source.
+        self._saved = {
+            k: os.environ.get(k) for k in ("CODEX_BASE_URL", "CZ_API_KEY")
+        }
+        os.environ.pop("CODEX_BASE_URL", None)
+        os.environ.pop("CZ_API_KEY", None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_creds_only_via_overrides_set_key_and_inject_provider(self):
+        # The bug: creds arrive ONLY through env_overrides (nothing in
+        # os.environ). build_env must set CODEX_GATEWAY_API_KEY, and
+        # build_argv fed that merged env must inject the provider block.
+        overrides = {
+            "CODEX_BASE_URL": "https://lane.example/v1",
+            "CZ_API_KEY": "LANE-KEY-789",
+        }
+        env = self.agent.build_env(overrides)
+        self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "LANE-KEY-789")
+        # run() passes this build_env result as env_source to build_argv.
+        argv = self.agent.build_argv("p", env_source=env)
+        self.assertIn('model_provider="harness-gateway"', argv)
+        self.assertIn(
+            'model_providers.harness-gateway.base_url="https://lane.example/v1"',
+            argv,
+        )
+        self.assertIn(
+            'model_providers.harness-gateway.env_key="CODEX_GATEWAY_API_KEY"',
+            argv,
+        )
+
+    def test_override_wins_over_os_environ_key(self):
+        # A gateway key in os.environ overridden by env_overrides →
+        # CODEX_GATEWAY_API_KEY reflects the override value, not the ambient.
+        os.environ["CODEX_BASE_URL"] = "https://gw.example/v1"
+        os.environ["CZ_API_KEY"] = "AMBIENT-KEY"
+        env = self.agent.build_env({"CZ_API_KEY": "OVERRIDE-KEY"})
+        self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "OVERRIDE-KEY")
+
+    def test_os_environ_creds_no_overrides_unchanged(self):
+        # Regression: the common path (creds in os.environ, no overrides)
+        # behaves exactly as before — CODEX_GATEWAY_API_KEY set from ambient.
+        os.environ["CODEX_BASE_URL"] = "https://gw.example/v1"
+        os.environ["CZ_API_KEY"] = "AMBIENT-KEY"
+        env = self.agent.build_env()
+        self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "AMBIENT-KEY")
+
+    def test_partial_in_environ_completed_by_override_no_raise(self):
+        # base_url in os.environ, key absent there but supplied via
+        # env_overrides → the merged env is complete → no raise, key set.
+        os.environ["CODEX_BASE_URL"] = "https://gw.example/v1"
+        os.environ.pop("CZ_API_KEY", None)
+        env = self.agent.build_env({"CZ_API_KEY": "FILLED-IN-KEY"})
+        self.assertEqual(env["CODEX_GATEWAY_API_KEY"], "FILLED-IN-KEY")
+
+    def test_still_partial_after_merge_raises(self):
+        # base_url set (here via override) but key missing everywhere →
+        # still partially configured after the merge → still raises.
+        os.environ.pop("CODEX_BASE_URL", None)
+        os.environ.pop("CZ_API_KEY", None)
+        with self.assertRaises(PartialGatewayConfigError) as cm:
+            self.agent.build_env({"CODEX_BASE_URL": "https://gw.example/v1"})
+        self.assertIn("CZ_API_KEY", str(cm.exception))
 
 
 # ── partial gateway config fails loud (mirror run_session.sh) ────────
