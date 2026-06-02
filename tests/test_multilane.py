@@ -265,6 +265,81 @@ class MultiLaneLoopGuardTests(unittest.TestCase):
             self.assertEqual(non_archon_dirty_files(root), ['Foo.lean'])
 
 
+class LaneHarnessGuardTests(unittest.TestCase):
+    """Phase-1 fail-closed guard: the multilane lane axis only supports
+    the claude-code runner. A lane resolving to a non-claude runner must
+    be rejected at dispatch build (before any lane spawns), because lane
+    result-attribution can't track non-claude-code edits yet.
+    """
+
+    def _executor(self, project_path: Path):
+        from archon.commands.loop.lane_round.executor import LaneRoundExecutor
+
+        return LaneRoundExecutor(
+            project_name='demo',
+            project_path=project_path,
+            state_dir=project_path / '.archon',
+            progress_file=project_path / '.archon' / 'PROGRESS.md',
+            stage='prover',
+            iteration=1,
+            verbose_logs=False,
+            model='opus',
+        )
+
+    def _config(self, *lanes):
+        from archon.multilane.types import LaneConfig, MultiLaneConfig
+
+        return MultiLaneConfig(
+            enabled=True,
+            lanes=[
+                LaneConfig(
+                    lane_id=lid, label=lid, provider='anthropic', harness=harness,
+                )
+                for (lid, harness) in lanes
+            ],
+        )
+
+    def test_non_claude_lane_harness_is_rejected(self):
+        from archon.agent import UnknownHarnessError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            (project / '.archon').mkdir(parents=True)
+            # A harnesses.codex-gpt block whose runner is "codex", plus a
+            # lane that routes to it.
+            (project / '.archon' / 'config.json').write_text(json.dumps({
+                'harnesses': {
+                    'codex-gpt': {'runner': 'codex', 'model': 'gpt-5.5-xhigh'},
+                },
+            }))
+            config = self._config(('codex', 'codex-gpt'))
+            executor = self._executor(project)
+            with self.assertRaises(UnknownHarnessError) as ctx:
+                executor._build_lane_harnesses(config)
+            msg = str(ctx.exception)
+            # Names the offending lane + harness/runner, and points the
+            # user to the working alternative.
+            self.assertIn("'codex'", msg)         # lane_id
+            self.assertIn('codex-gpt', msg)        # harness name
+            self.assertIn('loop.roles.prover', msg)
+
+    def test_explicit_and_default_claude_lanes_build_fine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'project'
+            (project / '.archon').mkdir(parents=True)
+            # No harnesses block at all → everything resolves to built-in
+            # claude-code. One lane names it explicitly, one defaults.
+            config = self._config(
+                ('explicit', 'claude-code'),
+                ('default', 'claude-code'),
+            )
+            executor = self._executor(project)
+            harnesses = executor._build_lane_harnesses(config)
+            self.assertEqual(set(harnesses), {'explicit', 'default'})
+            for descriptor in harnesses.values():
+                self.assertEqual(descriptor.runner, 'claude-code')
+
+
 class MultiLaneDispatchTests(unittest.TestCase):
     def test_assignment_prompt_overrides_result_path(self):
         with tempfile.TemporaryDirectory() as tmp:
