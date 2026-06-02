@@ -6,20 +6,24 @@ its runner from :func:`archon.agent.build_runner` can drive ``codex exec``
 instead of ``claude`` purely by config — see the ``harnesses.<name>``
 descriptor with ``runner: "codex"``.
 
-This is a **lean v1** (see ``docs/MIGRATION.md`` for the honest limits):
+This is a **lean cut** (see ``docs/MIGRATION.md`` for the honest limits):
 
 * Headless only. :meth:`run_interactive` raises — interactive sites
   (``archon discuss`` / ``refactor draft``) stay on claude-code.
-* No MCP. Codex uses its native ``exec_command`` / ``apply_patch`` /
-  ``read_file`` tools and can run ``lake``/``lean`` via shell; the
-  ``archon-lean-lsp`` MCP server is NOT wired in (slower inner-loop
-  feedback than the claude-code prover).
 * No dashboard cost/session parity. Codex's ``--json`` stream is a
   different schema from claude's ``stream-json``; we write it to the log
   **raw** and do not synthesize the dashboard's cost/session_end rows.
 * No true resume. Codex mints its own ``thread_id`` and resumes via a
   separate subcommand; v1 logs a warning and runs fresh when a
   ``resume_session_id`` is passed.
+
+The ``archon-lean-lsp`` MCP server can be wired in per-invocation via
+``-c mcp_servers.*`` overrides (opt in with ``harnesses.<name>.mcp:
+"lean-lsp"``) — see :meth:`build_argv`. Codex has no ``--mcp-config``
+flag, so unlike the claude-code path (which registers the server at
+``archon init`` time) the codex MCP wiring is entirely self-contained in
+this runner's argv; the same server / dir / ``LEAN_PROJECT_PATH`` is
+mirrored from the FormalQualBench harness translator.
 
 The invocation mirrors the bash reference runner
 (``FormalQualBench/harness/runners/codex/run_session.sh``) flag-for-flag:
@@ -49,6 +53,42 @@ from archon.commands.tooling.project_config import HarnessDescriptor
 _GATEWAY_PROVIDER = "harness-gateway"
 _GATEWAY_KEY_ENV = "CODEX_GATEWAY_API_KEY"
 
+# The MCP server Archon ships for Lean (same one the claude-code path
+# registers at init via ``claude mcp add archon-lean-lsp``). For codex we
+# render it as per-invocation ``-c mcp_servers.*`` overrides instead,
+# mirroring FormalQualBench/harness/runners/codex/mcp_to_codex_flags.py.
+_LEAN_LSP_SERVER = "archon-lean-lsp"
+# Known MCP bundle names accepted in ``harnesses.<name>.mcp``. Today the
+# only bundle is the Lean LSP; the list shape leaves room for more.
+_KNOWN_MCP_BUNDLES = frozenset({"lean-lsp"})
+# Codex-specific MCP knobs, mirroring the harness translator:
+#   required=true     — fail codex startup if the MCP can't initialize,
+#     rather than silently running a no-MCP session whose prompt claims
+#     the tools are loaded (would contaminate results vs. the baseline).
+#   tool_timeout_sec  — 600s covers a cold Mathlib LSP: the first
+#     lean_goal / lean_file_outline indexes imports before responding
+#     (2-5 min); codex's default would time out on it.
+_MCP_TOOL_TIMEOUT_SEC = 600
+
+
+class UnknownMcpBundleError(ValueError):
+    """A codex harness names an ``mcp`` bundle this runner doesn't know.
+
+    Raised (fail-closed) rather than silently rendering no MCP — a prompt
+    that insists the Lean LSP tools are loaded must not run against a
+    codex with no MCP server.
+    """
+
+
+class LeanLspMcpUnavailableError(RuntimeError):
+    """The bundled ``lean-lsp-mcp`` dir can't be resolved on disk.
+
+    Mirrors the harness's fail-closed file check: rather than render a
+    broken ``mcp_servers.archon-lean-lsp.args`` pointing at a missing
+    directory (codex would fail to start the server, or — worse — start
+    with no tools while the prompt claims they're present), raise loud.
+    """
+
 
 class PartialGatewayConfigError(ValueError):
     """A codex harness gateway is half-configured (base URL XOR key set).
@@ -62,6 +102,58 @@ class PartialGatewayConfigError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# Where prompt variants live, mirroring Archon's prompt resolution
+# (local-overrides-bundled): a project may override a variant by dropping
+# ``.archon/prompts/variants/<name>.md`` in its state dir; otherwise the
+# bundled ``.archon-src/prompts/variants/<name>.md`` is used (copied to
+# the project at ``archon init``). The relative segment is shared so both
+# the lookup and the init copy step agree on the layout.
+_PROMPT_VARIANTS_SUBDIR = "variants"
+
+
+def resolve_prompt_variant(
+    variant: str, *, project_path: Path | None = None,
+) -> str | None:
+    """Resolve a prompt-variant name to its text (project overrides bundled).
+
+    Mirrors how Archon resolves its other prompts: a project-local copy
+    under ``<project>/.archon/prompts/variants/<name>.md`` wins over the
+    bundled package data at ``.archon-src/prompts/variants/<name>.md``
+    (``data_path``). ``archon init`` copies bundled prompts into the
+    project, so an existing project that re-inits picks up the variant
+    file and may then edit its local copy.
+
+    Returns the file's text, or ``None`` when neither location has it
+    (the caller then warns and proceeds with the unmodified prompt).
+    ``project_path`` is the running project's root (``run()``'s ``cwd``);
+    when ``None``, only the bundled location is consulted.
+    """
+    from archon.commands.loop.utils import data_path
+
+    rel = f"{_PROMPT_VARIANTS_SUBDIR}/{variant}.md"
+
+    # 1. Project-local override (state dir mirrors the bundled layout).
+    if project_path is not None:
+        local = (
+            Path(project_path) / ".archon" / "prompts" / _PROMPT_VARIANTS_SUBDIR
+            / f"{variant}.md"
+        )
+        if local.is_file():
+            try:
+                return local.read_text(encoding="utf-8")
+            except OSError:
+                pass  # fall through to bundled
+
+    # 2. Bundled package data.
+    bundled = Path(data_path(f"prompts/{rel}"))
+    if bundled.is_file():
+        try:
+            return bundled.read_text(encoding="utf-8")
+        except OSError:
+            return None
+    return None
 
 
 @dataclass
@@ -155,6 +247,7 @@ class CodexAgent:
         last_message_path: Path | None = None,
         extra_args: list[str] | None = None,
         env_source: dict[str, str] | None = None,
+        lake_root: Path | str | None = None,
     ) -> list[str]:
         """Build the full ``codex exec`` argv (no subprocess spawned).
 
@@ -164,6 +257,7 @@ class CodexAgent:
               -m <model> -c model_reasoning_effort="<effort>"
               [-o <last_message_path>]
               [gateway provider -c overrides …]
+              [MCP -c overrides …]
               --sandbox <sandbox> --ephemeral
               [descriptor.raw["extra_args"] …] [extra_args …]
               <prompt>
@@ -172,6 +266,18 @@ class CodexAgent:
         and ``key_env`` resolve to set values (via ``env_source`` /
         ``os.environ``); a *partial* gateway config raises
         :class:`PartialGatewayConfigError` (see :meth:`_gateway_creds`).
+
+        MCP ``-c mcp_servers.*`` flags are appended only when the
+        descriptor opts in (``descriptor.mcp`` names a known bundle, e.g.
+        ``"lean-lsp"``); see :meth:`_mcp_overrides`. ``lake_root`` is the
+        Lean lake project root threaded in by :meth:`run` (its ``cwd``);
+        it becomes the server's ``LEAN_PROJECT_PATH``. When the descriptor
+        opts into ``lean-lsp`` but ``lake_root`` is ``None``, the runner's
+        ``cwd`` is unknown at build time and we still render the server
+        with ``LEAN_PROJECT_PATH`` pointed at the current process cwd as a
+        last resort — but :meth:`run` always supplies it, so that fallback
+        is only hit by callers building argv directly.
+
         ``--ephemeral`` keeps rollouts off disk (v1 never resumes). The
         prompt is always the final positional arg.
         """
@@ -203,6 +309,8 @@ class CodexAgent:
                 "-c", f"model_providers.{_GATEWAY_PROVIDER}.supports_websockets=false",
             ]
 
+        argv += self._mcp_overrides(lake_root)
+
         argv += ["--sandbox", self.sandbox, "--ephemeral"]
 
         # Descriptor-level extra flags (mirrors CODEX_EXTRA_FLAGS), then
@@ -222,6 +330,127 @@ class CodexAgent:
         if isinstance(raw_extra, str) and raw_extra.strip():
             return raw_extra.split()
         return []
+
+    def _mcp_overrides(self, lake_root: Path | str | None) -> list[str]:
+        """Render ``-c mcp_servers.*`` flags for the descriptor's MCP bundles.
+
+        Returns ``[]`` when ``descriptor.mcp`` is empty (the default →
+        no MCP, identical to before). Otherwise, for each named bundle,
+        emit the codex config overrides. Today the only known bundle is
+        ``"lean-lsp"``, rendered as the ``archon-lean-lsp`` server exactly
+        as the FormalQualBench translator does:
+
+            mcp_servers.archon-lean-lsp.command="uv"
+            mcp_servers.archon-lean-lsp.args=["run","--directory",
+              "<data_path('tools/lean-lsp-mcp')>","lean-lsp-mcp"]
+            mcp_servers.archon-lean-lsp.env.LEAN_PROJECT_PATH="<lake root>"
+            mcp_servers.archon-lean-lsp.required=true
+            mcp_servers.archon-lean-lsp.tool_timeout_sec=600
+
+        Each value is JSON-encoded — valid TOML for the ``-c key=value``
+        shapes used here (strings, string arrays, ints, bools).
+
+        Raises:
+            UnknownMcpBundleError: a configured bundle name isn't known.
+            LeanLspMcpUnavailableError: the bundled ``lean-lsp-mcp`` dir
+                can't be resolved on disk (fail-closed; mirrors the
+                harness's file check).
+        """
+        bundles = self.descriptor.mcp
+        if not bundles:
+            return []
+
+        out: list[str] = []
+        for bundle in bundles:
+            if bundle == "lean-lsp":
+                out += self._lean_lsp_overrides(lake_root)
+            else:
+                raise UnknownMcpBundleError(
+                    f"codex harness {self.descriptor.name!r}: unknown MCP "
+                    f"bundle {bundle!r} (known: "
+                    f"{', '.join(sorted(_KNOWN_MCP_BUNDLES))})."
+                )
+        return out
+
+    @staticmethod
+    def _lean_lsp_mcp_dir() -> Path:
+        """Resolve the bundled ``lean-lsp-mcp`` dir via Archon's data_path.
+
+        Same source of truth as the claude-code init step
+        (``commands/init/steps/lean_lsp.py`` → ``data_path``). Raises
+        :class:`LeanLspMcpUnavailableError` when the dir is missing rather
+        than rendering a server pointed at a non-existent path.
+        """
+        # Local import keeps the agent module free of an init-time
+        # dependency at import; ``data_path`` is a pure path helper.
+        from archon.commands.init.utils import data_path
+
+        lean_lsp_dir = Path(data_path("tools/lean-lsp-mcp"))
+        if not lean_lsp_dir.is_dir():
+            raise LeanLspMcpUnavailableError(
+                f"codex harness mcp 'lean-lsp': the bundled lean-lsp-mcp "
+                f"directory does not exist at {lean_lsp_dir} — refusing to "
+                f"render an archon-lean-lsp server pointed at a missing "
+                f"path. Reinstall Archon's data tree "
+                f"(.archon-src/tools/lean-lsp-mcp) or unset the harness's "
+                f"`mcp` field."
+            )
+        return lean_lsp_dir
+
+    def _lean_lsp_overrides(self, lake_root: Path | str | None) -> list[str]:
+        """The 5 ``-c`` overrides for the ``archon-lean-lsp`` server."""
+        lean_lsp_dir = self._lean_lsp_mcp_dir()
+        # lake root = the project dir codex runs in (run()'s cwd). Fall
+        # back to the process cwd only when a direct build_argv caller
+        # omitted it; run() always threads its cwd.
+        root = Path(lake_root) if lake_root is not None else Path.cwd()
+        base = f"mcp_servers.{_LEAN_LSP_SERVER}"
+
+        def flag(key: str, value: object) -> list[str]:
+            return ["-c", f"{key}={json.dumps(value)}"]
+
+        out: list[str] = []
+        out += flag(f"{base}.command", "uv")
+        out += flag(
+            f"{base}.args",
+            ["run", "--directory", str(lean_lsp_dir), "lean-lsp-mcp"],
+        )
+        out += flag(f"{base}.env.LEAN_PROJECT_PATH", str(root))
+        out += flag(f"{base}.required", True)
+        out += flag(f"{base}.tool_timeout_sec", _MCP_TOOL_TIMEOUT_SEC)
+        return out
+
+    def _apply_prompt_variant(self, prompt: str, *, project_path: Path) -> str:
+        """Append the descriptor's prompt variant to ``prompt`` (if any).
+
+        When ``descriptor.prompt_variant`` is set, resolve the variant
+        text (project ``.archon/prompts/variants/<name>.md`` overrides the
+        bundled copy — :func:`resolve_prompt_variant`) and append it to the
+        incoming prompt, mirroring the harness gemini ``prompt_tail``
+        pattern (the loop's evolving prover prompt stays the single source
+        of truth; the variant is a codex-specific tail, not a fork). The
+        append is deterministic: a fixed separator, no date/random.
+
+        A missing variant file is non-fatal: ``log.warn`` and return the
+        prompt unchanged (never crash a run over a prompt tail). With
+        ``prompt_variant`` unset, the prompt is returned verbatim.
+        """
+        variant = self.descriptor.prompt_variant
+        if not variant:
+            return prompt
+        tail = resolve_prompt_variant(variant, project_path=project_path)
+        if tail is None:
+            log.warn(
+                f"codex harness {self.descriptor.name!r}: prompt_variant "
+                f"{variant!r} not found at "
+                f".archon/prompts/variants/{variant}.md (project) or the "
+                f"bundled variants dir — running with the unmodified prompt."
+            )
+            return prompt
+        tail = tail.strip("\n")
+        if not tail:
+            return prompt
+        return f"{prompt}\n\n{tail}\n"
 
     def build_env(
         self, env_overrides: dict[str, str] | None = None,
@@ -279,6 +508,11 @@ class CodexAgent:
                 "running a fresh codex session instead."
             )
 
+        # Append the codex prompt variant (if configured) before the run.
+        # cwd is the project root (lake root) → project-local variant
+        # overrides win. Unset prompt_variant ⇒ prompt unchanged.
+        prompt = self._apply_prompt_variant(prompt, project_path=cwd)
+
         env = self.build_env(env_overrides)
         self._announce()
 
@@ -287,7 +521,9 @@ class CodexAgent:
             # blocking fallback. Stream codex JSON to devnull.
             import subprocess
 
-            argv = self.build_argv(prompt, extra_args=extra_args, env_source=env)
+            argv = self.build_argv(
+                prompt, extra_args=extra_args, env_source=env, lake_root=cwd,
+            )
             return subprocess.run(argv, cwd=cwd, env=env).returncode == 0
 
         if max_attempts < 1:
@@ -416,6 +652,7 @@ class CodexAgent:
             last_message_path=last_message,
             extra_args=extra_args,
             env_source=env,
+            lake_root=cwd,
         )
 
         # stderr → raw log when verbose, else devnull (mirrors ClaudeAgent).
@@ -449,4 +686,10 @@ class CodexAgent:
         return RunOutcome.FAILED
 
 
-__all__ = ["CodexAgent", "PartialGatewayConfigError"]
+__all__ = [
+    "CodexAgent",
+    "PartialGatewayConfigError",
+    "UnknownMcpBundleError",
+    "LeanLspMcpUnavailableError",
+    "resolve_prompt_variant",
+]

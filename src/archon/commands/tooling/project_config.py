@@ -380,6 +380,12 @@ class HarnessDescriptor:
     * ``prompt_variant`` — optional name of an alternate prompt file to
       use for this harness (the prompt-builder layer selects it). Unset →
       the default prompt.
+    * ``mcp`` — optional MCP bundle(s) to wire into the harness. A string
+      naming a known bundle (e.g. ``"lean-lsp"``) or a list of such names;
+      normalized to a tuple at parse time so the descriptor stays hashable
+      / picklable. Unset → no MCP (preserves the current behavior). For
+      codex this becomes per-invocation ``-c mcp_servers.*`` overrides;
+      the claude-code path ignores it (it registers MCP at init time).
     * ``base_url_env`` / ``key_env`` — names of the env vars that hold the
       gateway base URL and API key (mirrors how the claude-code runner
       reads ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN``). When both
@@ -394,6 +400,7 @@ class HarnessDescriptor:
     effort: str | None = None
     sandbox: str = 'danger-full-access'
     prompt_variant: str | None = None
+    mcp: tuple[str, ...] = ()
     base_url_env: str | None = None
     key_env: str | None = None
     wire_api: str = 'responses'
@@ -403,6 +410,22 @@ class HarnessDescriptor:
 def _opt_str(value: Any) -> str | None:
     """Coerce a config value to a non-empty string, else ``None``."""
     return value if isinstance(value, str) and value else None
+
+
+def _mcp_tuple(value: Any) -> tuple[str, ...]:
+    """Normalize the ``mcp`` config value to a tuple of bundle names.
+
+    Accepts a bare string (one bundle) or a list of strings (future:
+    several servers). Anything else — including ``None`` / an empty
+    string / empty list — normalizes to an empty tuple, which means
+    "no MCP" and preserves the current behavior. A tuple (not a list)
+    keeps the frozen descriptor hashable and picklable.
+    """
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x) for x in value if isinstance(x, str) and x)
+    return ()
 
 
 def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
@@ -417,8 +440,9 @@ def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
     A configured descriptor with no ``runner`` key defaults its runner
     to its own name (so ``"harnesses": {"claude-code": {...}}`` works as
     expected). Codex-specific fields (``effort``, ``sandbox``,
-    ``prompt_variant``, ``base_url_env`` / ``key_env`` / ``wire_api``)
-    are parsed when present and otherwise left at their defaults.
+    ``prompt_variant``, ``mcp``, ``base_url_env`` / ``key_env`` /
+    ``wire_api``) are parsed when present and otherwise left at their
+    defaults.
     Validation of the runner happens in :func:`archon.agent.build_runner`,
     not here, so this loader stays a pure read.
     """
@@ -441,6 +465,7 @@ def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
         effort=_opt_str(entry.get('effort')),
         sandbox=sandbox if sandbox is not None else 'danger-full-access',
         prompt_variant=_opt_str(entry.get('prompt_variant')),
+        mcp=_mcp_tuple(entry.get('mcp')),
         base_url_env=_opt_str(entry.get('base_url_env')),
         key_env=_opt_str(entry.get('key_env')),
         wire_api=wire_api if wire_api is not None else 'responses',
