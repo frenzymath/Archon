@@ -39,10 +39,17 @@ class LaneConfig:
     lane_id: str
     label: str
     provider: str
-    # Forward-compat (Phase 1): the harness that drives this lane. Parsed
-    # from config but NOT yet rewired into lane dispatch — every lane
-    # still builds a claude-code runner via the factory. Defaults to
-    # "claude-code" so existing lane configs are unchanged.
+    # Phase 1: the harness that drives this lane. Parsed from config and
+    # threaded through dispatch into ``build_runner`` — but the lane axis
+    # currently supports only the ``"claude-code"`` runner. A lane whose
+    # harness resolves to a non-claude runner (e.g. codex) is rejected at
+    # dispatch build with a clear error, because lane result-attribution
+    # (code_snapshot hook events / Edit-Write tool_calls) does not yet
+    # track non-claude-code edits — codex applies edits via apply_patch /
+    # ``file_change`` items, which the classifier can't see, so a codex
+    # lane's edits would silently fail to promote. Real per-lane
+    # non-claude support is a follow-up. Defaults to "claude-code" so
+    # existing lane configs are unchanged.
     harness: str = 'claude-code'
     claude_config_dir: str | None = None
     claude_settings_path: str | None = None
