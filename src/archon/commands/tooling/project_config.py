@@ -350,26 +350,57 @@ def resolve_subagent_harness(
 class HarnessDescriptor:
     """One harness entry from ``harnesses.<name>`` in ``config.json``.
 
-    Phase 1 only needs enough of the descriptor to (a) recognise the
-    built-in ``"claude-code"`` runner and (b) reject any other runner
-    (none exist yet). The codex/gemini-specific fields (effort, MCP,
-    auth, prompt variant, …) land in Phase 2; until then extra keys are
-    kept in :attr:`raw` and otherwise ignored.
+    The descriptor is a **frozen, picklable** dataclass: it is resolved
+    once at the dispatch site (where the project config is available) and
+    then threaded — as the descriptor itself, not a bare name string —
+    into the prover process pool, subagents, and lanes, so each worker
+    can build a fully-configured runner via :func:`archon.agent.build_runner`
+    without re-reading config. (The ``raw`` dict holds only JSON-derived
+    primitives, so the whole descriptor round-trips through ``pickle``.)
 
-    Fields:
+    Fields common to all harnesses:
 
-    * ``name`` — the harness key (e.g. ``"claude-code"``).
-    * ``runner`` — which engine implements it. Phase 1 supports only
-      ``"claude-code"``.
-    * ``model`` — optional model alias for this harness (overrides the
-      role/loop model when set). Unused by the Phase-1 claude-code path.
-    * ``raw`` — the untouched config dict, so Phase 2 can read the rest
+    * ``name`` — the harness key (e.g. ``"claude-code"`` / ``"codex-gpt"``).
+    * ``runner`` — which engine implements it. Supported runners:
+      ``"claude-code"`` (the built-in) and ``"codex"`` (Phase 2).
+    * ``model`` — optional model id for this harness. For claude-code it
+      overrides the role/loop model alias; for codex it is the concrete
+      ``codex exec -m <model>`` model id (e.g. ``"gpt-5.5-xhigh"``).
+    * ``raw`` — the untouched config dict, so future fields can be read
       without a schema migration.
+
+    Codex-only fields (ignored by the claude-code path):
+
+    * ``effort`` — ``model_reasoning_effort`` value (e.g. ``"xhigh"``).
+    * ``sandbox`` — codex ``--sandbox`` mode; defaults to
+      ``"danger-full-access"`` (parity with the claude-code baseline,
+      where Bash subprocesses are unconstrained so ``lake``/``lean`` work).
+    * ``prompt_variant`` — optional name of an alternate prompt file to
+      use for this harness (the prompt-builder layer selects it). Unset →
+      the default prompt.
+    * ``base_url_env`` / ``key_env`` — names of the env vars that hold the
+      gateway base URL and API key (mirrors how the claude-code runner
+      reads ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN``). When both
+      resolve to set values, codex is routed through a ``-c``-injected
+      custom provider; otherwise it uses its native ``~/.codex`` login.
+    * ``wire_api`` — the custom provider's wire protocol; defaults to
+      ``"responses"`` (so codex's previous_response_id cache chain works).
     """
     name: str
     runner: str = DEFAULT_HARNESS
     model: str | None = None
+    effort: str | None = None
+    sandbox: str = 'danger-full-access'
+    prompt_variant: str | None = None
+    base_url_env: str | None = None
+    key_env: str | None = None
+    wire_api: str = 'responses'
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+def _opt_str(value: Any) -> str | None:
+    """Coerce a config value to a non-empty string, else ``None``."""
+    return value if isinstance(value, str) and value else None
 
 
 def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
@@ -383,9 +414,11 @@ def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
 
     A configured descriptor with no ``runner`` key defaults its runner
     to its own name (so ``"harnesses": {"claude-code": {...}}`` works as
-    expected). Validation of the runner happens in
-    :func:`archon.agent.build_runner`, not here, so this loader stays a
-    pure read.
+    expected). Codex-specific fields (``effort``, ``sandbox``,
+    ``prompt_variant``, ``base_url_env`` / ``key_env`` / ``wire_api``)
+    are parsed when present and otherwise left at their defaults.
+    Validation of the runner happens in :func:`archon.agent.build_runner`,
+    not here, so this loader stays a pure read.
     """
     harnesses = cfg.raw.get('harnesses')
     entry = harnesses.get(name) if isinstance(harnesses, dict) else None
@@ -397,11 +430,18 @@ def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
     runner = entry.get('runner')
     if not isinstance(runner, str) or not runner:
         runner = name
-    model = entry.get('model')
+    sandbox = _opt_str(entry.get('sandbox'))
+    wire_api = _opt_str(entry.get('wire_api'))
     return HarnessDescriptor(
         name=name,
         runner=runner,
-        model=model if isinstance(model, str) and model else None,
+        model=_opt_str(entry.get('model')),
+        effort=_opt_str(entry.get('effort')),
+        sandbox=sandbox if sandbox is not None else 'danger-full-access',
+        prompt_variant=_opt_str(entry.get('prompt_variant')),
+        base_url_env=_opt_str(entry.get('base_url_env')),
+        key_env=_opt_str(entry.get('key_env')),
+        wire_api=wire_api if wire_api is not None else 'responses',
         raw=dict(entry),
     )
 
