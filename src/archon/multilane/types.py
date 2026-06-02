@@ -39,6 +39,11 @@ class LaneConfig:
     lane_id: str
     label: str
     provider: str
+    # Forward-compat (Phase 1): the harness that drives this lane. Parsed
+    # from config but NOT yet rewired into lane dispatch — every lane
+    # still builds a claude-code runner via the factory. Defaults to
+    # "claude-code" so existing lane configs are unchanged.
+    harness: str = 'claude-code'
     claude_config_dir: str | None = None
     claude_settings_path: str | None = None
     env: dict[str, str] = field(default_factory=dict)

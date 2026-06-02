@@ -112,6 +112,7 @@ def _lane_from_raw(lane_raw: dict) -> LaneConfig:
         lane_id=lane_raw['lane_id'],
         label=lane_raw.get('label', lane_raw['lane_id']),
         provider=lane_raw.get('provider', 'unknown'),
+        harness=str(lane_raw.get('harness') or 'claude-code'),
         claude_config_dir=lane_raw.get('claude_config_dir'),
         claude_settings_path=lane_raw.get('claude_settings_path'),
         env=dict(lane_raw.get('env', {}) or {}),
