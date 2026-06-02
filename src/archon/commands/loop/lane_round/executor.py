@@ -260,19 +260,49 @@ class LaneRoundExecutor:
 
         ``LaneConfig.harness`` is just a name (default ``"claude-code"``).
         Resolving it here — at the dispatch site, where the project config
-        is loadable — lets a lane route to codex with its model / effort /
-        gateway intact. Returns ``{lane_id: HarnessDescriptor}``.
+        is loadable — lets the descriptor (model / effort / gateway) travel
+        with the lane. Returns ``{lane_id: HarnessDescriptor}``.
+
+        Phase-1 guard (fail-closed): the lane axis only supports the
+        ``"claude-code"`` runner today. A lane whose resolved harness names
+        a non-claude runner (e.g. ``codex``) is rejected *here*, before any
+        lane subprocess spawns — because lane result-attribution
+        (``assignment_code_snapshot_files`` → ``assignment_success``) only
+        recognizes Claude Code's ``code_snapshot`` hook events and
+        ``Edit``/``Write`` tool_calls. Codex writes neither (it applies
+        edits via apply_patch / ``file_change`` items in its raw stream),
+        so a successful codex lane edit would silently fail to promote and
+        never trigger early-stop. Rather than downgrade silently, we raise.
+        Per-lane non-claude support (codex ``file_change`` attribution or a
+        git-diff fallback, plus escaped-file detection) is a follow-up.
         """
+        from archon.agent import UnknownHarnessError
         from archon.commands.tooling.project_config import (
+            DEFAULT_HARNESS,
             load_harness_descriptor,
             load_project_config,
         )
 
         cfg = load_project_config(self.project_path)
-        return {
-            lane.lane_id: load_harness_descriptor(cfg, lane.harness)
-            for lane in config.lanes
-        }
+        harnesses = {}
+        for lane in config.lanes:
+            descriptor = load_harness_descriptor(cfg, lane.harness)
+            if descriptor.runner != DEFAULT_HARNESS:
+                raise UnknownHarnessError(
+                    f"Lane {lane.lane_id!r} requests harness "
+                    f"{descriptor.name!r} (runner {descriptor.runner!r}), but "
+                    f"the multilane lane axis only supports the "
+                    f"{DEFAULT_HARNESS!r} runner today. Lane-level result "
+                    f"attribution tracks only Claude Code's code_snapshot "
+                    f"hook events and Edit/Write tool_calls, so a "
+                    f"{descriptor.runner!r} lane's edits would silently fail "
+                    f"to promote and never trigger early-stop. To run codex "
+                    f"as the prover, route it via loop.roles.prover instead "
+                    f"(the single-lane prover path supports it), or keep "
+                    f"this lane on {DEFAULT_HARNESS!r}."
+                )
+            harnesses[lane.lane_id] = descriptor
+        return harnesses
 
     def _run_one(
         self, assignment, iter_dir: Path,
