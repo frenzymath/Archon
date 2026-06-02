@@ -31,6 +31,7 @@ from textwrap import dedent
 from archon import log
 from archon.agent import DEFAULT_MODEL, build_runner
 from archon.commands.tooling.project_config import (
+    load_harness_descriptor,
     load_project_config,
     resolve_subagent_harness,
     resolve_subagent_model,
@@ -225,9 +226,12 @@ class Subagent:
         # loop-wide config override > descriptor frontmatter >
         # "claude-code". With no config keys this is "claude-code", so
         # the factory short-circuits to the legacy ClaudeAgent below.
-        self.harness = resolve_subagent_harness(
+        harness_name = resolve_subagent_harness(
             cfg, self.name, descriptor_harness=descriptor.harness,
         )
+        # Resolve to the full (picklable) descriptor so a codex-routed
+        # subagent carries model / effort / gateway, not just a name.
+        self.harness = load_harness_descriptor(cfg, harness_name)
 
     # ── prompt envelope ─────────────────────────────────────────────
 
@@ -308,7 +312,7 @@ class Subagent:
             directive=directive, slug=slug, iter_num=iter_num,
         )
         agent = build_runner(
-            role=self.name, model=self.model, harness=self.harness,
+            role=self.name, model=self.model, descriptor=self.harness,
         )
 
         start_ts = _now_iso()

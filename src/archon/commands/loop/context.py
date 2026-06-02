@@ -123,6 +123,28 @@ class LoopContext:
         cfg = load_project_config(self.project_path)
         return resolve_role_harness(cfg, role)
 
+    def harness_descriptor_for(self, role: str):
+        """Resolve the *full* :class:`HarnessDescriptor` for a loop role.
+
+        Unlike :meth:`harness_for` (which yields only the name string),
+        this loads the descriptor so codex's model / effort / gateway env
+        names travel with it. The descriptor is a frozen, picklable
+        dataclass, so the prover phase can hand it straight to the process
+        pool worker and the worker rebuilds a fully-configured runner via
+        :func:`~archon.agent.build_runner`. Returns the built-in
+        ``"claude-code"`` descriptor for an unconfigured project, so the
+        default path is unchanged.
+        """
+        from archon.commands.tooling.project_config import (
+            load_harness_descriptor,
+            load_project_config,
+            resolve_role_harness,
+        )
+
+        cfg = load_project_config(self.project_path)
+        name = resolve_role_harness(cfg, role)
+        return load_harness_descriptor(cfg, name)
+
     def make_agent(self, role: str, *, model: str | None = None):
         """Build the :class:`~archon.agent.AgentRunner` for a role.
 

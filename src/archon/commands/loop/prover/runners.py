@@ -17,10 +17,22 @@ from pathlib import Path
 
 from archon import log
 from archon.agent import DEFAULT_HARNESS, build_runner
+from archon.commands.tooling.project_config import HarnessDescriptor
 from archon.prompts import (
     build_parallel_prover_prompt,
     build_prover_prompt,
 )
+
+
+def _default_harness() -> HarnessDescriptor:
+    """The built-in claude-code descriptor (zero-config default).
+
+    Used as the default for the prover runners so an unconfigured project
+    threads exactly the built-in claude-code runner — :func:`build_runner`
+    short-circuits a ``runner == "claude-code"`` descriptor to the legacy
+    :class:`~archon.agent.ClaudeAgent`.
+    """
+    return HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
 from archon.state import (
     archive_task_results,
     parse_objective_files,
@@ -41,25 +53,30 @@ def _run_single_prover(
     snap_dir: Path | None = None,
     project_path: Path | None = None,
     resume_session_id: str | None = None,
-    harness: str = DEFAULT_HARNESS,
+    harness: HarnessDescriptor | None = None,
 ) -> bool:
     """Top-level for `ProcessPoolExecutor` — must be importable by the worker.
 
-    ``harness`` is passed as a plain string (not a runner object) so it
-    survives pickling into the pool worker; the worker builds the runner
-    via :func:`build_runner`. Defaults to ``"claude-code"``.
+    ``harness`` is the resolved, **picklable** :class:`HarnessDescriptor`
+    (a frozen dataclass) — not a bare name string — so the worker can
+    build a fully-configured runner (model / effort / gateway for codex)
+    via :func:`build_runner` without re-reading config. ``None`` →
+    built-in claude-code.
     """
+    descriptor = harness if harness is not None else _default_harness()
     if snap_dir is not None and project_path is not None:
         with ProverEnvironment(
             snap_dir=snap_dir,
             prover_jsonl=Path(str(log_base) + ".jsonl"),
             project_path=project_path,
         ):
-            return build_runner(role="prover", model=model, harness=harness).run(
+            return build_runner(
+                role="prover", model=model, descriptor=descriptor,
+            ).run(
                 prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
                 resume_session_id=resume_session_id,
             )
-    return build_runner(role="prover", model=model, harness=harness).run(
+    return build_runner(role="prover", model=model, descriptor=descriptor).run(
         prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
         resume_session_id=resume_session_id,
     )
@@ -87,7 +104,7 @@ class SerialProverRunner:
         debug_feedback: bool = False,
         iter_meta: Path | None = None,
         resume_enabled: bool = False,
-        harness: str = DEFAULT_HARNESS,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -100,7 +117,7 @@ class SerialProverRunner:
         self.debug_feedback = debug_feedback
         self.iter_meta = iter_meta
         self.resume_enabled = resume_enabled
-        self.harness = harness
+        self.harness = harness if harness is not None else _default_harness()
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
         prompt = build_prover_prompt(
@@ -133,7 +150,7 @@ class SerialProverRunner:
             serial_mode=True,
         ):
             build_runner(
-                role="prover", model=self.model, harness=self.harness,
+                role="prover", model=self.model, descriptor=self.harness,
             ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,
@@ -172,7 +189,7 @@ class ParallelProverRunner:
         blueprint_url: str | None = None,
         debug_feedback: bool = False,
         resume_enabled: bool = False,
-        harness: str = DEFAULT_HARNESS,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -190,7 +207,7 @@ class ParallelProverRunner:
         self.blueprint_url = blueprint_url
         self.debug_feedback = debug_feedback
         self.resume_enabled = resume_enabled
-        self.harness = harness
+        self.harness = harness if harness is not None else _default_harness()
 
     def run(self, *, dry_run: bool) -> None:
         progress = self.state_dir / "PROGRESS.md"
@@ -299,7 +316,7 @@ class ParallelProverRunner:
             project_path=self.project_path,
         ):
             ok = build_runner(
-                role="prover", model=self.model, harness=self.harness,
+                role="prover", model=self.model, descriptor=self.harness,
             ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,

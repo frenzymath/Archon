@@ -15,6 +15,7 @@ from pathlib import Path
 
 from archon import log
 from archon.agent import DEFAULT_HARNESS, build_runner
+from archon.commands.tooling.project_config import HarnessDescriptor
 from archon.multilane.dispatch import build_assignment_prompt
 from archon.state import utcnow_iso
 
@@ -46,7 +47,7 @@ class LaneAssignmentRunner:
         lane_provider: str | None = None,
         lane_env: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
-        harness: str = DEFAULT_HARNESS,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -60,12 +61,13 @@ class LaneAssignmentRunner:
         self.lane_provider = lane_provider
         self.lane_env = lane_env
         self.cancel_event = cancel_event
-        # Forward-compat: in Phase 1 the lane axis always builds a
-        # claude-code runner via the factory. The lane's own ``harness``
-        # field (LaneConfig.harness) is parsed but not yet rewired into
-        # dispatch; this defaults to "claude-code" so behaviour is
-        # unchanged.
-        self.harness = harness
+        # The lane's resolved harness descriptor (from LaneConfig.harness,
+        # resolved at the dispatch site). None → built-in claude-code, so
+        # an unconfigured lane builds exactly the legacy ClaudeAgent.
+        self.harness = (
+            harness if harness is not None
+            else HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
+        )
 
         self.lane_path = Path(assignment.worktree_path)
         self.slug = file_slug(assignment.assigned_file)
@@ -184,7 +186,7 @@ class LaneAssignmentRunner:
 
         try:
             return build_runner(
-                role=role_tag, model=self.model, harness=self.harness,
+                role=role_tag, model=self.model, descriptor=self.harness,
             ).run(
                 prompt,
                 cwd=self.lane_path,

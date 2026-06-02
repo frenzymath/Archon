@@ -196,6 +196,7 @@ class LaneRoundExecutor:
         )
         iter_dir = self.state_dir / 'logs' / f'iter-{self.iteration:03d}'
         lane_providers = {lane.lane_id: lane.provider for lane in config.lanes}
+        lane_harnesses = self._build_lane_harnesses(config)
         lane_envs = self._build_lane_envs(config)
 
         # Per-(lane, file) cancel event. When one lane finishes a file
@@ -216,6 +217,7 @@ class LaneRoundExecutor:
                         assignment, iter_dir,
                         lane_providers.get(assignment.lane_id),
                         lane_envs.get(assignment.lane_id),
+                        lane_harnesses.get(assignment.lane_id),
                     ): assignment
                     for assignment in self._assignments
                 }
@@ -253,9 +255,29 @@ class LaneRoundExecutor:
                 lane_envs[lane.lane_id] = {}
         return lane_envs
 
+    def _build_lane_harnesses(self, config: MultiLaneConfig):
+        """Resolve each lane's ``harness`` name to a full descriptor.
+
+        ``LaneConfig.harness`` is just a name (default ``"claude-code"``).
+        Resolving it here — at the dispatch site, where the project config
+        is loadable — lets a lane route to codex with its model / effort /
+        gateway intact. Returns ``{lane_id: HarnessDescriptor}``.
+        """
+        from archon.commands.tooling.project_config import (
+            load_harness_descriptor,
+            load_project_config,
+        )
+
+        cfg = load_project_config(self.project_path)
+        return {
+            lane.lane_id: load_harness_descriptor(cfg, lane.harness)
+            for lane in config.lanes
+        }
+
     def _run_one(
         self, assignment, iter_dir: Path,
         lane_provider: str | None, lane_env: dict[str, str] | None,
+        lane_harness=None,
     ) -> dict[str, object]:
         runner = LaneAssignmentRunner(
             project_name=self.project_name,
@@ -270,6 +292,7 @@ class LaneRoundExecutor:
             lane_provider=lane_provider,
             lane_env=lane_env,
             cancel_event=self._cancel_events[assignment.assignment_id],
+            harness=lane_harness,
         )
         return runner.run()
 
