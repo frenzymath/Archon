@@ -367,7 +367,9 @@ class HarnessDescriptor:
       overrides the role/loop model alias; for codex it is the concrete
       ``codex exec -m <model>`` model id (e.g. ``"gpt-5.5-xhigh"``).
     * ``raw`` — the untouched config dict, so future fields can be read
-      without a schema migration.
+      without a schema migration. Note: ``frozen=True`` only blocks
+      *rebinding* the fields; ``raw`` is a plain ``dict`` and its contents
+      remain mutable, so treat it as read-only by convention.
 
     Codex-only fields (ignored by the claude-code path):
 

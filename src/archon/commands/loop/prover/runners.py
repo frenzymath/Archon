@@ -24,15 +24,6 @@ from archon.prompts import (
 )
 
 
-def _default_harness() -> HarnessDescriptor:
-    """The built-in claude-code descriptor (zero-config default).
-
-    Used as the default for the prover runners so an unconfigured project
-    threads exactly the built-in claude-code runner — :func:`build_runner`
-    short-circuits a ``runner == "claude-code"`` descriptor to the legacy
-    :class:`~archon.agent.ClaudeAgent`.
-    """
-    return HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
 from archon.state import (
     archive_task_results,
     parse_objective_files,
@@ -42,6 +33,17 @@ from archon.state import (
 from ..resume import PROVER_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import file_slug, relpath
 from .environment import ProverEnvironment, snapshot_baseline
+
+
+def _default_harness() -> HarnessDescriptor:
+    """The built-in claude-code descriptor (zero-config default).
+
+    Used as the default for the prover runners so an unconfigured project
+    threads exactly the built-in claude-code runner — :func:`build_runner`
+    short-circuits a ``runner == "claude-code"`` descriptor to the legacy
+    :class:`~archon.agent.ClaudeAgent`.
+    """
+    return HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
 
 
 def _run_single_prover(
