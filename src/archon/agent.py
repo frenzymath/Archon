@@ -33,8 +33,18 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from archon import log
+
+if TYPE_CHECKING:
+    from archon.commands.tooling.project_config import ProjectConfig
+
+
+# The built-in harness name: the claude-code engine that has always been
+# the only thing Archon runs. Routing a responsibility to this harness is
+# byte-for-byte equivalent to constructing a ``ClaudeAgent`` directly.
+DEFAULT_HARNESS = "claude-code"
 
 
 # Default model alias. ``opus`` resolves to the latest Opus build at the
@@ -308,6 +318,50 @@ for line in sys.stdin:
 JSONL.close()
 if RAW: RAW.close()
 '''
+
+
+# ── AgentRunner protocol ──────────────────────────────────────────────
+
+
+@runtime_checkable
+class AgentRunner(Protocol):
+    """The engine interface every call site programs against.
+
+    Today :class:`ClaudeAgent` is the only implementation; Phase 2 adds
+    sibling ``CodexAgent`` / ``GeminiAgent`` runners. Callers obtain a
+    runner from :func:`build_runner` instead of constructing
+    ``ClaudeAgent`` directly, so swapping the engine for a role becomes a
+    config change rather than an edit at every site.
+
+    The two methods mirror :class:`ClaudeAgent`'s existing signatures
+    exactly — headless ``run`` and foreground ``run_interactive`` — so a
+    runner is a drop-in for the legacy agent object.
+    """
+
+    def run(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        log_base: Path | None = None,
+        verbose_logs: bool = False,
+        extra_args: list[str] | None = None,
+        env_overrides: dict[str, str] | None = None,
+        cancel_event: "threading.Event | None" = None,
+        idle_timeout_s: float | None = 900,
+        max_attempts: int = 3,
+        resume_session_id: str | None = None,
+    ) -> bool:
+        ...
+
+    def run_interactive(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        extra_args: list[str] | None = None,
+    ) -> int:
+        ...
 
 
 # ── ClaudeAgent ───────────────────────────────────────────────────────
@@ -737,4 +791,101 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
-__all__ = ["ClaudeAgent", "DEFAULT_MODEL", "RunOutcome"]
+# ── runner factory ────────────────────────────────────────────────────
+
+
+class UnknownHarnessError(ValueError):
+    """Raised when a configured harness has no runner in this version."""
+
+
+def build_runner(
+    *,
+    role: str,
+    model: str = DEFAULT_MODEL,
+    cfg: "ProjectConfig | None" = None,
+    harness: str | None = None,
+) -> AgentRunner:
+    """Build the :class:`AgentRunner` for a responsibility.
+
+    This is the single decision point for routing a role to an engine.
+    In Phase 1 the only registered runner is ``"claude-code"``, so this
+    always returns a :class:`ClaudeAgent` — but it routes *through* the
+    resolved harness so Phase 2 can register codex/gemini runners here
+    without touching any call site.
+
+    Resolution:
+
+    * ``harness`` (if given) is used verbatim — callers that already
+      resolved the harness name (e.g. via :func:`resolve_role_harness`)
+      pass it directly.
+    * otherwise ``cfg`` + ``role`` are resolved with
+      :func:`resolve_role_harness` (``loop.roles.<role>`` >
+      ``loop.harness`` > ``"claude-code"``).
+    * with neither, the harness is the built-in ``"claude-code"``.
+
+    Zero-regression invariant: when the resolved harness is
+    ``"claude-code"`` AND no explicit ``harnesses."claude-code"`` entry
+    is configured, this returns exactly ``ClaudeAgent(model=model,
+    role=role)`` — the same object the call site built before this PR,
+    with no new parsing on the default path.
+
+    Raises:
+        UnknownHarnessError: the resolved harness names a runner other
+            than ``"claude-code"`` (none exist yet in this version).
+    """
+    # Resolve the harness name.
+    if harness is None:
+        if cfg is not None:
+            from archon.commands.tooling.project_config import resolve_role_harness
+
+            harness = resolve_role_harness(cfg, role, fallback=DEFAULT_HARNESS)
+        else:
+            harness = DEFAULT_HARNESS
+
+    # Fast path / zero-regression short-circuit: the built-in claude-code
+    # harness with no explicit descriptor override is the legacy agent,
+    # untouched. We deliberately skip descriptor loading entirely so the
+    # default path proves it never depends on the new config code.
+    has_override = False
+    if cfg is not None:
+        from archon.commands.tooling.project_config import (
+            has_explicit_harness_override,
+        )
+
+        has_override = has_explicit_harness_override(cfg, harness)
+
+    if harness == DEFAULT_HARNESS and not has_override:
+        return ClaudeAgent(model=model, role=role)
+
+    # A configured harness descriptor: validate its runner. Phase 1 only
+    # knows how to build the claude-code runner; anything else is a
+    # misconfiguration we refuse loudly rather than silently downgrade.
+    from archon.commands.tooling.project_config import load_harness_descriptor
+
+    descriptor = load_harness_descriptor(cfg, harness) if cfg is not None else None
+    runner = descriptor.runner if descriptor is not None else harness
+    if runner != DEFAULT_HARNESS:
+        raise UnknownHarnessError(
+            f"Harness {harness!r} requests runner {runner!r}, but the only "
+            f"runner available in this version of Archon is "
+            f"{DEFAULT_HARNESS!r}. (codex / gemini runners arrive in a "
+            f"later phase.) Remove the harness override or set its runner "
+            f"to {DEFAULT_HARNESS!r}."
+        )
+
+    # An explicit claude-code descriptor: honour its model override if it
+    # set one, otherwise keep the caller's model.
+    if descriptor is not None and descriptor.model:
+        model = descriptor.model
+    return ClaudeAgent(model=model, role=role)
+
+
+__all__ = [
+    "AgentRunner",
+    "ClaudeAgent",
+    "DEFAULT_HARNESS",
+    "DEFAULT_MODEL",
+    "RunOutcome",
+    "UnknownHarnessError",
+    "build_runner",
+]
