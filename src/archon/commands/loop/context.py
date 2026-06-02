@@ -107,6 +107,39 @@ class LoopContext:
     def model(self) -> str:
         return self.options.model
 
+    def harness_for(self, role: str) -> str:
+        """Resolve the harness name for a loop role this iteration.
+
+        Reads ``.archon/config.json`` fresh each call (cheap, and keeps
+        behaviour identical to the rest of the loop which re-reads config
+        per phase). Defaults to ``"claude-code"`` for an unconfigured
+        project, so the single-agent path is unchanged.
+        """
+        from archon.commands.tooling.project_config import (
+            load_project_config,
+            resolve_role_harness,
+        )
+
+        cfg = load_project_config(self.project_path)
+        return resolve_role_harness(cfg, role)
+
+    def make_agent(self, role: str, *, model: str | None = None):
+        """Build the :class:`~archon.agent.AgentRunner` for a role.
+
+        Routes through :func:`~archon.agent.build_runner` so plan/review
+        pick up any per-role harness override. With no override this is
+        exactly ``ClaudeAgent(model=ctx.model, role=role)``.
+        """
+        from archon.agent import build_runner
+        from archon.commands.tooling.project_config import load_project_config
+
+        cfg = load_project_config(self.project_path)
+        return build_runner(
+            role=role,
+            model=model if model is not None else self.model,
+            cfg=cfg,
+        )
+
     @property
     def verbose_logs(self) -> bool:
         return self.options.verbose_logs

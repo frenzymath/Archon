@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.project_config import (
     load_project_config,
@@ -142,7 +141,7 @@ class PlanPhase(Phase):
                 cwd=ctx.project_path,
                 jsonl_fallback=Path(str(plan_log) + ".jsonl"),
             )
-            ClaudeAgent(model=ctx.model, role="plan").run(
+            ctx.make_agent("plan").run(
                 PLAN_CONTINUE if resume_sid else plan_prompt,
                 cwd=ctx.project_path,
                 log_base=plan_log, verbose_logs=ctx.verbose_logs,

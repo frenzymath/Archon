@@ -154,6 +154,7 @@ class ProverPhase(Phase):
             blueprint_url=ctx.blueprint_url,
             debug_feedback=ctx.options.debug_feedback,
             resume_enabled=self._resume_enabled(),
+            harness=ctx.harness_for("prover"),
         )
         runner.run(dry_run=ctx.dry_run)
 
@@ -171,5 +172,6 @@ class ProverPhase(Phase):
             debug_feedback=ctx.options.debug_feedback,
             iter_meta=ctx.iter_meta,
             resume_enabled=self._resume_enabled(),
+            harness=ctx.harness_for("prover"),
         )
         runner.run(dry_run=ctx.dry_run, progress_file=ctx.progress_file)

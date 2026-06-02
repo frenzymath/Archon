@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent
+from archon.agent import DEFAULT_HARNESS, build_runner
 from archon.prompts import (
     build_parallel_prover_prompt,
     build_prover_prompt,
@@ -41,19 +41,25 @@ def _run_single_prover(
     snap_dir: Path | None = None,
     project_path: Path | None = None,
     resume_session_id: str | None = None,
+    harness: str = DEFAULT_HARNESS,
 ) -> bool:
-    """Top-level for `ProcessPoolExecutor` — must be importable by the worker."""
+    """Top-level for `ProcessPoolExecutor` — must be importable by the worker.
+
+    ``harness`` is passed as a plain string (not a runner object) so it
+    survives pickling into the pool worker; the worker builds the runner
+    via :func:`build_runner`. Defaults to ``"claude-code"``.
+    """
     if snap_dir is not None and project_path is not None:
         with ProverEnvironment(
             snap_dir=snap_dir,
             prover_jsonl=Path(str(log_base) + ".jsonl"),
             project_path=project_path,
         ):
-            return ClaudeAgent(model=model, role="prover").run(
+            return build_runner(role="prover", model=model, harness=harness).run(
                 prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
                 resume_session_id=resume_session_id,
             )
-    return ClaudeAgent(model=model, role="prover").run(
+    return build_runner(role="prover", model=model, harness=harness).run(
         prompt, cwd=cwd, log_base=log_base, verbose_logs=verbose_logs,
         resume_session_id=resume_session_id,
     )
@@ -81,6 +87,7 @@ class SerialProverRunner:
         debug_feedback: bool = False,
         iter_meta: Path | None = None,
         resume_enabled: bool = False,
+        harness: str = DEFAULT_HARNESS,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -93,6 +100,7 @@ class SerialProverRunner:
         self.debug_feedback = debug_feedback
         self.iter_meta = iter_meta
         self.resume_enabled = resume_enabled
+        self.harness = harness
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
         prompt = build_prover_prompt(
@@ -124,7 +132,9 @@ class SerialProverRunner:
             project_path=self.project_path,
             serial_mode=True,
         ):
-            ClaudeAgent(model=self.model, role="prover").run(
+            build_runner(
+                role="prover", model=self.model, harness=self.harness,
+            ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
@@ -162,6 +172,7 @@ class ParallelProverRunner:
         blueprint_url: str | None = None,
         debug_feedback: bool = False,
         resume_enabled: bool = False,
+        harness: str = DEFAULT_HARNESS,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -179,6 +190,7 @@ class ParallelProverRunner:
         self.blueprint_url = blueprint_url
         self.debug_feedback = debug_feedback
         self.resume_enabled = resume_enabled
+        self.harness = harness
 
     def run(self, *, dry_run: bool) -> None:
         progress = self.state_dir / "PROGRESS.md"
@@ -286,7 +298,9 @@ class ParallelProverRunner:
             prover_jsonl=Path(str(prover_log) + ".jsonl"),
             project_path=self.project_path,
         ):
-            ok = ClaudeAgent(model=self.model, role="prover").run(
+            ok = build_runner(
+                role="prover", model=self.model, harness=self.harness,
+            ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
@@ -368,6 +382,7 @@ class ParallelProverRunner:
                     submit_prompt, self.project_path, prover_log,
                     self.verbose_logs, self.model,
                     snap_dir, self.project_path, resume_sid,
+                    self.harness,
                 )
                 futures[future] = (rel, slug)
 

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.project_config import (
     load_project_config,
@@ -157,7 +156,7 @@ class ReviewPhase(Phase):
             cwd=ctx.project_path,
             jsonl_fallback=Path(str(review_log) + ".jsonl"),
         )
-        ClaudeAgent(model=ctx.model, role="review").run(
+        ctx.make_agent("review").run(
             REVIEW_CONTINUE if resume_sid else prompt,
             cwd=ctx.project_path,
             log_base=review_log, verbose_logs=ctx.verbose_logs,
