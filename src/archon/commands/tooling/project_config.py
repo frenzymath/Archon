@@ -268,6 +268,158 @@ def resolve_subagent_model(
     return loop_section.get('model') or fallback
 
 
+# ── harness resolution ────────────────────────────────────────────────
+#
+# A *harness* is the engine that runs a responsibility (plan / prover /
+# review / a subagent / a lane). Phase 1 ships exactly one harness —
+# ``"claude-code"`` — and these resolvers always return it for an
+# unconfigured project, so the default single-agent path is unchanged.
+# The schema is additive and mirrors the per-subagent ``model`` override
+# above: when no ``harness`` / ``roles`` keys are present, everything
+# resolves to the built-in default.
+
+DEFAULT_HARNESS = 'claude-code'
+
+
+def resolve_role_harness(
+    cfg: ProjectConfig, role: str, *, fallback: str = DEFAULT_HARNESS,
+) -> str:
+    """Pick the harness name for a loop role (plan / prover / review).
+
+    Precedence (mirrors :func:`resolve_subagent_model`):
+    ``loop.roles.<role>`` (str → harness name; dict → ``.harness``)
+    > ``loop.harness`` > ``fallback``.
+
+    Returns ``fallback`` (``"claude-code"``) for an empty/unconfigured
+    project, so the default loop path is unaffected.
+    """
+    loop_section = cfg.loop_section()
+    roles = loop_section.get('roles')
+    if isinstance(roles, dict):
+        val = roles.get(role)
+        if isinstance(val, dict):
+            harness = val.get('harness')
+            if isinstance(harness, str) and harness:
+                return harness
+        elif isinstance(val, str) and val:
+            return val
+    loop_harness = loop_section.get('harness')
+    if isinstance(loop_harness, str) and loop_harness:
+        return loop_harness
+    return fallback
+
+
+def resolve_subagent_harness(
+    cfg: ProjectConfig,
+    subagent_name: str,
+    *,
+    descriptor_harness: str | None = None,
+    fallback: str = DEFAULT_HARNESS,
+) -> str:
+    """Pick the harness name for a subagent.
+
+    Precedence: ``subagents.<name>.harness`` (str → harness name; dict →
+    ``.harness``) > ``loop.harness`` > descriptor frontmatter ``harness``
+    > ``fallback``.
+
+    ``descriptor_harness`` is the subagent descriptor's optional
+    ``harness`` frontmatter field (passed by the caller, since the config
+    layer doesn't read descriptors itself). It sits below ``loop.harness``
+    in precedence so a project-wide override still wins, but above the
+    built-in default so a descriptor can declare its own engine.
+    """
+    sub_section = dict(cfg.raw.get('subagents') or {})
+    val = sub_section.get(subagent_name)
+    if isinstance(val, dict):
+        harness = val.get('harness')
+        if isinstance(harness, str) and harness:
+            return harness
+    elif isinstance(val, str) and val:
+        # A bare string is the *model* alias (backward compat with
+        # ``resolve_subagent_model``), not a harness — ignore it here.
+        pass
+    loop_harness = cfg.loop_section().get('harness')
+    if isinstance(loop_harness, str) and loop_harness:
+        return loop_harness
+    if isinstance(descriptor_harness, str) and descriptor_harness:
+        return descriptor_harness
+    return fallback
+
+
+@dataclass(frozen=True)
+class HarnessDescriptor:
+    """One harness entry from ``harnesses.<name>`` in ``config.json``.
+
+    Phase 1 only needs enough of the descriptor to (a) recognise the
+    built-in ``"claude-code"`` runner and (b) reject any other runner
+    (none exist yet). The codex/gemini-specific fields (effort, MCP,
+    auth, prompt variant, …) land in Phase 2; until then extra keys are
+    kept in :attr:`raw` and otherwise ignored.
+
+    Fields:
+
+    * ``name`` — the harness key (e.g. ``"claude-code"``).
+    * ``runner`` — which engine implements it. Phase 1 supports only
+      ``"claude-code"``.
+    * ``model`` — optional model alias for this harness (overrides the
+      role/loop model when set). Unused by the Phase-1 claude-code path.
+    * ``raw`` — the untouched config dict, so Phase 2 can read the rest
+      without a schema migration.
+    """
+    name: str
+    runner: str = DEFAULT_HARNESS
+    model: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
+    """Resolve a harness name to its :class:`HarnessDescriptor`.
+
+    Looks up ``harnesses.<name>`` in the config. When the section is
+    absent — or when ``name`` is the built-in ``"claude-code"`` and has
+    no explicit override — returns a built-in descriptor whose runner is
+    ``"claude-code"``. This keeps the default path free of any config
+    plumbing.
+
+    A configured descriptor with no ``runner`` key defaults its runner
+    to its own name (so ``"harnesses": {"claude-code": {...}}`` works as
+    expected). Validation of the runner happens in
+    :func:`archon.agent.build_runner`, not here, so this loader stays a
+    pure read.
+    """
+    harnesses = cfg.raw.get('harnesses')
+    entry = harnesses.get(name) if isinstance(harnesses, dict) else None
+    if not isinstance(entry, dict):
+        # No explicit descriptor → built-in. The runner defaults to the
+        # harness name, which for ``"claude-code"`` is exactly the
+        # built-in engine.
+        return HarnessDescriptor(name=name, runner=name)
+    runner = entry.get('runner')
+    if not isinstance(runner, str) or not runner:
+        runner = name
+    model = entry.get('model')
+    return HarnessDescriptor(
+        name=name,
+        runner=runner,
+        model=model if isinstance(model, str) and model else None,
+        raw=dict(entry),
+    )
+
+
+def has_explicit_harness_override(cfg: ProjectConfig, name: str) -> bool:
+    """True iff ``harnesses.<name>`` is explicitly present in the config.
+
+    Used by :func:`archon.agent.build_runner` to decide whether the
+    zero-regression short-circuit applies: a ``"claude-code"`` role with
+    no explicit ``harnesses."claude-code"`` entry must build exactly the
+    legacy ``ClaudeAgent``.
+    """
+    harnesses = cfg.raw.get('harnesses')
+    return isinstance(harnesses, dict) and isinstance(
+        harnesses.get(name), dict
+    )
+
+
 # ── state resolution ──────────────────────────────────────────────────
 
 
