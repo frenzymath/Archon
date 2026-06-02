@@ -23,21 +23,41 @@ All notable changes to Archon are documented here.
   `key_env`); the API key is passed via `CODEX_GATEWAY_API_KEY` in the child
   env, never on the command line. The resolved `HarnessDescriptor` (a frozen,
   picklable dataclass extended with `effort` / `sandbox` / `prompt_variant` /
-  `base_url_env` / `key_env` / `wire_api`) is now threaded — as the descriptor
-  itself, not a bare name — into the prover process pool, subagents, and lanes,
-  so a pool worker rebuilds a fully-configured codex runner with no config
-  re-read. **Default behavior is unchanged**: an unconfigured project still
-  short-circuits to exactly `ClaudeAgent(model=…, role=…)`. **v1 limitations**
-  (see [MIGRATION.md](MIGRATION.md)): no MCP for codex (no `archon-lean-lsp`,
-  slower inner-loop feedback — codex runs `lake`/verify via shell); the codex
+  `mcp` / `base_url_env` / `key_env` / `wire_api`) is now threaded — as the
+  descriptor itself, not a bare name — into the prover process pool, subagents,
+  and lanes, so a pool worker rebuilds a fully-configured codex runner with no
+  config re-read. **Default behavior is unchanged**: an unconfigured project
+  still short-circuits to exactly `ClaudeAgent(model=…, role=…)`.
+
+  Codex now supports two opt-in capabilities the FormalQualBench harness
+  already had:
+
+  - **`archon-lean-lsp` MCP** — set `harnesses.<name>.mcp: "lean-lsp"` and the
+    codex runner appends per-invocation `-c mcp_servers.archon-lean-lsp.*`
+    overrides (the same server / `data_path("tools/lean-lsp-mcp")` dir the
+    claude-code path registers at init, plus codex-specific `required=true` and
+    `tool_timeout_sec=600`), with `LEAN_PROJECT_PATH` pointed at the lake root
+    the prover runs in. Codex has no `--mcp-config` flag, so this is entirely
+    self-contained in the runner's argv (it does not touch the init-time
+    `claude mcp add` model). Fails closed if the bundled MCP dir can't be
+    resolved or the bundle name is unknown. Unset ⇒ no MCP, identical to before.
+  - **`prompt_variant`** — set `harnesses.<name>.prompt_variant: "codex"` and
+    the runner appends a bundled codex-specific prompt tail (resolved
+    local-overrides-bundled: `.archon/prompts/variants/codex.md` wins over the
+    shipped copy, mirroring how Archon resolves its other prompts). The shipped
+    `codex.md` tells the model to use codex-native tools (`apply_patch` /
+    `exec_command` / `read_file`), to prefer the Lean LSP MCP tools for
+    diagnostics when present, and reinforces faithfulness (no statement
+    rewrites, no axioms/`sorry`, no metaprogramming to game the checker). A
+    missing variant file warns and proceeds; unset ⇒ prompt unchanged.
+
+  **Remaining limitations** (see [MIGRATION.md](MIGRATION.md)): the codex
   `--json` stream is logged **raw**, so the dashboard does not parse codex
   cost/session; no true session resume (a passed resume runs fresh with a
   warning); `run_interactive` is unsupported (interactive sites stay on
-  claude-code); the default prover prompt may reference Claude-only tool names
-  (an optional `prompt_variant` descriptor field is the hook for a codex prompt
-  but none ships yet). Because codex is more adversarial, gate codex proofs
-  behind the comparator before trusting them. The `gemini` runner remains
-  unimplemented and raises a clear error.
+  claude-code). Because codex is more adversarial, gate codex proofs behind the
+  comparator before trusting them. The `gemini` runner remains unimplemented and
+  raises a clear error.
 
 - **Harness router (Phase 1, opt-in seam)**: a "responsibility → harness"
   routing layer that lets plan / prover / review / each subagent / each lane

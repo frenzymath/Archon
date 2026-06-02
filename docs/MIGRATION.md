@@ -534,11 +534,23 @@ built-in engine.
          "sandbox": "danger-full-access",
          "base_url_env": "CODEX_BASE_URL",
          "key_env": "CZ_API_KEY",
-         "wire_api": "responses"
+         "wire_api": "responses",
+         "mcp": "lean-lsp",
+         "prompt_variant": "codex"
        }
      }
    }
    ```
+
+   `mcp` and `prompt_variant` are both optional and both opt-in:
+
+   - **`mcp: "lean-lsp"`** wires the `archon-lean-lsp` MCP server into codex
+     (the same server the claude-code prover gets), so codex can use the Lean
+     LSP for fast diagnostics instead of recompiling. Leave it out for the
+     prior behavior (codex runs `lake` / verify via the shell only). See § 9.2.
+   - **`prompt_variant: "codex"`** appends a codex-specific prompt tail telling
+     the model to use codex-native tools and to prove the goal faithfully. Leave
+     it out and codex reads the unmodified prover prompt. See § 9.2.
 
 3. Put the gateway credentials in `.archon/.env` (existing shell vars still
    win; the secret is never written to a settings file and is passed to codex
@@ -562,31 +574,56 @@ so a Lean run that proves cleanly there proves the same way here. You can also
 route a subagent (`subagents.<name>.harness`) or a multilane lane
 (`lanes[].harness`) at the codex harness the same way.
 
-### 9.2 Honest v1 limitations
+### 9.2 Lean LSP MCP + codex prompt variant (opt-in)
 
-This is a deliberately lean first cut. Know these before trusting codex proofs:
+Two capabilities the FormalQualBench harness already had for codex are now
+wired in here too, both opt-in via the harness descriptor (above):
 
-- **No MCP.** Codex does **not** get the `archon-lean-lsp` MCP server. It uses
-  its native `exec_command` / `apply_patch` / `read_file` tools and runs
-  `lake` / verify via the shell. Lean verification still works, but the
-  inner-loop feedback is slower than the claude-code prover's LSP.
+- **`archon-lean-lsp` MCP** (`"mcp": "lean-lsp"`). Codex has no `--mcp-config`
+  flag, so the runner injects the server as per-invocation `-c mcp_servers.*`
+  config overrides — the **same** `lean-lsp-mcp` server and directory
+  (`data_path("tools/lean-lsp-mcp")`) the claude-code prover registers at
+  `archon init`, plus the two codex-specific knobs the harness uses:
+  `required=true` (fail codex startup if the MCP can't init — a no-MCP session
+  whose prompt claims the tools are loaded would contaminate results) and
+  `tool_timeout_sec=600` (a cold Mathlib LSP indexes imports on the first call,
+  2–5 min). `LEAN_PROJECT_PATH` is set to the lake root the prover runs in. This
+  is entirely self-contained in the codex runner's argv; it does **not** touch
+  the init-time `claude mcp add` registration (that stays a claude concern). If
+  the bundled MCP dir can't be resolved, the run fails loud rather than starting
+  a broken server. Leave `mcp` unset to keep the prior behavior (codex runs
+  `lake` / verify via the shell with no LSP).
+
+- **Codex prompt variant** (`"prompt_variant": "codex"`). The runner appends a
+  bundled codex-specific tail to the prover prompt (analogous to the harness
+  gemini `prompt_tail`), resolved **local-overrides-bundled**: a project copy at
+  `.archon/prompts/variants/codex.md` wins over the shipped one (`archon init`
+  copies the bundled variant into the project so you can edit it). The shipped
+  `codex.md` tells the model it runs under the codex CLI (use `apply_patch` /
+  `exec_command` / `read_file`, not Claude tool names), to prefer the Lean LSP
+  MCP tools for diagnostics when present, and reinforces faithfulness (do not
+  rewrite statements/signatures, introduce axioms or `sorry`, shadow library
+  declarations, or use metaprogramming to game the checker). A missing variant
+  file warns and proceeds with the unmodified prompt; unset ⇒ prompt unchanged.
+
+### 9.3 Honest remaining limitations
+
+Even with the MCP and prompt variant on, know these before trusting codex
+proofs:
+
 - **No dashboard cost / session parity.** Codex's `--json` event stream has a
   different schema from Claude Code's `stream-json`. Archon writes the codex
   stream to the iteration log **raw** and does **not** synthesize the
   dashboard's cost / token / `session_end` rows for codex runs. The dashboard
   still shows the run, but cost columns will be blank for codex.
 - **No true resume.** Codex mints its own `thread_id` and resumes via a
-  separate subcommand; v1 does not implement it. Passing `--resume` to a
+  separate subcommand; this is not implemented. Passing `--resume` to a
   codex-routed phase logs a warning and runs a fresh session.
 - **No interactive mode.** `archon discuss` / `refactor draft` and any other
   foreground site stay on claude-code — codex is headless-only here.
-- **Prompt tool-name mismatch (follow-up).** The default prover prompt may
-  reference Claude-only tool names. The descriptor accepts an optional
-  `prompt_variant` field as the hook for a codex-specific prompt, but **no
-  codex prompt ships yet** — until one does, codex reads the default prompt and
-  ignores instructions about tools it doesn't have.
 - **Codex is more adversarial.** It is more willing to satisfy a goal by
-  weakening a statement or gaming the check. **Gate codex proofs behind the
+  weakening a statement or gaming the check (the prompt variant reinforces
+  against this, but does not eliminate it). **Gate codex proofs behind the
   comparator** (the design doc's comparator step) before promoting them; do not
   trust a codex `verify` exit 0 the way you'd trust a claude-code one.
 
