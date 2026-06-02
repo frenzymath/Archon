@@ -461,14 +461,25 @@ class CodexAgent:
         is copied into ``CODEX_GATEWAY_API_KEY`` so the injected provider
         can read it via ``env_key`` — exactly as the bash runner does —
         keeping the secret out of argv. Caller-supplied ``env_overrides``
-        are merged last and win on conflict.
+        are merged **first** (and win on conflict); gateway creds are then
+        resolved from that merged env, so an override may supply the creds
+        and ``CODEX_GATEWAY_API_KEY`` is set from the same env snapshot that
+        :meth:`build_argv` reads when deciding whether to inject the
+        provider — keeping the two consistent.
         """
         env = os.environ.copy()
+        # Merge caller overrides FIRST, then resolve gateway creds from the
+        # merged env — so build_env and build_argv (which resolves from the
+        # env it's given, i.e. this result) agree on a single env snapshot.
+        # If a lane supplies gateway creds via env_overrides, they must be
+        # visible to _gateway_creds here, otherwise CODEX_GATEWAY_API_KEY
+        # would never be set while build_argv still injects the provider that
+        # reads it → auth failure.
+        if env_overrides:
+            env.update(env_overrides)
         base_url, api_key = self._gateway_creds(env)
         if base_url and api_key:
             env[_GATEWAY_KEY_ENV] = api_key
-        if env_overrides:
-            env.update(env_overrides)
         return env
 
     # ── invocation modes ────────────────────────────────────────────────
