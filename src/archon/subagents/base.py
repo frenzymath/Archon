@@ -29,9 +29,10 @@ from pathlib import Path
 from textwrap import dedent
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import DEFAULT_MODEL, build_runner
 from archon.commands.tooling.project_config import (
     load_project_config,
+    resolve_subagent_harness,
     resolve_subagent_model,
 )
 from archon.dispatch import SlotPool
@@ -80,6 +81,11 @@ class SubagentDescriptor:
       "do NOT pass STRATEGY.md in my directive". Distinct from
       ``description`` (one-liner) and ``prompt_body`` (what the
       spawned Claude reads).
+    * ``harness`` — optional engine name for this subagent. Defaults to
+      ``"claude-code"``. Sits below ``loop.harness`` /
+      ``subagents.<name>.harness`` in precedence (see
+      :func:`~archon.commands.tooling.project_config.resolve_subagent_harness`),
+      so it's a per-descriptor default an operator can still override.
     * ``source_path`` / ``prompt_body`` — set by the registry loader.
     """
     name: str
@@ -90,6 +96,7 @@ class SubagentDescriptor:
     default_enabled: bool = True
     mandatory: tuple[str, ...] = ()
     dispatcher_notes: str = ""
+    harness: str = "claude-code"
     prompt_body: str = ""
     source_path: Path | None = None
 
@@ -207,13 +214,20 @@ class Subagent:
         self.name = descriptor.name
         self.project_path = project_path
         self.verbose_logs = verbose_logs
+        cfg = load_project_config(project_path)
         if model is not None:
             self.model = model
         else:
-            cfg = load_project_config(project_path)
             self.model = resolve_subagent_model(
                 cfg, self.name, fallback=DEFAULT_MODEL,
             )
+        # Resolve the harness for this subagent: per-subagent /
+        # loop-wide config override > descriptor frontmatter >
+        # "claude-code". With no config keys this is "claude-code", so
+        # the factory short-circuits to the legacy ClaudeAgent below.
+        self.harness = resolve_subagent_harness(
+            cfg, self.name, descriptor_harness=descriptor.harness,
+        )
 
     # ── prompt envelope ─────────────────────────────────────────────
 
@@ -293,7 +307,9 @@ class Subagent:
         prompt = self.build_prompt(
             directive=directive, slug=slug, iter_num=iter_num,
         )
-        agent = ClaudeAgent(model=self.model, role=self.name)
+        agent = build_runner(
+            role=self.name, model=self.model, harness=self.harness,
+        )
 
         start_ts = _now_iso()
         if dispatch_log is not None:

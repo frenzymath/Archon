@@ -98,6 +98,7 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
 
     mandatory = _parse_mandatory(path, meta.get("mandatory"))
     dispatcher_notes = _parse_dispatcher_notes(path, meta.get("dispatcher_notes"))
+    harness = _parse_harness(path, meta.get("harness"))
 
     return SubagentDescriptor(
         name=name,
@@ -108,6 +109,7 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
         default_enabled=bool(meta.get("default_enabled", True)),
         mandatory=mandatory,
         dispatcher_notes=dispatcher_notes,
+        harness=harness,
         prompt_body=text[m.end():],
         source_path=path,
     )
@@ -167,6 +169,25 @@ def _parse_dispatcher_notes(path: Path, raw: object) -> str:
         return "\n".join(out)
     raise ValueError(
         f"{path}: `dispatcher_notes` must be a string, list of strings, or omitted."
+    )
+
+
+def _parse_harness(path: Path, raw: object) -> str:
+    """Parse the optional ``harness`` frontmatter field.
+
+    Accepts:
+    * Missing / null / empty → ``"claude-code"`` (the built-in default).
+    * Non-empty string → returned verbatim.
+
+    Raises ValueError on other shapes so a typo (e.g. a list) doesn't
+    silently fall back to the default engine.
+    """
+    if raw is None or raw == "":
+        return "claude-code"
+    if isinstance(raw, str):
+        return raw
+    raise ValueError(
+        f"{path}: `harness` must be a non-empty string or omitted."
     )
 
 
