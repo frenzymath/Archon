@@ -135,6 +135,58 @@ class InitCommandFreshFlagTest(unittest.TestCase):
         self.assertTrue(ctx.fresh)
 
 
+class CopyPromptsVariantsTest(unittest.TestCase):
+    """``CopyPromptsStep`` must also copy the ``variants/*.md`` subdir.
+
+    The codex prompt variant ships at
+    ``.archon-src/prompts/variants/codex.md``; an init (fresh or merge)
+    must land it at ``.archon/prompts/variants/codex.md`` so an
+    existing-project re-init picks it up and the runner's local-override
+    resolution has something to find / let the user edit.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.addCleanup(_rmtree, self._tmp)
+        self.project = Path(self._tmp)
+        (self.project / ".archon" / "prompts").mkdir(parents=True)
+        self.prompts_src = data_path("prompts")
+
+    def _ctx(self, *, fresh: bool) -> InitContext:
+        return InitContext(
+            project_path=self.project,
+            state_dir=self.project / ".archon",
+            fresh=fresh,
+            model="dummy",
+        )
+
+    def test_fresh_copies_variant_files(self):
+        CopyPromptsStep(self._ctx(fresh=True)).run()
+        for f in sorted(self.prompts_src.glob("variants/*.md")):
+            dst = self.project / ".archon" / "prompts" / "variants" / f.name
+            self.assertTrue(dst.is_file(), f"{dst} should exist after fresh init")
+            self.assertEqual(dst.read_bytes(), f.read_bytes())
+
+    def test_merge_adds_new_variant_to_existing_project(self):
+        # Simulate an existing project that has top-level prompts but no
+        # variants dir yet (pre-variants layout). A non-fresh re-init must
+        # add the variant without touching anything else.
+        CopyPromptsStep(self._ctx(fresh=False)).run()
+        dst = self.project / ".archon" / "prompts" / "variants" / "codex.md"
+        self.assertTrue(dst.is_file())
+        self.assertNotIn("\x00", dst.read_text(encoding="utf-8"))
+
+    def test_merge_preserves_user_edited_variant(self):
+        vdir = self.project / ".archon" / "prompts" / "variants"
+        vdir.mkdir(parents=True)
+        (vdir / "codex.md").write_text("USER EDITED VARIANT\n", encoding="utf-8")
+        CopyPromptsStep(self._ctx(fresh=False)).run()
+        self.assertEqual(
+            (vdir / "codex.md").read_text(encoding="utf-8"),
+            "USER EDITED VARIANT\n",
+        )
+
+
 def _rmtree(path: str) -> None:
     import shutil
     shutil.rmtree(path, ignore_errors=True)

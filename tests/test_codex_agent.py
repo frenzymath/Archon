@@ -20,13 +20,23 @@ Covers, without ever spawning ``codex``:
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
+import archon.commands.init.utils as init_utils
 from archon.agent import ClaudeAgent, build_runner
-from archon.agents.codex import CodexAgent, PartialGatewayConfigError
+from archon.agents.codex import (
+    CodexAgent,
+    LeanLspMcpUnavailableError,
+    PartialGatewayConfigError,
+    UnknownMcpBundleError,
+    resolve_prompt_variant,
+)
 from archon.commands.tooling.project_config import (
     HarnessDescriptor,
     ProjectConfig,
@@ -402,6 +412,242 @@ class CodexLiveSmokeTest(unittest.TestCase):
                 max_attempts=1,
             )
             self.assertIsInstance(ok, bool)
+
+
+# ── HarnessDescriptor.mcp parsing ────────────────────────────────────
+
+
+class CodexMcpDescriptorParseTest(unittest.TestCase):
+    def test_mcp_string_parses_to_tuple(self):
+        cfg = ProjectConfig(
+            raw={"harnesses": {"codex-gpt": {"runner": "codex", "mcp": "lean-lsp"}}}
+        )
+        d = load_harness_descriptor(cfg, "codex-gpt")
+        self.assertEqual(d.mcp, ("lean-lsp",))
+
+    def test_mcp_list_parses_to_tuple(self):
+        # The list shape is accepted for future multi-server bundles.
+        cfg = ProjectConfig(
+            raw={"harnesses": {"c": {"runner": "codex", "mcp": ["lean-lsp", "other"]}}}
+        )
+        d = load_harness_descriptor(cfg, "c")
+        self.assertEqual(d.mcp, ("lean-lsp", "other"))
+
+    def test_mcp_absent_defaults_empty(self):
+        # The whole point of the default: absent ⇒ no MCP (current behavior).
+        d = _codex_descriptor()
+        self.assertEqual(d.mcp, ())
+
+    def test_mcp_empty_string_is_no_mcp(self):
+        cfg = ProjectConfig(raw={"harnesses": {"c": {"runner": "codex", "mcp": ""}}})
+        d = load_harness_descriptor(cfg, "c")
+        self.assertEqual(d.mcp, ())
+
+    def test_descriptor_with_mcp_is_picklable(self):
+        cfg = ProjectConfig(
+            raw={"harnesses": {"c": {"runner": "codex", "mcp": "lean-lsp"}}}
+        )
+        d = load_harness_descriptor(cfg, "c")
+        d2 = pickle.loads(pickle.dumps(d))
+        self.assertEqual(d2.mcp, ("lean-lsp",))
+
+
+# ── CodexAgent MCP -c overrides (Task A) ─────────────────────────────
+
+
+def _codex_mcp_descriptor() -> HarnessDescriptor:
+    cfg = {
+        "harnesses": {
+            "codex-gpt": {**CODEX_CFG["harnesses"]["codex-gpt"], "mcp": "lean-lsp"}
+        }
+    }
+    return load_harness_descriptor(ProjectConfig(raw=cfg), "codex-gpt")
+
+
+class CodexMcpArgvTest(unittest.TestCase):
+    def setUp(self):
+        self.agent = CodexAgent(descriptor=_codex_mcp_descriptor(), role="prover")
+        self.env_source = {
+            "CODEX_BASE_URL": "https://apicz.boyuerichdata.com/v1",
+            "CZ_API_KEY": "SECRET-KEY-123",
+        }
+        # The data_path-resolved lean-lsp-mcp dir (same as the init step).
+        self.mcp_dir = str(Path(init_utils.data_path("tools/lean-lsp-mcp")))
+
+    def _value_for(self, argv, key):
+        """Find the JSON value emitted for a given `-c key=...` flag."""
+        prefix = f"{key}="
+        for a in argv:
+            if a.startswith(prefix):
+                return json.loads(a[len(prefix):])
+        return None
+
+    def test_five_lean_lsp_overrides_present(self):
+        argv = self.agent.build_argv(
+            "p", env_source=self.env_source, lake_root="/proj/lake"
+        )
+        base = "mcp_servers.archon-lean-lsp"
+        self.assertEqual(self._value_for(argv, f"{base}.command"), "uv")
+        self.assertEqual(
+            self._value_for(argv, f"{base}.args"),
+            ["run", "--directory", self.mcp_dir, "lean-lsp-mcp"],
+        )
+        self.assertEqual(
+            self._value_for(argv, f"{base}.env.LEAN_PROJECT_PATH"), "/proj/lake"
+        )
+        self.assertIs(self._value_for(argv, f"{base}.required"), True)
+        self.assertEqual(self._value_for(argv, f"{base}.tool_timeout_sec"), 600)
+
+    def test_args_point_at_data_path(self):
+        argv = self.agent.build_argv(
+            "p", env_source=self.env_source, lake_root="/proj/lake"
+        )
+        args = self._value_for(argv, "mcp_servers.archon-lean-lsp.args")
+        # The --directory must be the data_path-resolved lean-lsp-mcp dir.
+        self.assertEqual(args[args.index("--directory") + 1], self.mcp_dir)
+
+    def test_lake_root_flows_into_lean_project_path(self):
+        argv = self.agent.build_argv(
+            "p", env_source=self.env_source, lake_root=Path("/some/other/root")
+        )
+        self.assertEqual(
+            self._value_for(
+                argv, "mcp_servers.archon-lean-lsp.env.LEAN_PROJECT_PATH"
+            ),
+            "/some/other/root",
+        )
+
+    def test_mcp_flags_are_minus_c_pairs(self):
+        # Each override is rendered as a `-c key=value` pair (TOML literal).
+        argv = self.agent.build_argv(
+            "p", env_source=self.env_source, lake_root="/r"
+        )
+        for i, a in enumerate(argv):
+            if a.startswith("mcp_servers.archon-lean-lsp"):
+                self.assertEqual(argv[i - 1], "-c")
+
+    def test_key_still_not_in_argv_with_mcp_on(self):
+        # MCP wiring must not regress the secret-out-of-argv invariant.
+        argv = self.agent.build_argv(
+            "p", env_source=self.env_source, lake_root="/r"
+        )
+        self.assertFalse(any("SECRET-KEY-123" in a for a in argv))
+
+    def test_no_mcp_flags_when_unset(self):
+        # The default descriptor (no mcp) renders zero mcp_servers flags —
+        # identical to today.
+        agent = CodexAgent(descriptor=_codex_descriptor(), role="prover")
+        argv = agent.build_argv(
+            "p", env_source=self.env_source, lake_root="/r"
+        )
+        self.assertFalse(any("mcp_servers" in a for a in argv))
+
+    def test_unknown_bundle_raises(self):
+        d = HarnessDescriptor(name="c", runner="codex", mcp=("frobnicate",))
+        agent = CodexAgent(descriptor=d)
+        with self.assertRaises(UnknownMcpBundleError) as cm:
+            agent.build_argv("p", env_source={}, lake_root="/r")
+        self.assertIn("frobnicate", str(cm.exception))
+
+    def test_missing_lean_lsp_dir_raises(self):
+        # Monkeypatch data_path to a missing path → fail-closed rather than
+        # render a broken server (mirrors the harness's file check).
+        d = HarnessDescriptor(name="c", runner="codex", mcp=("lean-lsp",))
+        agent = CodexAgent(descriptor=d)
+        orig = init_utils.data_path
+        init_utils.data_path = lambda sub="": Path("/no/such/dir/" + sub)
+        try:
+            with self.assertRaises(LeanLspMcpUnavailableError) as cm:
+                agent.build_argv("p", env_source={}, lake_root="/r")
+            self.assertIn("does not exist", str(cm.exception))
+        finally:
+            init_utils.data_path = orig
+
+    def test_lake_root_defaults_to_cwd_when_omitted(self):
+        # A direct build_argv caller that omits lake_root still renders a
+        # valid server (LEAN_PROJECT_PATH = process cwd); run() always
+        # supplies its cwd, so this is just the last-resort fallback.
+        argv = self.agent.build_argv("p", env_source=self.env_source)
+        val = self._value_for(
+            argv, "mcp_servers.archon-lean-lsp.env.LEAN_PROJECT_PATH"
+        )
+        self.assertEqual(val, str(Path.cwd()))
+
+
+# ── prompt_variant resolution + append (Task B) ──────────────────────
+
+
+class CodexPromptVariantTest(unittest.TestCase):
+    def test_bundled_codex_variant_resolves(self):
+        # The shipped codex variant is found via the bundled data path.
+        text = resolve_prompt_variant("codex")
+        self.assertIsNotNone(text)
+        self.assertIn("apply_patch", text)
+        self.assertIn("archon-lean-lsp", text)
+
+    def test_missing_variant_resolves_none(self):
+        self.assertIsNone(resolve_prompt_variant("does-not-exist-xyz"))
+
+    def test_append_when_variant_set(self):
+        d = HarnessDescriptor(name="c", runner="codex", prompt_variant="codex")
+        agent = CodexAgent(descriptor=d)
+        with tempfile.TemporaryDirectory() as proj:
+            out = agent._apply_prompt_variant("BASE", project_path=Path(proj))
+        self.assertTrue(out.startswith("BASE"))
+        self.assertIn("Faithfulness", out)
+        self.assertGreater(len(out), len("BASE"))
+
+    def test_unset_variant_leaves_prompt_unchanged(self):
+        agent = CodexAgent(descriptor=HarnessDescriptor(name="c", runner="codex"))
+        with tempfile.TemporaryDirectory() as proj:
+            self.assertEqual(
+                agent._apply_prompt_variant("BASE", project_path=Path(proj)),
+                "BASE",
+            )
+
+    def test_missing_variant_file_warns_and_continues(self):
+        # prompt_variant names a file that doesn't exist anywhere → the run
+        # must not crash; the prompt comes back unchanged.
+        d = HarnessDescriptor(
+            name="c", runner="codex", prompt_variant="nope-missing-variant"
+        )
+        agent = CodexAgent(descriptor=d)
+        with tempfile.TemporaryDirectory() as proj:
+            out = agent._apply_prompt_variant("BASE", project_path=Path(proj))
+        self.assertEqual(out, "BASE")
+
+    def test_append_is_deterministic(self):
+        d = HarnessDescriptor(name="c", runner="codex", prompt_variant="codex")
+        agent = CodexAgent(descriptor=d)
+        with tempfile.TemporaryDirectory() as proj:
+            a = agent._apply_prompt_variant("BASE", project_path=Path(proj))
+            b = agent._apply_prompt_variant("BASE", project_path=Path(proj))
+        self.assertEqual(a, b)
+
+    def test_project_local_variant_wins_over_bundled(self):
+        # A project-local .archon/prompts/variants/codex.md overrides the
+        # bundled copy (local-overrides-global, like Archon's other prompts).
+        d = HarnessDescriptor(name="c", runner="codex", prompt_variant="codex")
+        agent = CodexAgent(descriptor=d)
+        with tempfile.TemporaryDirectory() as proj:
+            vdir = Path(proj) / ".archon" / "prompts" / "variants"
+            vdir.mkdir(parents=True)
+            (vdir / "codex.md").write_text(
+                "PROJECT-LOCAL-OVERRIDE-MARKER", encoding="utf-8"
+            )
+            out = agent._apply_prompt_variant("BASE", project_path=Path(proj))
+        self.assertIn("PROJECT-LOCAL-OVERRIDE-MARKER", out)
+        # The bundled content must NOT also be appended.
+        self.assertNotIn("apply_patch", out)
+
+    def test_resolve_prompt_variant_prefers_project_local(self):
+        with tempfile.TemporaryDirectory() as proj:
+            vdir = Path(proj) / ".archon" / "prompts" / "variants"
+            vdir.mkdir(parents=True)
+            (vdir / "codex.md").write_text("LOCAL", encoding="utf-8")
+            self.assertEqual(
+                resolve_prompt_variant("codex", project_path=Path(proj)), "LOCAL"
+            )
 
 
 if __name__ == "__main__":
