@@ -38,7 +38,10 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from archon import log
 
 if TYPE_CHECKING:
-    from archon.commands.tooling.project_config import ProjectConfig
+    from archon.commands.tooling.project_config import (
+        HarnessDescriptor,
+        ProjectConfig,
+    )
 
 
 # The built-in harness name: the claude-code engine that has always been
@@ -670,97 +673,26 @@ class ClaudeAgent:
             jsonl=jsonl,
         )
 
-        cancelled = False
-        idle_timeout_hit = False
         stderr_dest = raw_log if verbose_logs else os.devnull
-        with open(stderr_dest, "a") as stderr_file:
-            claude_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-                cwd=cwd,
-                env=env,
-            )
-            parser_proc = subprocess.Popen(
-                [sys.executable, "-u", "-c", parser_script],
-                stdin=claude_proc.stdout,
-                cwd=cwd,
-            )
-            assert claude_proc.stdout is not None
-            claude_proc.stdout.close()
+        result = supervise_streamed_run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            jsonl_path=jsonl_path,
+            parser_cmd=[sys.executable, "-u", "-c", parser_script],
+            stderr_dest=stderr_dest,
+            cancel_event=cancel_event,
+            idle_timeout_s=idle_timeout_s,
+            attempt=attempt,
+            role=self.role,
+            on_idle_timeout=lambda idle_s, att: _emit_idle_timeout(
+                jsonl, idle_s, att
+            ),
+        )
 
-            # Idle-watchdog state. We use the JSONL file's mtime as the
-            # liveness signal because the parser flushes on every event
-            # — cheap, no extra IPC, and survives even if claude's
-            # stdout is buffered upstream.
-            last_activity = time.monotonic()
-            try:
-                last_mtime = jsonl_path.stat().st_mtime
-            except OSError:
-                last_mtime = 0.0
-
-            # Poll the parser instead of blocking on .wait() so we can
-            # honour cancel_event from another thread (multilane uses
-            # this to kill slow lanes after another lane wins) and the
-            # idle watchdog. Tick every 200 ms — fine-grained enough to
-            # feel responsive, coarse enough to be cheap.
-            while parser_proc.poll() is None:
-                if cancel_event is not None and cancel_event.is_set():
-                    cancelled = True
-                    _terminate_process(claude_proc, sig=signal.SIGTERM)
-                    break
-
-                if idle_timeout_s is not None:
-                    try:
-                        mtime = jsonl_path.stat().st_mtime
-                    except OSError:
-                        mtime = last_mtime
-                    if mtime > last_mtime:
-                        last_mtime = mtime
-                        last_activity = time.monotonic()
-                    elif time.monotonic() - last_activity > idle_timeout_s:
-                        idle_timeout_hit = True
-                        log.warn(
-                            f"No JSONL activity for {idle_timeout_s}s on "
-                            f"attempt {attempt}; terminating claude."
-                        )
-                        _emit_idle_timeout(jsonl, idle_timeout_s, attempt)
-                        _terminate_process(claude_proc, sig=signal.SIGTERM)
-                        break
-
-                time.sleep(0.2)
-
-            if cancelled or idle_timeout_hit:
-                # Give claude a moment to tear down on its own, then
-                # escalate to SIGKILL. The parser will exit on its own
-                # once claude's stdout closes.
-                try:
-                    claude_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(claude_proc, sig=signal.SIGKILL)
-                    claude_proc.wait()
-                try:
-                    parser_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(parser_proc, sig=signal.SIGKILL)
-                    parser_proc.wait()
-            else:
-                # Normal teardown: parser already exited (saw
-                # session_end). If claude lingers (slow MCP teardown,
-                # for example), signal it.
-                try:
-                    claude_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(claude_proc, sig=signal.SIGTERM)
-                    try:
-                        claude_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        _terminate_process(claude_proc, sig=signal.SIGKILL)
-                        claude_proc.wait()
-
-        if cancelled:
+        if result.cancelled:
             return RunOutcome.CANCELLED
-        if idle_timeout_hit:
+        if result.idle_timeout_hit:
             return RunOutcome.IDLE_TIMEOUT
 
         # Some lanes legitimately end with a non-zero return even though
@@ -771,7 +703,7 @@ class ClaudeAgent:
             session_end_indicates_success,
         )
 
-        if claude_proc.returncode == 0:
+        if result.returncode == 0:
             return RunOutcome.SUCCESS
         session_end = read_last_session_end(jsonl)
         if session_end_indicates_success(session_end):
@@ -791,6 +723,186 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
+@dataclass
+class SupervisionResult:
+    """Outcome of a single :func:`supervise_streamed_run` invocation.
+
+    The CLI-agnostic supervisor reports only the mechanical facts of the
+    run; mapping them onto a :class:`RunOutcome` (success vs. failure vs.
+    rate-limit, etc.) is the calling agent's job, since that depends on
+    the engine's own exit-code / log semantics.
+
+    Attributes:
+        returncode: the agent process's exit code (``None`` only if it
+            could not be reaped, which the supervisor never lets happen).
+        cancelled: ``cancel_event`` fired and the process was torn down.
+        idle_timeout_hit: the watchdog killed the process after
+            ``idle_timeout_s`` of zero JSONL activity.
+    """
+
+    returncode: int | None
+    cancelled: bool
+    idle_timeout_hit: bool
+
+
+def supervise_streamed_run(
+    agent_cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None,
+    jsonl_path: Path,
+    activity_path: Path | None = None,
+    parser_cmd: list[str] | None = None,
+    stdout_dest: str | None = None,
+    stderr_dest: str,
+    cancel_event: "threading.Event | None" = None,
+    idle_timeout_s: float | None = 900,
+    attempt: int = 1,
+    role: str | None = None,
+    on_idle_timeout=None,
+) -> SupervisionResult:
+    """Spawn one streaming agent process and supervise it to completion.
+
+    This is the CLI-agnostic supervision core shared by
+    :class:`ClaudeAgent` and :class:`~archon.agents.codex.CodexAgent`.
+    Both engines stream JSONL events line-by-line; the only differences
+    are how the command is built and how success is judged, so everything
+    *between* (process spawn + cancel handling + idle watchdog + ordered
+    teardown) lives here exactly once.
+
+    The agent process is launched with ``stdout`` either piped into
+    ``parser_cmd`` (claude's ``stream-json`` normaliser) or redirected to
+    ``stdout_dest`` (codex writes its native JSONL straight to disk).
+    Exactly one of ``parser_cmd`` / ``stdout_dest`` must be given. The
+    process whose lifetime the watchdog loop polls is the parser when
+    present, else the agent itself.
+
+    The idle watchdog uses the mtime of ``activity_path`` (defaults to
+    ``jsonl_path``) as a cheap liveness signal: every emitted event
+    flushes the JSONL, so a stalled provider stops bumping the mtime and
+    is killed after ``idle_timeout_s`` seconds. ``on_idle_timeout`` is an
+    optional ``(idle_s, attempt) -> None`` callback fired just before the
+    kill (used to stamp an ``idle_timeout`` row into the log).
+
+    Returns a :class:`SupervisionResult`; the caller maps it to a
+    :class:`RunOutcome`.
+    """
+    if (parser_cmd is None) == (stdout_dest is None):
+        raise ValueError(
+            "supervise_streamed_run: pass exactly one of parser_cmd / stdout_dest"
+        )
+    watch_path = activity_path if activity_path is not None else jsonl_path
+
+    cancelled = False
+    idle_timeout_hit = False
+
+    with open(stderr_dest, "a") as stderr_file:
+        if parser_cmd is not None:
+            agent_proc = subprocess.Popen(
+                agent_cmd,
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                cwd=cwd,
+                env=env,
+            )
+            parser_proc: subprocess.Popen | None = subprocess.Popen(
+                parser_cmd,
+                stdin=agent_proc.stdout,
+                cwd=cwd,
+            )
+            assert agent_proc.stdout is not None
+            agent_proc.stdout.close()
+            watched = parser_proc
+        else:
+            stdout_file = open(stdout_dest, "a")  # type: ignore[arg-type]
+            agent_proc = subprocess.Popen(
+                agent_cmd,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                cwd=cwd,
+                env=env,
+            )
+            stdout_file.close()
+            parser_proc = None
+            watched = agent_proc
+
+        # Idle-watchdog state. We use the JSONL file's mtime as the
+        # liveness signal because each emitted event flushes the file —
+        # cheap, no extra IPC, and survives even if the agent's stdout is
+        # buffered upstream.
+        last_activity = time.monotonic()
+        try:
+            last_mtime = watch_path.stat().st_mtime
+        except OSError:
+            last_mtime = 0.0
+
+        # Poll instead of blocking on .wait() so we can honour
+        # cancel_event from another thread (multilane uses this to kill
+        # slow lanes after another lane wins) and the idle watchdog. Tick
+        # every 200 ms — fine-grained enough to feel responsive, coarse
+        # enough to be cheap.
+        while watched.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                _terminate_process(agent_proc, sig=signal.SIGTERM)
+                break
+
+            if idle_timeout_s is not None:
+                try:
+                    mtime = watch_path.stat().st_mtime
+                except OSError:
+                    mtime = last_mtime
+                if mtime > last_mtime:
+                    last_mtime = mtime
+                    last_activity = time.monotonic()
+                elif time.monotonic() - last_activity > idle_timeout_s:
+                    idle_timeout_hit = True
+                    log.warn(
+                        f"No JSONL activity for {idle_timeout_s}s on "
+                        f"attempt {attempt}; terminating agent."
+                    )
+                    if on_idle_timeout is not None:
+                        on_idle_timeout(idle_timeout_s, attempt)
+                    _terminate_process(agent_proc, sig=signal.SIGTERM)
+                    break
+
+            time.sleep(0.2)
+
+        if cancelled or idle_timeout_hit:
+            # Give the agent a moment to tear down on its own, then
+            # escalate to SIGKILL. A piped parser exits on its own once
+            # the agent's stdout closes.
+            try:
+                agent_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _terminate_process(agent_proc, sig=signal.SIGKILL)
+                agent_proc.wait()
+            if parser_proc is not None:
+                try:
+                    parser_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(parser_proc, sig=signal.SIGKILL)
+                    parser_proc.wait()
+        else:
+            # Normal teardown: the watched process already exited. If the
+            # agent lingers (slow MCP teardown, for example), signal it.
+            try:
+                agent_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _terminate_process(agent_proc, sig=signal.SIGTERM)
+                try:
+                    agent_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(agent_proc, sig=signal.SIGKILL)
+                    agent_proc.wait()
+
+    return SupervisionResult(
+        returncode=agent_proc.returncode,
+        cancelled=cancelled,
+        idle_timeout_hit=idle_timeout_hit,
+    )
+
+
 # ── runner factory ────────────────────────────────────────────────────
 
 
@@ -804,35 +916,44 @@ def build_runner(
     model: str = DEFAULT_MODEL,
     cfg: "ProjectConfig | None" = None,
     harness: str | None = None,
+    descriptor: "HarnessDescriptor | None" = None,
 ) -> AgentRunner:
     """Build the :class:`AgentRunner` for a responsibility.
 
     This is the single decision point for routing a role to an engine.
-    In Phase 1 the only registered runner is ``"claude-code"``, so this
-    always returns a :class:`ClaudeAgent` — but it routes *through* the
-    resolved harness so Phase 2 can register codex/gemini runners here
-    without touching any call site.
+    Registered runners: ``"claude-code"`` (the built-in
+    :class:`ClaudeAgent`) and ``"codex"`` (:class:`~archon.agents.codex.CodexAgent`,
+    Phase 2). An unknown runner raises :class:`UnknownHarnessError`.
 
-    Resolution:
+    Resolution of *which* harness:
 
-    * ``harness`` (if given) is used verbatim — callers that already
-      resolved the harness name (e.g. via :func:`resolve_role_harness`)
-      pass it directly.
-    * otherwise ``cfg`` + ``role`` are resolved with
+    * ``descriptor`` (if given) is used verbatim — callers that already
+      resolved the picklable :class:`HarnessDescriptor` at the dispatch
+      site (the prover pool / subagent / lane) pass it directly, so the
+      worker builds a fully-configured runner (model / effort / gateway)
+      without re-reading config.
+    * else ``harness`` (if given) is the harness name — resolved to a
+      descriptor via ``cfg`` when present, else used as a bare name.
+    * else ``cfg`` + ``role`` are resolved with
       :func:`resolve_role_harness` (``loop.roles.<role>`` >
       ``loop.harness`` > ``"claude-code"``).
-    * with neither, the harness is the built-in ``"claude-code"``.
+    * with none of those, the harness is the built-in ``"claude-code"``.
 
     Zero-regression invariant: when the resolved harness is
     ``"claude-code"`` AND no explicit ``harnesses."claude-code"`` entry
     is configured, this returns exactly ``ClaudeAgent(model=model,
-    role=role)`` — the same object the call site built before this PR,
+    role=role)`` — the same object the call site built before the router,
     with no new parsing on the default path.
 
     Raises:
-        UnknownHarnessError: the resolved harness names a runner other
-            than ``"claude-code"`` (none exist yet in this version).
+        UnknownHarnessError: the resolved harness names a runner that has
+            no implementation in this version.
     """
+    # If a fully-resolved descriptor was handed in, dispatch on it
+    # directly — no name resolution, no config re-read.
+    if descriptor is not None:
+        return _runner_from_descriptor(descriptor, model=model, role=role)
+
     # Resolve the harness name.
     if harness is None:
         if cfg is not None:
@@ -857,27 +978,46 @@ def build_runner(
     if harness == DEFAULT_HARNESS and not has_override:
         return ClaudeAgent(model=model, role=role)
 
-    # A configured harness descriptor: validate its runner. Phase 1 only
-    # knows how to build the claude-code runner; anything else is a
-    # misconfiguration we refuse loudly rather than silently downgrade.
+    # A configured harness descriptor: load + dispatch on its runner.
     from archon.commands.tooling.project_config import load_harness_descriptor
 
-    descriptor = load_harness_descriptor(cfg, harness) if cfg is not None else None
-    runner = descriptor.runner if descriptor is not None else harness
-    if runner != DEFAULT_HARNESS:
-        raise UnknownHarnessError(
-            f"Harness {harness!r} requests runner {runner!r}, but the only "
-            f"runner available in this version of Archon is "
-            f"{DEFAULT_HARNESS!r}. (codex / gemini runners arrive in a "
-            f"later phase.) Remove the harness override or set its runner "
-            f"to {DEFAULT_HARNESS!r}."
-        )
+    resolved = load_harness_descriptor(cfg, harness) if cfg is not None else None
+    if resolved is None:
+        # No cfg to load from, but a non-default harness name was passed
+        # directly (e.g. by a pool worker before descriptors were
+        # threaded). Synthesize a minimal descriptor whose runner is the
+        # name itself, so an unknown name still raises clearly.
+        from archon.commands.tooling.project_config import HarnessDescriptor
 
-    # An explicit claude-code descriptor: honour its model override if it
-    # set one, otherwise keep the caller's model.
-    if descriptor is not None and descriptor.model:
-        model = descriptor.model
-    return ClaudeAgent(model=model, role=role)
+        resolved = HarnessDescriptor(name=harness, runner=harness)
+    return _runner_from_descriptor(resolved, model=model, role=role)
+
+
+def _runner_from_descriptor(
+    descriptor: "HarnessDescriptor", *, model: str, role: str,
+) -> AgentRunner:
+    """Construct the engine runner named by a resolved descriptor.
+
+    The single place that maps ``descriptor.runner`` → a concrete
+    :class:`AgentRunner`. ``claude-code`` honours the descriptor's model
+    override (else keeps ``model``); ``codex`` is built straight from the
+    descriptor (model / effort / sandbox / gateway all live there).
+    """
+    runner = descriptor.runner
+    if runner == DEFAULT_HARNESS:
+        if descriptor.model:
+            model = descriptor.model
+        return ClaudeAgent(model=model, role=role)
+    if runner == "codex":
+        from archon.agents.codex import CodexAgent
+
+        return CodexAgent(descriptor=descriptor, role=role)
+    raise UnknownHarnessError(
+        f"Harness {descriptor.name!r} requests runner {runner!r}, but the "
+        f"runners available in this version of Archon are "
+        f"{DEFAULT_HARNESS!r} and 'codex'. Remove the harness override or "
+        f"set its runner to a supported value."
+    )
 
 
 __all__ = [
@@ -886,6 +1026,8 @@ __all__ = [
     "DEFAULT_HARNESS",
     "DEFAULT_MODEL",
     "RunOutcome",
+    "SupervisionResult",
     "UnknownHarnessError",
     "build_runner",
+    "supervise_streamed_run",
 ]
