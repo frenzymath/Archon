@@ -42,7 +42,12 @@ from .status import dag_is_complete
 # agent's job is to dispatch these; gating them behind config made a
 # fresh `archon dag` run dispatch nothing. Forced on via the
 # ARCHON_FORCE_SUBAGENTS env var (see project_config.apply_forced_subagents).
-DAG_SUBAGENTS = ("blueprint-writer", "blueprint-reviewer", "reference-retriever")
+DAG_SUBAGENTS = (
+    "blueprint-writer",
+    "blueprint-reviewer",
+    "reference-retriever",
+    "strategy-critic",
+)
 
 
 def _ensure_dag_prompt(state_dir: Path) -> None:

@@ -1223,12 +1223,10 @@ def _leandag_block(project_path: Path) -> str:
         The blueprint DAG below is computed by `leandag` from the current
         `.lean` files and blueprint chapters. Close the gaps it lists:
         dispatch a `blueprint-writer` for uncovered declarations, and fix
-        broken `\\uses{}` refs. For the full picture drive the `leandag` CLI
-        directly — `leandag build --html`, `leandag stats`, `leandag focus`,
-        `leandag show gaps`, `leandag query` (see prompts/dag.md for the
-        cadence). Or re-check this archon-framed summary with
-        `python3 .claude/tools/archon-leandag.py` (add `--json` for machine
-        output).
+        broken `\\uses{}` refs. To re-query the live DAG, drive the `leandag`
+        CLI directly — `leandag build --html`, `leandag stats`, `leandag
+        focus`, `leandag show gaps`, `leandag query` (see prompts/dag.md for
+        the cadence).
 
         """) + body + "\n"
 

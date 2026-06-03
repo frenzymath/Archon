@@ -5,12 +5,16 @@ write_domain: "task_results/**"
 read_only: true
 can_spawn: false
 default_enabled: false
-mandatory: [plan]
+mandatory: [plan, dag]
 dispatcher_notes: |
-  - I am highly recommended every plan phase. When you do dispatch me,
-    do so AFTER you've finished writing / confirming STRATEGY.md and
-    BEFORE any writer / refactor / prover dispatch this iteration. My
-    verdict is what you act on before committing the iter's plan.
+  - I am highly recommended every plan phase, and every dag phase that
+    touched STRATEGY.md. When you do dispatch me, do so AFTER you've
+    finished writing / confirming STRATEGY.md and BEFORE any writer /
+    refactor / prover dispatch this iteration. My verdict is what you act
+    on before committing the iter's plan. (In dag mode there are no
+    provers yet — dispatch me after you've established/updated STRATEGY.md
+    and the blueprint, to confirm the strategy the blueprint serves is
+    sound and matches its canonical skeleton.)
 
     **You may skip me this iter when ALL of:**
       - STRATEGY.md is unchanged since the prior iter's verbatim

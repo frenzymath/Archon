@@ -120,6 +120,9 @@ class SkillsStep(InitStep):
             "archon-refactor-wrapper.py",
             "archon-analogy-wrapper.py",
             "archon-challenger-wrapper.py",
+            # Retired: the leandag gap wrapper. The DAG agent now uses the
+            # `leandag` CLI directly (single interface), so sweep stale copies.
+            "archon-leandag.py",
         }
 
         installed: set[str] = set()

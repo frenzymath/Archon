@@ -267,7 +267,6 @@ You may also use:
   - `leandag stats` — counts including `isolated` / `isolated_blueprint`.
   - `leandag show isolated` (or `leandag query --isolated [--type theorem] [--chapter <c>]`) — the isolated declarations, which you triage per node (below).
   - `leandag show gaps` — blueprint nodes missing a `\lean{}`.
-  - The archon-framed equivalent is `python3 .claude/tools/archon-leandag.py` (add `--json`).
 
 You do **not** modify any project file, including the blueprint. Even if you spot a clear fix, you report it; the plan agent decides what to do next iter.
 

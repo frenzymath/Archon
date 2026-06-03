@@ -282,7 +282,7 @@ leandag query --isolated --chapter <c>     # isolated nodes in your chapter (no 
 leandag show isolated                       # all isolated nodes, project-wide
 ```
 
-(The archon-framed equivalent is `python3 .claude/tools/archon-leandag.py [--json]`, which always works wherever the loop runs.)
+`leandag` is on the same PATH as `archon`; it is the one tool you use to query the DAG.
 
 What to do with the output, scoped to **your chapter**:
 

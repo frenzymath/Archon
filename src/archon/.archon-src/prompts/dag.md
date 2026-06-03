@@ -33,7 +33,8 @@ Some sources are genuinely unreachable: paywalled, offline, behind an API key yo
 - You do NOT fill proofs in Lean.
 - You do NOT add `\leanok` markers — those are earned by a sorry-free Lean proof and set by the deterministic `sync_leanok` phase. (`\mathlibok` is different: you and your writers MAY mark it on explicit Mathlib dependency anchors, per the remark above.)
 - You do NOT run `lake build` or any Lean compilation.
-- You do NOT write to `PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, or `task_done.md`. (These are `archon loop`-owned.)
+- You **own and maintain `.archon/STRATEGY.md`** (the long-arc strategy the blueprint serves — see "Long-arc strategy" below). You run before `archon loop`, so you establish it and the loop's planner continues it.
+- You **maintain `.archon/PROGRESS.md`'s objectives** so they stay consistent with the strategy and blueprint you produce — while blueprinting you may arrive at better objectives than the initial ones, and the loop's planner picks up from what you leave here. You do NOT write `task_pending.md` or `task_done.md` (the prover task queue), and you do NOT fabricate prover-execution state inside PROGRESS.md (build status, `\leanok`, attempt history) — that part is the loop's.
 
 ## Understanding the project scope
 
@@ -42,8 +43,10 @@ Before writing any blueprint content, read:
 1. **Your invocation prompt** — it contains injected blocks: the Lean file list, existing chapters, goal description (if present), references summary, blueprint-doctor findings, and prior iter sidecars.
 2. **`.lean` files** (if lean_aware) — read them to extract declaration signatures. Look for `sorry` stubs and docstrings that describe what each declaration should say mathematically.
 3. **`PROJECT_GOAL.md` / `ARCHON_GOAL.md`** (if present) — high-level description of what the project is formalizing.
-4. **`references/`** — the project's source material. Read `references/summary.md` first, then the relevant source files for declarations you're about to blueprint.
-5. **Existing blueprint chapters** — understand what is already there before writing more.
+4. **`.archon/STRATEGY.md`** (if present) — the long-arc strategy. Read it early; you maintain it (see "Long-arc strategy"). The blueprint you build must serve this strategy, and the strategy must reflect the routes the blueprint takes — keep the two consistent.
+5. **`.archon/PROGRESS.md`** (if present) — the current prover objectives and per-file state. Read it for alignment (don't re-blueprint what's already done), and **keep its objectives consistent with the strategy and blueprint you produce** — if your work yields a better plan, update the objectives here too (see "Long-arc strategy"). Don't overwrite or fabricate prover-execution state you can't know.
+6. **`references/`** — the project's source material. Read `references/summary.md` first, then the relevant source files for declarations you're about to blueprint.
+7. **Existing blueprint chapters** — understand what is already there before writing more.
 
 ## Planning the chapter structure
 
@@ -53,6 +56,14 @@ The blueprint chapter structure mirrors the Lean file structure:
 - When several related Lean files belong to one mathematical topic, use a **consolidated chapter** by declaring at the top: `% archon:covers Foo/Bar.lean Foo/Baz.lean`
 
 Decide the chapter structure before dispatching writers. Group declarations mathematically, not mechanically. A consolidated chapter that covers 3–5 tightly related files is better than 5 thin chapters that just forward to it.
+
+## Long-arc strategy (`.archon/STRATEGY.md`)
+
+You function like the loop's plan agent for strategy: **`.archon/STRATEGY.md` is the living arc of how the project gets from the current state to "complete"**, and you establish and maintain it so the loop's planner can continue it. The blueprint is the *roadmap*; STRATEGY.md is the *plan that chose the roadmap's routes*. Keep them consistent — every route the strategy names must have blueprint coverage, and every chapter you write must serve a phase the strategy lists.
+
+- **Read it early**; update it when the strategy itself changes (route swap, phase split/merge, a new Mathlib gap discovered, a resolved/new strategic question). Follow the same canonical skeleton the plan agent uses — it is documented in `.archon/prompts/plan.md` under its "Long-arc Strategy" section; read that for the exact headings/format when creating or restructuring STRATEGY.md. Keep the whole file human-readable and bounded (~250 lines).
+- Keep the goal, `STRATEGY.md`, the blueprint, and `PROGRESS.md`'s objectives **mutually consistent**. While blueprinting you will often arrive at a *better plan and better objectives than the initial ones* — when you do, propagate the change across all of them: update `STRATEGY.md` (the arc), the blueprint (the roadmap), and `PROGRESS.md`'s `## Current Objectives` (what the loop picks up next). Reconcile; don't let them drift. The only part of `PROGRESS.md` that is off-limits is the prover-execution state (build status, `\leanok`, attempt history) — the loop fills that. The objective format is documented in `.archon/prompts/plan.md`; match it (or the existing PROGRESS.md) so the loop continues seamlessly.
+- **Have it reviewed.** After you establish or change STRATEGY.md, dispatch **`strategy-critic`** (in your catalog) to render a fresh-context verdict on whether the strategy is sound and well-formatted, exactly as the plan agent does. Act on its verdict before declaring the iteration's work done.
 
 ## Your workflow each iteration
 
@@ -75,6 +86,7 @@ Use the subagents in your catalog:
 - **`blueprint-writer`** — dispatch one per chapter that needs writing/extending. Give precise directives. Writers must follow citation discipline (see their descriptor at `.archon/subagents/blueprint-writer.md`). NEVER instruct a writer to add `\leanok` markers.
 - **`blueprint-reviewer`** — dispatch after writers complete, to audit the whole blueprint for completeness and correctness. It also runs `leandag` to audit the dependency graph and reports a **`### Dependency & isolation findings`** section: each broken/missing `\uses{}` and each isolated node tagged `wire-up`, `remove`, or `keep`. Turn each `wire-up`/`remove` into a follow-up blueprint-writer directive scoped to that node's chapter. **Removal is gated:** a writer deletes an isolated block only when your directive explicitly authorizes it — so only authorize `remove` after you've confirmed the reviewer's call (it's not the goal, not a `\mathlibok` anchor, and nothing in the goal's closure needs it). When in doubt, prefer `wire-up` (add the missing edge) over deletion.
 - **`reference-retriever`** — dispatch when a chapter needs source material not yet in `references/`. Can also be dispatched by blueprint-writers mid-session when they discover a missing source.
+- **`strategy-critic`** — dispatch after you establish or change `.archon/STRATEGY.md` (see "Long-arc strategy"), before finishing the iteration. It reads STRATEGY.md with fresh context and renders a verdict on whether the strategy is sound and matches its canonical skeleton. Act on its verdict.
 
 The dispatcher pattern:
 ```
@@ -141,20 +153,16 @@ about what is missing — it is frequently wrong.** `leandag` is the only thing
 that knows where the holes are; consult it constantly and **use it
 substantially throughout every iteration.**
 
-You have it in two complementary forms.
-
-### 1. The `leandag` CLI — your primary instrument
-
-`leandag` is installed on the same PATH as `archon`, so you can drive it
-directly from Bash. It is far richer than any single injected summary — run it
-many times per iteration:
+Drive it through the **`leandag` CLI** — the one interface for querying the DAG.
+`leandag` is installed on the same PATH as `archon`, so you can run it directly
+from Bash, many times per iteration:
 
 | Command | When and why you run it |
 |---------|-------------------------|
 | `leandag build --html` | **First thing each iteration, and after every writer batch.** Re-parses every `.lean` file and blueprint chapter into the DAG, caches `.leandag/dag.json` (every other command reads this cache, so build first), and with `--html` regenerates `.leandag/graph.html` — the interactive dependency graph. |
 | `leandag stats` | Project overview: declaration counts, proved %, ready/gaps/unmatched, and the **effort accounting** (`effort_done`, `effort_remaining`, and the count of ∞-nodes). This is your headline progress number. |
 | `leandag focus` | **Your agenda — what to work on next.** Ranks `ready_to_formalize` (by impact), `has_sorry`, `needs_lean_statement` (blueprint statements missing `\lean{}`), `needs_leanok`, and `unmatched_lean`. Re-run it to choose the next batch of writer dispatches. |
-| `leandag show <what>` | A named subset: `axioms`, `leaves`, `isolated`, `unproved`, `sorry`, `ready`, `gaps`, `leanok`. `show gaps` lists blueprint declarations still missing a `\lean{}` statement (DAG integrity rule 1). `show isolated` (also `leandag query --isolated`, and the `isolated`/`isolated_blueprint` counts in `leandag stats`) lists declarations with no edges in or out — usually a *missing `\uses{}` edge* to fix, occasionally orphaned scaffolding to remove. For the reverse of `gaps` — Lean decls with *no* blueprint entry — use `leandag focus` (its `unmatched_lean` list) or the archon-framed report below. |
+| `leandag show <what>` | A named subset: `axioms`, `leaves`, `isolated`, `unproved`, `sorry`, `ready`, `gaps`, `leanok`. `show gaps` lists blueprint declarations still missing a `\lean{}` statement (DAG integrity rule 1). `show isolated` (also `leandag query --isolated`, and the `isolated`/`isolated_blueprint` counts in `leandag stats`) lists declarations with no edges in or out — usually a *missing `\uses{}` edge* to fix, occasionally orphaned scaffolding to remove. For the reverse of `gaps` — Lean decls with *no* blueprint entry — use `leandag focus` (its `unmatched_lean` list). |
 | `leandag query ...` | Arbitrary slice: `--sort effort\|deps\|impact\|id`, `--unproved`, `--max-deps`, `--min-deps`, `--min-effort`, `--max-effort`, `--chapter`, `--type`, `--top`. E.g. `leandag query --unproved --sort impact --top 20` surfaces the biggest blockers — the nodes that, once written, unblock the most descendants. |
 
 Output format is selectable per call: append `--format json` (or `-f json`, or
@@ -174,23 +182,12 @@ goes to **stdout** and progress lines to **stderr**, so you read clean data.
 - **Before `## Status: COMPLETE`:** `leandag stats` must show zero ∞-nodes and
   `leandag show gaps` must be empty.
 
-### 2. The archon-framed gap report — always-available shortcut
+### The injected coverage summary
 
 A coverage/infinity summary is already injected into your prompt each iteration
-under `## Blueprint coverage (leandag)` — **read it first.** You can re-query the
-same archon-framed view (uncovered decls + broken `\uses{}` + infinity-sources
-ordered root-first) any time with:
-
-```
-python3 .claude/tools/archon-leandag.py          # markdown summary
-python3 .claude/tools/archon-leandag.py --json    # machine-readable
-```
-
-This wrapper is guaranteed to run wherever the loop runs; if a bare `leandag`
-invocation ever fails to resolve on PATH, fall back to it. Both read the same
-underlying DAG.
-
-### What the gap report covers
+under `## Blueprint coverage (leandag)` — **read it first**, then re-query the
+live DAG with the `leandag` CLI above (it is the only tool you invoke for this).
+The summary lists:
 
 - **Uncovered Lean declarations** — `.lean` decls with no blueprint entry (no
   `\lean{}` points at them; the `unmatched_lean` list in `leandag focus`). Each
@@ -241,6 +238,8 @@ You may write:
 - `blueprint/src/chapters/*.tex` — all chapters
 - `blueprint/src/content.tex` — chapter index
 - `blueprint/src/macros/common.tex` — shared macros
+- `.archon/STRATEGY.md` — the long-arc strategy (you establish it; the loop's planner continues it)
+- `.archon/PROGRESS.md` — the objectives/plan: keep `## Current Objectives` consistent with STRATEGY.md + the blueprint (the loop continues it). Do NOT fabricate prover-execution state (build status, `\leanok`, attempt history).
 - `.archon/DAG_STATUS.md` — completion status
 - `.archon/iter/iter-NNN/dag.md` — iteration narrative
 - `TO_USER.md` — requests for the user (e.g. unreachable references to supply)
@@ -248,7 +247,7 @@ You may write:
 
 You must NOT write:
 - `.lean` files
-- `.archon/PROGRESS.md`, `STRATEGY.md`, `task_pending.md`, `task_done.md`
+- `.archon/task_pending.md`, `.archon/task_done.md` (the prover task queue)
 - `.archon/task_results/` files
 
 ## DAG integrity rules
