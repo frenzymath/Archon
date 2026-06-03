@@ -488,150 +488,29 @@ configuration is needed — it's silently included in every iteration.
 
 ---
 
-## 8. Harness router (Phase 1) — no action required
+## 8. Harness router & Codex runner — no action required
 
-A new opt-in "responsibility → harness" routing seam lets you (in a later
-phase) point plan / prover / review / a subagent / a lane at a different
-engine. **Existing projects need to do nothing.** The new config keys —
-`loop.harness`, `loop.roles.<role>`, the top-level `harnesses` table, and
-the optional `harness:` subagent frontmatter / `LaneConfig.harness` field
-— are all **absent by default**, and when they're absent every
-responsibility resolves to the built-in `claude-code` engine. With no new
-keys present the loop runs the exact same single-Anthropic shape as
-v0.2.0; `archon init` adds no new files for this phase.
+Both are opt-in and off by default. With no `harnesses` block in
+`.archon/config.json`, every responsibility resolves to the built-in
+`claude-code` engine and behavior is identical to v0.2.0; `archon init` adds
+no new files.
 
-Phase 1 shipped only the routing decision point. Phase 2 (below) adds the
-first non-Anthropic runner — **codex**. A `harnesses` entry naming an engine
-that still has no implementation (e.g. `gemini`) raises a clear error rather
-than silently falling back.
+To route the prover to Codex (`codex` must be on `PATH`):
 
----
+```jsonc
+{
+  "harnesses": {
+    "codex-prover": {
+      "runner": "codex", "model": "gpt-5.5", "effort": "xhigh",
+      "mcp": "lean-lsp", "prompt_variant": "codex"
+    }
+  },
+  "loop": { "roles": { "prover": "codex-prover" } }
+}
+```
 
-## 9. Codex runner (Phase 2) — opt-in, no action required to keep claude-code
-
-You can now route a responsibility — in practice the **prover** — to OpenAI
-**Codex** (`codex exec`, e.g. gpt-5.5) instead of Claude Code. This is fully
-opt-in: **existing projects keep running on `claude-code` unchanged**, because
-with no `harnesses` block present every responsibility still resolves to the
-built-in engine.
-
-### 9.1 Opt in
-
-1. Make sure `codex` is on `PATH` (`codex-cli`).
-2. Add a codex harness block and route the prover to it in
-   `.archon/config.json`:
-
-   ```jsonc
-   {
-     "loop": {
-       "roles": { "prover": "codex-gpt" }
-     },
-     "harnesses": {
-       "codex-gpt": {
-         "runner": "codex",
-         "model": "gpt-5.5-xhigh",
-         "effort": "xhigh",
-         "sandbox": "danger-full-access",
-         "base_url_env": "CODEX_BASE_URL",
-         "key_env": "CZ_API_KEY",
-         "wire_api": "responses",
-         "mcp": "lean-lsp",
-         "prompt_variant": "codex"
-       }
-     }
-   }
-   ```
-
-   `mcp` and `prompt_variant` are both optional and both opt-in:
-
-   - **`mcp: "lean-lsp"`** wires the `archon-lean-lsp` MCP server into codex
-     (the same server the claude-code prover gets), so codex can use the Lean
-     LSP for fast diagnostics instead of recompiling. Leave it out for the
-     prior behavior (codex runs `lake` / verify via the shell only). See § 9.2.
-   - **`prompt_variant: "codex"`** appends a codex-specific prompt tail telling
-     the model to use codex-native tools and to prove the goal faithfully. Leave
-     it out and codex reads the unmodified prover prompt. See § 9.2.
-
-3. Put the gateway credentials in `.archon/.env` (existing shell vars still
-   win; the secret is never written to a settings file and is passed to codex
-   via `CODEX_GATEWAY_API_KEY` in the child env, never on the command line):
-
-   ```
-   CODEX_BASE_URL=https://apicz.boyuerichdata.com/v1
-   CZ_API_KEY=sk-...
-   ```
-
-   Leave `base_url_env` / `key_env` unset to use codex's native `~/.codex`
-   login instead of a gateway. Once you name `base_url_env`, the gateway is
-   *configured*: setting the base URL but leaving the key env empty (or
-   vice-versa) now fails loud with `PartialGatewayConfigError` naming the
-   missing var — mirroring the bash runner's `CODEX_BASE_URL set but
-   CODEX_API_KEY missing` guard — rather than silently routing to the wrong
-   provider.
-
-This mirrors the FormalQualBench `codex-gpt-5.5` harness config flag-for-flag,
-so a Lean run that proves cleanly there proves the same way here. You can also
-route a subagent (`subagents.<name>.harness`) or a multilane lane
-(`lanes[].harness`) at the codex harness the same way.
-
-### 9.2 Lean LSP MCP + codex prompt variant (opt-in)
-
-Two capabilities the FormalQualBench harness already had for codex are now
-wired in here too, both opt-in via the harness descriptor (above):
-
-- **`archon-lean-lsp` MCP** (`"mcp": "lean-lsp"`). Codex has no `--mcp-config`
-  flag, so the runner injects the server as per-invocation `-c mcp_servers.*`
-  config overrides — the **same** `lean-lsp-mcp` server and directory
-  (`data_path("tools/lean-lsp-mcp")`) the claude-code prover registers at
-  `archon init`, plus the two codex-specific knobs the harness uses:
-  `required=true` (fail codex startup if the MCP can't init — a no-MCP session
-  whose prompt claims the tools are loaded would contaminate results) and
-  `tool_timeout_sec=600` (a cold Mathlib LSP indexes imports on the first call,
-  2–5 min). `LEAN_PROJECT_PATH` is set to the lake root the prover runs in. This
-  is entirely self-contained in the codex runner's argv; it does **not** touch
-  the init-time `claude mcp add` registration (that stays a claude concern). If
-  the bundled MCP dir can't be resolved, the run fails loud rather than starting
-  a broken server. Leave `mcp` unset to keep the prior behavior (codex runs
-  `lake` / verify via the shell with no LSP).
-
-- **Codex prompt variant** (`"prompt_variant": "codex"`). The runner appends a
-  bundled codex-specific tail to the prover prompt (analogous to the harness
-  gemini `prompt_tail`), resolved **local-overrides-bundled**: a project copy at
-  `.archon/prompts/variants/codex.md` wins over the shipped one (`archon init`
-  copies the bundled variant into the project so you can edit it). The shipped
-  `codex.md` tells the model it runs under the codex CLI (use `apply_patch` /
-  `exec_command` / `read_file`, not Claude tool names), to prefer the Lean LSP
-  MCP tools for diagnostics when present, and reinforces faithfulness (do not
-  rewrite statements/signatures, introduce axioms or `sorry`, shadow library
-  declarations, or use metaprogramming to game the checker). A missing variant
-  file warns and proceeds with the unmodified prompt; unset ⇒ prompt unchanged.
-
-### 9.3 Honest remaining limitations
-
-Even with the MCP and prompt variant on, know these before trusting codex
-proofs:
-
-- **No dashboard cost / session parity.** Codex's `--json` event stream has a
-  different schema from Claude Code's `stream-json`. Archon writes the codex
-  stream to the iteration log **raw** and does **not** synthesize the
-  dashboard's cost / token / `session_end` rows for codex runs. The dashboard
-  still shows the run, but cost columns will be blank for codex.
-- **No true resume.** Codex mints its own `thread_id` and resumes via a
-  separate subcommand; this is not implemented. Passing `--resume` to a
-  codex-routed phase logs a warning and runs a fresh session.
-- **No interactive mode.** `archon discuss` / `refactor draft` and any other
-  foreground site stay on claude-code — codex is headless-only here.
-- **Codex is more adversarial.** It is more willing to satisfy a goal by
-  weakening a statement or gaming the check (the prompt variant reinforces
-  against this, but does not eliminate it). **Gate codex proofs behind the
-  comparator** (the design doc's comparator step) before promoting them; do not
-  trust a codex `verify` exit 0 the way you'd trust a claude-code one.
-
----
-
-## Questions or issues
-
-Please open an issue on the
-[Archon repository](https://github.com/frenzymath/Archon/issues) and
-describe what you ran, what you expected, and what you saw. Include the
-output of `archon doctor` if possible.
+Gateway creds (optional — omit to use codex's native `~/.codex` login) go in
+`.archon/.env`, named by the harness's `base_url_env` / `key_env`; the key is
+passed to codex in the child env, never on the command line, and a half-set
+gateway fails loud. `mcp` and `prompt_variant` are optional. A non-claude lane
+harness, or an unimplemented engine (e.g. `gemini`), raises a clear error.
