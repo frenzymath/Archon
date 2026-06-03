@@ -5,7 +5,7 @@ write_domain: "task_results/**"
 read_only: true
 can_spawn: false
 default_enabled: false
-mandatory: [plan]
+mandatory: [plan, dag]
 dispatcher_notes: |
   - Dispatch me BEFORE writing any prover objectives or touching Lean files.
     The plan agent's job is to make sure the blueprint is complete and
@@ -126,6 +126,11 @@ The plan agent gives you a directive containing the current strategy snapshot, t
 
 - **Completeness** — for each chapter, are the definitions / theorems the strategy says the project needs actually present? Is the proof sketch detailed enough for a prover to formalize without guessing? Are the cross-references (`\uses{...}`) accurate?
 - **Correctness** — does any definition contradict its references? Does any proof sketch contain a step that doesn't follow? Does any `\lean{...}` hint name a declaration that doesn't exist or has the wrong signature?
+- **Dependency-graph integrity (use `leandag`)** — the `\uses{}` edges must reflect the real mathematical dependencies. `leandag` computes the actual DAG, so use it instead of eyeballing:
+  - **Broken edges** — `leandag build --json` reports `unknown_uses` (a `\uses{}` pointing at a label no declaration defines). Every one is a must-fix.
+  - **Missing edges** — read each proof: if it relies on a lemma/definition that its `\uses{}` does not list, the edge is missing. These don't show up as "broken"; you find them by reading the math against the declared `\uses{}`. Missing edges make the loop dispatch provers out of order, so flag them as correctness findings.
+  - **Isolated declarations** — `leandag show isolated` (or `leandag query --isolated --type theorem`, and the `isolated` / `isolated_blueprint` counts in `leandag stats`) lists nodes with **no `\uses{}` out and nothing using them**. An isolated *blueprint* node is almost always a *symptom of a missing edge*, not dead weight — so for each one decide and record a disposition (see below). Isolated `lean_aux` nodes are uncovered Lean helpers, a separate "needs a blueprint entry" signal, not removal candidates.
+- **Mathlib dependency anchors (`\mathlibok`)** — it is good practice for a chapter that relies on a Mathlib-provided result to state it as an explicit anchor block marked `\mathlibok` (with `\lean{}` naming the real Mathlib declaration), rather than a bare `\uses{}` to nothing. Treat such anchors as *valid and done* — never flag them as ∞ holes or `remove` candidates. But **audit each `\mathlibok` claim for faithfulness**, because a wrong one makes the loop skip a real gap: does Mathlib actually contain the named `\lean{}` declaration, and does the stated form match it? Verify against Lean (`archon-lean-lsp`) when in doubt. A `\mathlibok` on a statement Mathlib does not provide — or whose form is stronger/different than Mathlib's — is a hard fail (treat like a fabricated citation). Also: where a broken `\uses{}` points at what is really a Mathlib result, the right `wire-up` is "add a `\mathlibok` anchor for it," not "invent a project lemma."
 - **Lean target formulation quality** — for each `\lean{...}` hint, is the named theorem/definition a *useful* target for the prover? Vague or under-specified hints lead to wrong formalizations; surface those.
 - **Multi-route coverage** — if the strategy lists multiple viable routes (alternative proof approaches, alternative definitions), is each route represented in the blueprint? Routes the strategy mentions but the blueprint does not cover are red flags.
 - **Unstarted phases** — for each phase in the strategy that has no blueprint chapter at all, produce a concrete chapter outline (see "Unstarted-phase proposals" below). This is a proactive planning function, not just a gap report.
@@ -246,13 +251,23 @@ The proposal answers:
    - For each `\lean{...}`: is the named target well-formulated? (You may verify existence using the `archon-lean-lsp` MCP tools — read-only.)
 4. **Compute completeness/correctness verdicts** per chapter (`true | partial | false`).
 5. **Note cross-chapter inconsistencies** as you find them (e.g. `def X` in chapter A doesn't match the use of `X` in chapter B). These go in the "Cross-chapter notes" section.
-6. **Check multi-route coverage**: for each route listed in the directive's `## Routes`, identify which chapters cover it. Flag any route that has zero or insufficient blueprint coverage.
-7. **Cross-reference phases against chapters**: for each row in the strategy's `## Phases & estimations` table, determine whether adequate blueprint coverage exists. For every phase with no or stub coverage, produce a chapter outline proposal (see "Unstarted-phase proposals" above).
-8. **Produce three top-level summaries** (see report format) — these are what the plan agent acts on first.
+6. **Audit the dependency graph with `leandag`.** Run `leandag build --json` (broken/unknown `\uses{}`, `unmatched_lean`, isolated count) and `leandag show isolated` once for the whole blueprint. Then triage each isolated **blueprint** node into exactly one disposition and record it:
+   - **wire-up** — it *should* connect to the graph but an edge is missing or mislabeled. Name the `\uses{}` that should be added (and on which side). This is the common case and a correctness finding — recommend a writer fix, do NOT recommend removal.
+   - **remove** — it is genuinely orphaned scaffolding: nothing in the goal's proof closure needs it, it isn't the goal, and it isn't a `\mathlibok`/reference anchor. Only then is removal the right call. Name the chapter + label so the plan agent can authorize a writer to delete it.
+   - **keep** — it is intentionally standalone (the goal theorem with nothing above it, a deliberately isolated `\mathlibok` reference, etc.). Say why and move on.
+   You **flag and recommend**; you never edit. The plan agent turns a `wire-up`/`remove` disposition into a blueprint-writer directive.
+7. **Check multi-route coverage**: for each route listed in the directive's `## Routes`, identify which chapters cover it. Flag any route that has zero or insufficient blueprint coverage.
+8. **Cross-reference phases against chapters**: for each row in the strategy's `## Phases & estimations` table, determine whether adequate blueprint coverage exists. For every phase with no or stub coverage, produce a chapter outline proposal (see "Unstarted-phase proposals" above).
+9. **Produce three top-level summaries** (see report format) — these are what the plan agent acts on first.
 
 You may also use:
 - `archon-lean-lsp`: read-only Lean LSP operations (search, hover, diagnostics) to verify `\lean{...}` references.
-- `${LEAN4_PYTHON_BIN:-python3} "$LEAN4_SCRIPTS/dependency_graph.py" .` — quick view of the project's Lean ↔ blueprint dependency map.
+- **`leandag`** — your read-only window into the real dependency DAG. Run it freely: it never touches project source or the blueprint. (`leandag build` refreshes the derived `.leandag/` cache, which is regenerated deterministically from the current tree — that is a tool artifact, not a project edit, so it does not violate your read-only rule.)
+  - `leandag build --json` — the structured build report: `unknown_uses` (broken `\uses{}`), `unmatched_lean` (`\lean{}` pointing nowhere), `conflicts`, and `summary.isolated`.
+  - `leandag stats` — counts including `isolated` / `isolated_blueprint`.
+  - `leandag show isolated` (or `leandag query --isolated [--type theorem] [--chapter <c>]`) — the isolated declarations, which you triage per node (below).
+  - `leandag show gaps` — blueprint nodes missing a `\lean{}`.
+  - The archon-framed equivalent is `python3 .claude/tools/archon-leandag.py` (add `--json`).
 
 You do **not** modify any project file, including the blueprint. Even if you spot a clear fix, you report it; the plan agent decides what to do next iter.
 
@@ -264,7 +279,7 @@ Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md` (or the
 
 Concretely:
 
-- `### Incomplete parts`, `### Proofs lacking detail`, `### Lean difficulty quality`, `### Multi-route coverage`, `### Citation discipline` under `## Top-level summaries`: omit each sub-section whose finding list is empty. If all five are empty, omit `## Top-level summaries` entirely — the per-chapter table already encodes "everything is fine".
+- `### Incomplete parts`, `### Proofs lacking detail`, `### Lean difficulty quality`, `### Multi-route coverage`, `### Citation discipline`, `### Dependency & isolation findings` under `## Top-level summaries`: omit each sub-section whose finding list is empty. If all six are empty, omit `## Top-level summaries` entirely — the per-chapter table already encodes "everything is fine".
 - `## Unstarted-phase blueprint proposals`: omit only when every phase in the strategy has adequate blueprint coverage. When present, this section is never empty — each proposal block is a concrete outline, not a one-line flag.
 - `## Cross-chapter notes`: omit when no cross-chapter findings exist (the most common case on a clean blueprint).
 - `## Strategy-modifying findings (if any)`: omit entirely when none. Do NOT write a section with "None" inside; the absence of the section IS the signal.
@@ -306,6 +321,15 @@ Filling templates with hollow "(none)" / "no drift" / "OK" content per chapter i
 <bullets naming chapter + label + which citation element is missing or suspect. Omit when zero findings.>
 - `Foo.tex` / `\thm:smooth_criterion`: `% SOURCE:` line has no `(read from references/<file>.md)` parenthetical — writer did not name the local file. Likely fabrication.
 - `Bar.tex` / `\def:scheme`: `% SOURCE:` claims `(read from references/hartshorne-II-1.md)` but that file does not exist on disk. Fabrication; writer must dispatch a retriever or remove the citation.
+
+### Dependency & isolation findings
+<from the leandag audit. Each line: chapter / label — finding + disposition the plan agent should hand a writer. Omit when zero findings.>
+- `Bar.tex` / `\thm:foo`: `\uses{}` is missing `lem:bar` (the proof's "by the gluing lemma" step depends on it). **wire-up** — add `\uses{lem:bar}`.
+- `Foo.tex` / `\thm:foo` → `\lem:gone`: broken `\uses{}` (no declaration defines `lem:gone`). **fix** — correct the label or add the missing lemma.
+- `Aux.tex` / `\lem:orphan`: isolated (no `\uses{}` out, nothing uses it), not the goal, not `\mathlibok`, nothing in the goal closure needs it. **remove** — authorize a writer to delete it from `Aux.tex`.
+- `Main.tex` / `\thm:goal`: isolated but it is the project goal. **keep**.
+- `Foo.tex` / `\thm:foo` → `\lem:hensel`: broken `\uses{}`, and `lem:hensel` is a Mathlib result. **wire-up** — add a `\mathlibok` anchor for it (state it, `\lean{Mathlib...}`), not a project lemma.
+- `Bar.tex` / `\lem:claimed_mathlib`: marked `\mathlibok` but Mathlib has no such declaration / the stated form is stronger than Mathlib's. **fix** — hard fail; the loop would skip a real gap. Remove the marker and treat as a result to prove, or correct the statement to match Mathlib.
 
 ## Unstarted-phase blueprint proposals
 
@@ -374,11 +398,14 @@ Apply these rules verbatim:
   - **Any chapter whose `\lean{...}` hint** is marked "Lean difficulty quality: poor" AND the named target is part of an active prover route in PROGRESS.md.
   - **Blueprint purity violations** — any chapter containing Lean syntax or project history must be cleaned before provers run.
   - **Broken `\uses{}` cross-references** that point at non-existent labels.
+  - **Missing `\uses{}` edges** (a `wire-up` disposition) on a chapter feeding an active prover route — out-of-order dispatch risk.
+  - **Unfaithful `\mathlibok` anchors** — a `\mathlibok` block whose `\lean{}` Mathlib declaration doesn't exist or whose form is stronger/different than Mathlib's. Like a fabricated citation, this hides a real gap from the loop; always must-fix.
   - **Citation-discipline findings on blocks feeding an active prover route**.
   - **Unstarted-phase proposals** — each proposed chapter lands here as `unstarted-phase proposal: <phase name> — dispatch blueprint-writer for <proposed chapter filename> or record deferral`. These are must-act because an unwritten blueprint is an unparallelisable, unpreviewable phase; writing it early is the cheapest action in the loop.
 - **soon** — cross-cutting items that don't block any specific chapter's prover work yet:
   - Lean-difficulty-quality findings for hints NOT in an active prover route.
   - Citation-discipline findings on blocks NOT feeding an active prover route.
+  - Missing-edge `wire-up` findings on chapters NOT feeding an active prover route, and every `remove` disposition (orphaned-scaffolding cleanup is never urgent).
   - Informational cross-chapter style issues.
 - **informational** — minor observations: naming drift, optional `\lean{...}` references to helpers worth promoting, low-impact prose suggestions.
 

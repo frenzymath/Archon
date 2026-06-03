@@ -11,6 +11,7 @@ dependencies = [
     "typer",
     "pydantic",
     "PyYAML",
+    "leandag @ git+https://github.com/AxelDlv00/LeanDAG.git",
 ]
 
 [project.scripts]

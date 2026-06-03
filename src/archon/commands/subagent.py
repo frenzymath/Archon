@@ -29,6 +29,7 @@ import typer
 
 from archon import log
 from archon.commands.tooling.project_config import (
+    apply_forced_subagents,
     load_project_config,
     resolve_subagents_enabled,
     resolve_claude_backend,
@@ -119,7 +120,7 @@ def subagent_command(
     resolved = Path(project_path).resolve()
 
     cfg = load_project_config(resolved)
-    enabled = resolve_subagents_enabled(cfg)
+    enabled = apply_forced_subagents(resolved, resolve_subagents_enabled(cfg))
     registry = build_registry(resolved, enabled=enabled)
 
     descriptor = registry.get(name)

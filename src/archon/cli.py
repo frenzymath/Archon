@@ -29,9 +29,10 @@ class _BannerGroup(typer.core.TyperGroup):
             "  [bold cyan]1.[/bold cyan] archon setup       → install system dependencies\n"
             "  [bold cyan]2.[/bold cyan] cd project/dir     → navigate to your project directory\n"
             "  [bold cyan]3.[/bold cyan] archon init .      → create a project and initialize it with Lean 4\n"
-            "  [bold cyan]4.[/bold cyan] archon loop        → run autonomous formalization\n"
-            "  [bold cyan]5.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
-            "  [bold cyan]6.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
+            "  [bold cyan]4.[/bold cyan] archon dag         → elaborate the full blueprint (optional, before loop)\n"
+            "  [bold cyan]5.[/bold cyan] archon loop        → run autonomous formalization\n"
+            "  [bold cyan]6.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
+            "  [bold cyan]7.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
             "[dim]Run [bold]archon <command> -h[/bold] for details on any command.[/dim]"
         )
         console.print(Panel(
@@ -94,8 +95,13 @@ from archon.commands.branch import branch, inner_log  # noqa: E402
 from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.subagent import subagent_command  # noqa: E402
 from archon.commands.migrate import app as migrate_app  # noqa: E402
+from archon.commands.dag import dag  # noqa: E402
+from archon.commands.dag.gaps_entry import dag_gaps, dag_graph  # noqa: E402
 
 app.command()(init)
+app.command()(dag)
+app.command("dag-gaps")(dag_gaps)
+app.command("dag-graph")(dag_graph)
 app.command()(loop)
 app.command()(doctor)
 app.command()(dashboard)

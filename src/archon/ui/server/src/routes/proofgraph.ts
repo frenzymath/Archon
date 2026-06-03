@@ -14,27 +14,95 @@ import { mapIterToCommit, lsLeanFilesAtCommit, showFileAtCommit, hasInnerGit } f
 import { latestFileLaneStatus } from '../utils/multilane.js';
 import type { ProjectPaths } from './project.js';
 
-const DECL_RE = /^(noncomputable\s+)?(private\s+)?(protected\s+)?(theorem|lemma|def|instance|class|structure|inductive|abbrev|example)\s+([^\s:(\[{]+)/;
+// Declaration opener: optional repeatable modifiers, then a kind keyword,
+// then the (possibly namespaced) name. `*` on the name group lets anonymous
+// `example`/`instance :` act as boundaries without producing a node.
+// Inspired by leandag's scanner (LeanScanner._DECL_RE).
+const DECL_RE = /^(?:(?:private|protected|noncomputable|irreducible|unsafe|scoped|partial)\s+)*(theorem|lemma|def|instance|class|structure|inductive|abbrev|example)\s+([^\s:(\[{=]*)/;
+
+// Column-0 lines that mean we've left a declaration body — used to trim
+// trailing scaffolding (namespace/section/end/open/#check…) that would
+// otherwise be swallowed into the previous decl's displayed body.
+// Ported from leandag's LeanScanner._OUTSIDE_DECL_RE.
+const OUTSIDE_DECL_RE = /^(?:end\b|section\b|namespace\b|variable\b|universe\b|open\b|attribute\b|noncomputable\s+section\b|#check\b|#eval\b|#print\b)/;
 
 interface LD {
   kind: string; name: string; file: string; line: number; endLine: number;
   hasSorry: boolean; sorryCount: number; signature: string; body: string; usedNames: string[];
 }
 
+/**
+ * Return a comment-masked shadow of `lines`: every character inside a Lean
+ * `--` line comment or a (nestable) `/- … -/` block comment is replaced with
+ * a space, preserving line count and column positions. Declaration matching
+ * runs on the shadow so a `def`/`theorem` sitting inside a comment or
+ * docstring is never parsed as a real declaration.
+ */
+function maskComments(lines: string[]): string[] {
+  const out: string[] = [];
+  let depth = 0; // block-comment nesting depth
+  for (const raw of lines) {
+    let res = '';
+    let i = 0;
+    const n = raw.length;
+    while (i < n) {
+      if (depth > 0) {
+        if (raw[i] === '/' && raw[i + 1] === '-') { depth++; res += '  '; i += 2; continue; }
+        if (raw[i] === '-' && raw[i + 1] === '/') { depth--; res += '  '; i += 2; continue; }
+        res += ' '; i++; continue;
+      }
+      if (raw[i] === '-' && raw[i + 1] === '-') { res += ' '.repeat(n - i); break; }
+      if (raw[i] === '/' && raw[i + 1] === '-') { depth++; res += '  '; i += 2; continue; }
+      res += raw[i]; i++;
+    }
+    out.push(res);
+  }
+  return out;
+}
+
+/**
+ * Trim trailing scaffolding from a decl's body line range. Walks back from
+ * `end` (exclusive) past blank lines and any column-0 namespace/section/end/
+ * open/#check… lines (detected on the comment-masked shadow) so they don't
+ * render as part of the declaration. Returns the new exclusive end line index.
+ */
+function trimDeclBodyEnd(code: string[], start: number, end: number): number {
+  let cut = end;
+  for (let i = start + 1; i < end; i++) {
+    const codeLine = code[i];
+    const stripped = codeLine.trim();
+    if (!stripped) continue;
+    const atCol0 = codeLine.length > 0 && !/\s/.test(codeLine[0]);
+    if (atCol0 && OUTSIDE_DECL_RE.test(stripped)) {
+      let j = i;
+      while (j > start && !code[j - 1].trim()) j--;
+      cut = j;
+      break;
+    }
+  }
+  return cut;
+}
+
 function parseContent(content: string, rel: string): LD[] {
   const lines = content.split('\n');
+  const code = maskComments(lines); // comment-masked shadow for structural decisions
   const sl = new Set(countSorryInLean(content).map(o => o.line));
   const ds: LD[] = []; let i = 0;
   while (i < lines.length) {
-    const m = lines[i].match(DECL_RE);
+    const m = code[i].match(DECL_RE);
     if (!m) { i++; continue; }
-    const kind = m[4], name = m[5], s = i + 1;
+    const kind = m[1]; const name = (m[2] || '').replace(/[.,;]+$/, ''); const s = i + 1;
     let e = s, bd = 0;
     for (let j = i; j < lines.length; j++) {
-      for (const c of lines[j]) { if (c === '{' || c === '⟨') bd++; if (c === '}' || c === '⟩') bd--; }
-      if (j > i && bd <= 0 && j + 1 < lines.length && lines[j + 1].trim() && DECL_RE.test(lines[j + 1].trim())) { e = j + 1; break; }
+      for (const c of code[j]) { if (c === '{' || c === '⟨') bd++; if (c === '}' || c === '⟩') bd--; }
+      if (j > i && bd <= 0 && j + 1 < lines.length && code[j + 1].trim() && DECL_RE.test(code[j + 1])) { e = j + 1; break; }
       e = j + 1;
     }
+    // Anonymous `example` / unnamed `instance :` — a structural boundary but
+    // not a node the graph should show.
+    if (!name) { i = e; continue; }
+    // Trim trailing namespace/section/end scaffolding off the body extent.
+    e = trimDeclBodyEnd(code, i, e);
     // Trim trailing whitespace + leading docstring of the *next* decl from
     // the current decl's body. Without this, the body includes the start of
     // the next /-- ... -/ block, which makes the UI show an unfinished

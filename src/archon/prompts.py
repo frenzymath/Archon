@@ -690,6 +690,7 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     agent can't miss it.
     """
     from archon.commands.tooling.project_config import (
+        apply_forced_subagents,
         load_project_config,
         resolve_subagents_enabled,
     )
@@ -700,7 +701,9 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     )
 
     cfg = load_project_config(project_path)
-    enabled = resolve_subagents_enabled(cfg)
+    enabled = apply_forced_subagents(
+        project_path, resolve_subagents_enabled(cfg),
+    )
     registry = build_registry(project_path, enabled=enabled)
 
     if len(registry) == 0:
@@ -1082,6 +1085,203 @@ def build_plan_prompt(
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
         - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
         - The blueprint frontier (which declarations are ready to prove) is injected below under `## Blueprint frontier`. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+
+
+def _lean_files_block(project_path: Path) -> str:
+    """Enumerate .lean files (excluding lake/target dirs) for the DAG prompt."""
+    _SKIP_PARTS = {'.lake', '_target', 'lake-packages', '.archon'}
+    lean_files = sorted(
+        p.relative_to(project_path)
+        for p in project_path.rglob("*.lean")
+        if not any(part in _SKIP_PARTS or part.startswith('.') for part in p.parts[1:])
+    )
+    if not lean_files:
+        return ""
+    lines = [
+        "",
+        "## Lean files in the project",
+        "",
+        "Each of these files will eventually need a blueprint chapter. "
+        "The slug mapping is: `Foo/Bar.lean` → `blueprint/src/chapters/Foo_Bar.tex`.",
+        "",
+    ]
+    for f in lean_files:
+        lines.append(f"- `{f}`")
+    return "\n".join(lines) + "\n"
+
+
+def _existing_chapters_block(project_path: Path) -> str:
+    """List existing blueprint chapters for the DAG prompt."""
+    chapters_dir = project_path / "blueprint" / "src" / "chapters"
+    if not chapters_dir.is_dir():
+        return (
+            "\n## Existing blueprint chapters\n\n"
+            "None yet — you will create them from scratch.\n"
+        )
+    chapters = sorted(chapters_dir.glob("*.tex"))
+    if not chapters:
+        return (
+            "\n## Existing blueprint chapters\n\n"
+            "None yet — you will create them from scratch.\n"
+        )
+    lines = ["", "## Existing blueprint chapters", ""]
+    for c in chapters:
+        lines.append(f"- `{c.relative_to(project_path)}`")
+    return "\n".join(lines) + "\n"
+
+
+def _goal_description_block(state_dir: Path, project_path: Path) -> str:
+    """Inject PROJECT_GOAL.md / ARCHON_GOAL.md content if present."""
+    for base in (state_dir, project_path):
+        for name in ("PROJECT_GOAL.md", "ARCHON_GOAL.md", "GOAL.md"):
+            f = base / name
+            if f.is_file():
+                try:
+                    content = f.read_text(encoding="utf-8").strip()
+                except OSError:
+                    continue
+                if content:
+                    return dedent(f"""
+
+                        ## Project goal ({f.name})
+
+                        {content}
+                    """)
+    return ""
+
+
+def _dag_iter_sidecar_block(state_dir: Path, iter_num: int, *, window: int = 3) -> str:
+    """Inject recent dag.md sidecar narratives into the DAG prompt."""
+    from archon.state.iter_state import dag_sidecar_path, existing_iter_nums
+
+    all_nums = existing_iter_nums(state_dir)
+    candidates = [n for n in all_nums if n < iter_num]
+    if not candidates:
+        return ""
+    selected = candidates[-window:]
+
+    parts: list[str] = []
+    for n in selected:
+        dag_file = dag_sidecar_path(state_dir, n)
+        if not dag_file.is_file():
+            continue
+        try:
+            content = dag_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if content:
+            truncated = content[:4000] + "\n\n... (truncated)" if len(content) > 4000 else content
+            parts.append(f"### iter-{n:03d} dag.md\n\n{truncated}")
+
+    if not parts:
+        return ""
+    header = "\n\n## Recent DAG iteration sidecars\n\n"
+    return header + "\n\n".join(parts) + "\n"
+
+
+def _dag_status_block(state_dir: Path) -> str:
+    """Inject current DAG_STATUS.md content if present."""
+    status_file = state_dir / "DAG_STATUS.md"
+    if not status_file.is_file():
+        return ""
+    try:
+        content = status_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not content:
+        return ""
+    return dedent(f"""
+
+        ## Current DAG_STATUS.md
+
+        ```markdown
+        {content}
+        ```
+    """)
+
+
+def _leandag_block(project_path: Path) -> str:
+    """Inject a leandag blueprint-coverage gap summary into the DAG prompt.
+
+    Surfaces uncovered Lean declarations (no blueprint entry), broken
+    ``\\uses{}`` refs, and unproved/ready declarations so the elaboration
+    agent sees what the blueprint is missing without parsing it itself.
+    Degrades to an empty string on any failure.
+    """
+    try:
+        from archon.commands.dag.leandag_gaps import compute_gaps, format_markdown
+        report = compute_gaps(project_path)
+    except Exception:
+        return ""
+    body = format_markdown(report).strip()
+    if not body:
+        return ""
+    return dedent("""
+
+        ## Blueprint coverage (leandag)
+
+        The blueprint DAG below is computed by `leandag` from the current
+        `.lean` files and blueprint chapters. Close the gaps it lists:
+        dispatch a `blueprint-writer` for uncovered declarations, and fix
+        broken `\\uses{}` refs. For the full picture drive the `leandag` CLI
+        directly — `leandag build --html`, `leandag stats`, `leandag focus`,
+        `leandag show gaps`, `leandag query` (see prompts/dag.md for the
+        cadence). Or re-check this archon-framed summary with
+        `python3 .claude/tools/archon-leandag.py` (add `--json` for machine
+        output).
+
+        """) + body + "\n"
+
+
+def build_dag_prompt(
+    project_name: str, project_path: Path, state_dir: Path,
+    iter_num: int,
+    *,
+    lean_aware: bool = True,
+) -> str:
+    """Build the invocation prompt for the DAG elaboration agent."""
+    refs = _references_summary(state_dir, project_path)
+    refs_block = ""
+    if refs:
+        refs_block = dedent(f"""
+
+            ## References available for this project
+
+            The file {project_path / 'references' / 'summary.md'} lists the informal sources backing this project.
+            Read the relevant source files under `references/` before writing any declaration block
+            that draws from external material.
+
+            ```markdown
+            {refs}
+            ```""")
+
+    lean_block = _lean_files_block(project_path) if lean_aware else ""
+    chapters_block = _existing_chapters_block(project_path)
+    goal_block = _goal_description_block(state_dir, project_path)
+    frontier_block = _blueprint_frontier_block(project_path)
+    doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
+    leandag_block = _leandag_block(project_path)
+    sidecar_block = _dag_iter_sidecar_block(state_dir, iter_num)
+    status_block = _dag_status_block(state_dir)
+    catalog_block = _subagent_catalog_block(project_path, role="dag")
+
+    return dedent(f"""\
+        You are the DAG elaboration agent for project '{project_name}'.
+        Archon iteration: {iter_num:03d}.
+        Project directory: {project_path}
+        Project state directory: {state_dir}
+        Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/dag.md for your full role.
+
+        Your mission: produce a mathematically complete, dependency-correct informal blueprint
+        for the ENTIRE project — the full mathematical roadmap that `archon loop` will follow
+        to produce formal Lean proofs.
+
+        Notes on what has already been done for you this iteration:
+        - The blueprint-doctor findings from the prior iter are injected below (when present).
+        - The blueprint frontier (broken \\uses{{}} refs, orphan chapters) is injected below.
+        - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
+        - The current DAG_STATUS.md is injected below.
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs).""") + status_block + goal_block + lean_block + chapters_block + refs_block + frontier_block + doctor_block + leandag_block + sidecar_block + catalog_block
 
 
 def build_prover_prompt(

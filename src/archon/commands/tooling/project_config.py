@@ -427,3 +427,46 @@ def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | None:
     if not isinstance(val, list):
         return None
     return [str(x) for x in val if isinstance(x, (str, int, float))]
+
+
+# Env var a phase sets to force a fixed set of subagents available for
+# that phase, regardless of the project's ``subagents.enabled`` config.
+# Comma-separated names. See :func:`apply_forced_subagents`.
+FORCE_SUBAGENTS_ENV = "ARCHON_FORCE_SUBAGENTS"
+
+
+def apply_forced_subagents(
+    project_path: Path, enabled: list[str] | None,
+) -> list[str] | None:
+    """Fold ``ARCHON_FORCE_SUBAGENTS`` names into a resolved allowlist.
+
+    Some phases need a fixed set of subagents available regardless of
+    the project's ``subagents.enabled`` config. The blueprint
+    elaboration phase (``archon dag``) is the motivating case: its
+    whole job is to dispatch ``blueprint-writer`` / ``blueprint-reviewer``
+    / ``reference-retriever``, and gating those behind config made a
+    fresh ``archon dag`` run dispatch nothing and declare itself done.
+
+    The phase sets ``ARCHON_FORCE_SUBAGENTS`` (comma-separated) in the
+    environment; this helper is applied at every gate that consults the
+    allowlist — the prompt catalog, the runtime dispatcher, and the
+    mandatory-dispatch audit — so all three agree.
+
+    No-op when the env var is unset/empty: ``enabled`` is returned
+    unchanged, so the classic config-driven behavior is untouched. When
+    forcing is active and ``enabled`` is ``None`` (the "use
+    ``default_enabled`` descriptors" sentinel), the default-enabled
+    names are materialized first so the union doesn't silently drop them.
+    """
+    import os
+
+    raw = os.environ.get(FORCE_SUBAGENTS_ENV, "")
+    forced = [n.strip() for n in raw.split(",") if n.strip()]
+    if not forced:
+        return enabled
+    if enabled is None:
+        from archon.subagents.registry import build_registry
+        base = build_registry(project_path, enabled=None).names()
+    else:
+        base = list(enabled)
+    return sorted(set(base) | set(forced))

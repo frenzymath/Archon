@@ -13,6 +13,9 @@ from rich.table import Table
 from rich.text import Text
 
 _console = Console()
+# Decorative banner goes to stderr so a command's stdout stays clean for
+# machine consumers (e.g. `archon dag-gaps --json`). Nothing parses the banner.
+_err_console = Console(stderr=True)
 _PREFIX = "[bold cyan]\\[ARCHON][/bold cyan]"
 _REPO_URL = "https://github.com/frenzymath/Archon"
 
@@ -27,16 +30,16 @@ _BANNER = r"""[bold cyan]   _            _
 
 
 def banner(version: str) -> None:
-    _console.print(f"\n{_BANNER}\n")
-    
+    _err_console.print(f"\n{_BANNER}\n")
+
     meta_text = Text.assemble(
         (f" v{version} ", "bold cyan"),
         "  ",
         (f" {_REPO_URL} ", "dim italic")
     )
-    
-    _console.print(Rule(title=meta_text, style="cyan", align="left"))
-    _console.print() 
+
+    _err_console.print(Rule(title=meta_text, style="cyan", align="left"))
+    _err_console.print()
 
 
 def info(msg: str) -> None:

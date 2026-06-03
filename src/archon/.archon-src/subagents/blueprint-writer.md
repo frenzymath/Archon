@@ -5,6 +5,7 @@ write_domain: "blueprint/src/chapters/*.tex"
 read_only: false
 can_spawn: true
 default_enabled: false
+mandatory: [dag]
 dispatcher_notes: |
   - Dispatch one writer per chapter that the most recent blueprint
     review (the blueprint-review subagent in your catalog, when
@@ -15,15 +16,24 @@ dispatcher_notes: |
     enough mathematical detail to formalize), references, and
     explicit out-of-scope items. Writers do NOT speculate beyond
     what the directive lists.
-  - **NEVER instruct the writer to add ``\leanok`` or ``\mathlibok``
-    markers** (no "after writing the block, add `\leanok`"; no
-    "verification: confirm `\leanok` is present"). The writer's
-    descriptor forbids it — ``\leanok`` is managed by the
-    deterministic ``sync_leanok`` phase, ``\mathlibok`` by the review
-    agent. A directive that asks the writer to add markers puts it in
-    a rule conflict; the writer must obey its descriptor, so the
-    "verification" instruction will appear to fail until sync_leanok
-    runs. Leave marker concerns out of the writer's directive entirely.
+  - **NEVER instruct the writer to add ``\leanok`` markers** (no "after
+    writing the block, add `\leanok`"; no "verification: confirm
+    `\leanok` is present"). The writer's descriptor forbids it —
+    ``\leanok`` is managed by the deterministic ``sync_leanok`` phase. A
+    directive that asks the writer to add ``\leanok`` puts it in a rule
+    conflict; the writer must obey its descriptor, so the "verification"
+    instruction will appear to fail until sync_leanok runs. Leave
+    ``\leanok`` out of the writer's directive entirely.
+  - **``\mathlibok`` is the exception — you MAY direct it.** When a
+    declaration the chapter depends on is provided by Mathlib as-is, it
+    is good practice to have the writer author an explicit *Mathlib
+    dependency anchor*: a block that states the Mathlib result (in the
+    project's notation), carries ``\lean{}`` naming the real Mathlib
+    declaration, and is marked ``\mathlibok`` so the DAG treats it as
+    done and the route's reliance on Mathlib stays visible. Name such
+    anchors in the directive (statement + the Mathlib ``\lean{}``
+    target). The writer marks ``\mathlibok`` ONLY on these anchors —
+    never on the project's own to-be-proved declarations.
   - **Authorize the retriever in the writer's --write-domain.** If
     the chapter might need fresh source material, dispatch the
     writer with TWO globs:
@@ -160,8 +170,10 @@ If retrieval fails (paywall, broken link, no API key, not available online): mar
 ### What you CAN do
 - Add new declaration blocks (definitions, lemmas, theorems, propositions, corollaries) under direction.
 - Expand or revise existing prose / proof sketches in your assigned chapter.
-- Add `\uses{...}` cross-references.
+- **Add, correct, or complete `\uses{...}` cross-references** so the dependency edges match the real mathematics. If your chapter's proof of `T` invokes lemma `L`, `T` must declare `\uses{lem:L}`; if a `\uses{}` points at a label that no longer exists, fix it. Verify with `leandag` (see "Verifying dependencies with leandag" below) — do not eyeball it.
 - Adjust `\lean{...}` hints when the directive names a new Lean target.
+- **Author a *Mathlib dependency anchor* and mark it `\mathlibok`** when your chapter relies on a result Mathlib already provides — write out the statement and point `\lean{}` at the real Mathlib declaration (see "Mathlib dependency anchors" below). This is the only marker you may add.
+- **Remove a declaration block ONLY when the directive explicitly lists it for removal** (typically an isolated/orphaned statement the reviewer flagged `remove`). Default to wiring an isolated node into the graph (add the missing `\uses{}`), not deleting it — an isolated node is usually a missing edge, not dead weight. Never remove the project goal, and never remove a block whose `\lean{}` still names a live Lean declaration.
 - Read `references/summary.md` and any reference that is in `references/` to ground your writing in the project's sources.
 
 ### What you MUST do
@@ -175,7 +187,7 @@ If retrieval fails (paywall, broken link, no API key, not available online): mar
 ### What you MUST NOT do
 - **Do NOT reference project history.** No "since iteration N," "after our failed attempt," or session narrative. The blueprint must read as a standalone mathematical document.
 - **Do NOT include Lean implementation details.** No tactic suggestions, typeclass wiring notes, or Lean code structure hints in the prose. If a Lean note is needed, it belongs in `.lean` files (the plan agent will use `lean-scaffolder` for that).
-- **Do NOT add `\leanok` or `\mathlibok` markers.** Those are managed by the `sync_leanok` phase + the review agent — never by you.
+- **Do NOT add `\leanok` markers.** `\leanok` is earned by a sorry-free Lean proof and set by the deterministic `sync_leanok` phase — never by you. (`\mathlibok` is different: you MAY add it, but ONLY on a Mathlib dependency anchor — see "Mathlib dependency anchors" below — never on the project's own to-be-proved declarations.)
 - **Do NOT edit other chapters.** Even when you spot a related issue, flag it in "Notes for Plan Agent" instead of fixing it.
 - **Do NOT edit `content.tex`** (the top-level blueprint file that `\input`s the chapters).
 - **Do NOT edit `.lean` files** or any other state file.
@@ -183,6 +195,36 @@ If retrieval fails (paywall, broken link, no API key, not available online): mar
 - **Do NOT expand scope.** Stick to what the directive listed under "Required content".
 - **Do NOT fabricate citations.** Never write `% SOURCE:`, `% SOURCE QUOTE:`, `% SOURCE QUOTE PROOF:`, or `\textit{Source: ...}` from memory. If you don't have a local `references/<file>.md` containing the source text, dispatch a retriever and wait. The `(read from references/<file>.md)` parenthetical is the discipline check — if you cannot truthfully point to the file you read, the citation block is not allowed in the chapter.
 - **Do NOT translate or restate the verbatim quote.** `% SOURCE QUOTE:` and `% SOURCE QUOTE PROOF:` contain the source's original language, original notation, every word as-is. Project-notation rewrites belong in the rendered prose body, not in the verbatim comment.
+
+## Mathlib dependency anchors (`\mathlibok`)
+
+When your chapter's proofs rely on a definition or lemma that **Mathlib already provides** (and the project will not re-prove), it is good practice — not just a bare `\uses{}` to nowhere — to make that dependency a first-class blueprint block: a **Mathlib dependency anchor**. Doing so:
+
+- makes the reliance explicit and readable (a mathematician sees exactly which Mathlib result the route stands on);
+- gives `leandag` a real node, so the `\uses{}` resolves (no broken/unknown ref) and the node's effort is **done** rather than ∞;
+- keeps it clear how much the route leans on Mathlib vs. on original work.
+
+Write the anchor like any statement block, with three differences:
+
+```latex
+\begin{lemma}[Hensel's lemma]
+  \label{lem:hensel_mathlib}
+  \lean{Mathlib.RingTheory.Henselian.foo}   % the REAL Mathlib declaration
+  \mathlibok
+  \textit{Provided by Mathlib.}
+  Statement of the result in the project's notation.
+\end{lemma}
+```
+
+- **`\lean{}` names the actual Mathlib declaration** (with its real namespace), so `leandag` matches the node to Mathlib.
+- **`\mathlibok`** marks it as supplied by Mathlib — the DAG treats it as done; no `\begin{proof}` is needed.
+- No `% SOURCE:`/`% SOURCE QUOTE:` block — Mathlib is the source; the `\lean{}` target *is* the citation.
+
+**The anti-hallucination rule (mirrors citation discipline):** mark `\mathlibok` ONLY when the statement genuinely exists in Mathlib and your stated form is faithful to it. A wrong or invented `\mathlibok` is worse than an ∞ hole — the loop will treat a non-existent result as available and skip proving a real gap. So:
+
+- Prefer anchors the **directive names** (the plan agent/reviewer identified them as Mathlib results).
+- If you are not confident the exact statement is in Mathlib, do **not** mark `\mathlibok` — write the block without it (or leave the `\uses{}` for the reviewer to resolve) and flag it under "Notes for Plan Agent" so the reviewer can verify against Lean.
+- Never put `\mathlibok` on one of the project's **own** to-be-proved declarations. That marker is for Mathlib-supplied results only; `\leanok` (project proofs) is never yours to add.
 
 ## Reading references
 
@@ -227,7 +269,28 @@ If your invocation's recorded write-domain does NOT include `references/**` (you
 5. **For every "retrieval needed" item, dispatch a `reference-retriever`** (see above) and **wait** for it to return. THEN open and read the newly-written `references/<slug>.md` before drafting the citing block. Do not draft citation blocks against pending or imagined sources.
 6. Make the edits. For each citation block: copy `% SOURCE QUOTE:` and `% SOURCE QUOTE PROOF:` content character-by-character from the local reference file — original language, original notation, every word. Do not transcribe from a window of the file you "remember reading"; have the file open and copy.
 7. Verify the file is still valid LaTeX at a glance (no unmatched begin/end, balanced braces in `\label`/`\uses`/`\lean`). Spot-check that every `% SOURCE:` line has a non-empty `(read from references/<file>.md)` parenthetical and that the named file exists.
-8. Write your report. List under "References consulted" every local file you opened in step 2 and step 5.
+8. **Verify dependencies with `leandag`** (see the section below): confirm your chapter introduced no broken `\uses{}` and left none of your blocks unintentionally isolated. Fix the edges and re-check.
+9. Write your report. List under "References consulted" every local file you opened in step 2 and step 5.
+
+## Verifying dependencies with leandag
+
+`leandag` parses the real Lean ↔ blueprint dependency DAG, so use it to check your `\uses{}` instead of trusting your memory of the graph. It is read-only on the blueprint (it never edits your chapter); run it after you make edits:
+
+```
+leandag build --json                       # report: unknown_uses, unmatched_lean, isolated count
+leandag query --isolated --chapter <c>     # isolated nodes in your chapter (no edges in or out)
+leandag show isolated                       # all isolated nodes, project-wide
+```
+
+(The archon-framed equivalent is `python3 .claude/tools/archon-leandag.py [--json]`, which always works wherever the loop runs.)
+
+What to do with the output, scoped to **your chapter**:
+
+- **`unknown_uses` naming a label in your chapter** → you wrote a `\uses{}` pointing at a label that doesn't exist. Fix the label, or — if the target genuinely belongs in your chapter and the directive calls for it — add the missing declaration. If the missing label lives in another chapter, leave a correct `\uses{}` to it and note it under "Notes for Plan Agent" (you don't edit that chapter).
+- **A block you wrote shows up as isolated** → it has no `\uses{}` out and nothing uses it. This is almost always a *missing edge*: add the `\uses{}` that ties it to the declarations its statement/proof actually depends on (and check whether a sibling result should `\uses{}` it). Only treat an isolated block as removable when your directive explicitly authorized removing it.
+- **Removal** (directive-authorized only): delete the orphaned block cleanly and record it in your report. Never remove the goal or a block whose `\lean{}` still names a live Lean declaration.
+
+Keep `leandag` edits inside your assigned chapter — fixing a dependency that lives in another chapter is a "Notes for Plan Agent" item, not a cross-chapter edit.
 
 ## Logging
 
@@ -251,6 +314,8 @@ blueprint/src/chapters/<chapter-slug>.tex
 - **Added theorem** `\theorem`/`\label{thm:foo}` — <one line on statement>
   - Proof sketch added: <Y/N + brief shape>
 - **Revised** `<existing label>` — <one line on what changed>
+- **Fixed dependencies** `<label>` — corrected/added `\uses{...}` (was isolated / had a broken ref per leandag).
+- **Removed** `<label>` — orphaned isolated block, removal authorized by directive.
 - ...
 
 ## Cross-references introduced
