@@ -405,15 +405,11 @@ If a previous experiment is being restarted, check compilation status of every t
 
 **Blocked-deps filter.** Before dispatch, plan-validate also drops any objective whose transitive local imports failed the *previous* `lake build`. Reason: a prover assigned to `Downstream.lean` that imports `Upstream.lean`-which-doesn't-compile would fail to even load the file, burning API time for nothing. The blocked set is parsed from `.archon/last_lake_build.log`. There is one important exception: a blocked file that's *itself* an objective this iter is presumed-being-fixed — the planner is allowed to assign `Upstream.lean` and `Downstream.lean` together (the prover phase handles them in import order). When the filter drops files, they're listed in `USER_HINTS.md` with their specific blocking deps, so you can prioritize fixing the upstream files next iter. Best practice: when you see `## Build state` flagging compile errors, put those files at the top of `## Current Objectives` so the filter exempts the downstream lanes that depend on them.
 
-## Dependency graph
+## Blueprint graph (leandag)
 
-Optional but cheap. Before scoping objectives, you may run:
+The dependency graph is already injected above under **`## Blueprint graph state (leandag)`** — the ready-to-prove frontier, the ∞-effort holes, and broken `\uses{}` refs are computed for you from leandag (the same graph the dashboard DAG page and `archon dag` use). You do NOT need to run a script to derive dispatch ordering.
 
-```
-${LEAN4_PYTHON_BIN:-python3} "$LEAN4_SCRIPTS/dependency_graph.py" . --format=summary
-```
-
-It parses imports + chapter `\lean{...}` / `\uses{...}` / `\proves{...}` / markers and emits a project-wide view in under a second. Use it to order objectives — upstream files first, downstream files later.
+Scope objectives straight from it: dispatch the frontier first (upstream-before-downstream falls out of the `\uses` order), and **never send a prover at an ∞-effort node** — a statement with no informal proof is blind formalization; write the proof (or dispatch a blueprint subagent) first. To explore the live graph beyond the injected summary, drive the `leandag` CLI (`leandag stats`, `leandag focus`, `leandag show gaps`).
 
 ## Stage transitions
 

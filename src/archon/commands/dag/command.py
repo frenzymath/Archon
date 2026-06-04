@@ -34,7 +34,7 @@ from archon.commands.loop.services import BlueprintServerProcess, DashboardProce
 
 from .context import DagContext, DagOptions
 from .phases import DagBuildPhase, DagDoctorPhase, DagElaborationPhase
-from .status import dag_is_complete
+from .status import dag_is_complete, set_dag_in_progress
 
 
 # Subagents the blueprint-elaboration phase always has available,
@@ -90,12 +90,20 @@ class DagCommand:
         if not ctx.dry_run:
             check_informal_agent_keys()
 
+        # The user explicitly launched `archon dag`, so we do NOT short-circuit
+        # on a prior COMPLETE marker — we demote it to IN_PROGRESS and run at
+        # least one more elaboration pass. If the blueprint is in fact still
+        # done, the agent re-asserts COMPLETE at the end of that pass and the
+        # loop stops after one iteration.
         if dag_is_complete(ctx.state_dir):
-            log.success(
-                f"DAG_STATUS.md says COMPLETE for '{ctx.project_name}'. "
-                f"Nothing to do — run `archon loop` to start proving."
+            log.info(
+                f"DAG_STATUS.md was COMPLETE for '{ctx.project_name}', but you "
+                f"launched `archon dag` — resetting to IN_PROGRESS and running "
+                f"another pass. The agent re-asserts COMPLETE at the end if the "
+                f"blueprint is still done."
             )
-            return
+            if not ctx.dry_run:
+                set_dag_in_progress(ctx.state_dir)
 
         self.start = time.monotonic()
 

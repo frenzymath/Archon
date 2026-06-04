@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -938,70 +936,73 @@ def _prover_modes_catalog_block(state_dir: Path) -> str:
 
 
 def _blueprint_frontier_block(project_path: Path) -> str:
-    """Compute and inject the blueprint frontier into the plan prompt.
+    """Inject the leandag graph state (frontier, ∞-holes, broken deps) into the plan prompt.
 
-    Calls ``dependency_graph.py --format=frontier-summary`` against the
-    current project, so the plan agent receives a deterministic, token-cheap
-    view of which declarations have all their \\uses{} deps satisfied and
-    are ready to prove — without having to parse the blueprint itself.
-
-    Returns an empty string when the project has no blueprint directory,
-    when the script is missing, or when the script fails (e.g. no
-    declarations yet).  Silently swallowed on any error so a broken
+    Built from leandag — the SAME dependency graph the dashboard DAG page and
+    the ``archon dag`` agent use — so the planner, the dashboard, and the
+    reviewer never disagree about what is ready or what is blocked. Replaces
+    the older standalone ``dependency_graph.py`` frontier. Degrades to an empty
+    string when there is no blueprint or leandag is unavailable, so a broken
     blueprint can't block the loop.
     """
     chapters_dir = project_path / "blueprint" / "src" / "chapters"
     if not chapters_dir.is_dir():
         return ""
     try:
-        from archon.commands.init.utils import data_path
-        script = data_path("skills/lean4/lib/scripts/dependency_graph.py")
+        from archon.commands.dag.leandag_gaps import compute_gaps
+        report = compute_gaps(project_path)
     except Exception:
         return ""
-    if not script.is_file():
-        return ""
-    try:
-        r = subprocess.run(
-            [sys.executable, str(script), str(project_path),
-             "--format=frontier-summary", "--max-frontier=20"],
-            capture_output=True, text=True, timeout=30,
-        )
-        out = r.stdout.strip()
-        if not out or r.returncode != 0:
-            return ""
-    except Exception:
+    if report.error or not report.has_blueprint:
         return ""
 
-    return dedent(f"""
+    # Planner-focused, token-cheap rendering: the frontier (what to dispatch),
+    # the ∞ holes (what to blueprint first), and broken deps (what to fix). The
+    # full coverage dump (uncovered Lean decls, etc.) is the dag agent's concern
+    # and is injected there via _leandag_block — not here.
+    def _lst(title: str, items: list, n: int, render=lambda x: f"`{x}`") -> str:
+        shown = items[:n]
+        out = [f"**{title}** ({len(items)}):"]
+        if not items:
+            out.append("- none")
+        else:
+            out += [f"- {render(it)}" for it in shown]
+            if len(items) > n:
+                out.append(f"- … and {len(items) - n} more")
+        return "\n".join(out)
 
-        ## Blueprint frontier — ready-to-prove declarations
+    body = "\n\n".join([
+        f"Entry `{report.entry}` — {report.total_blueprint_decls} blueprint "
+        f"declaration(s); {len(report.unproved)} unproved, "
+        f"{report.infinity_total} with ∞-effort closure.",
+        _lst("Ready to prove (every \\uses dep done — dispatch these first)",
+             report.ready, 25),
+        _lst("∞ sources — statements with NO informal proof (root-first)",
+             report.infinity_sources, 15),
+        _lst("Broken \\uses{} (label exists in no chapter)",
+             report.broken_uses, 15,
+             render=lambda t: f"`{t[0]}` → `{t[1]}`"),
+    ])
 
-        The following is computed deterministically from the current blueprint
-        (\\lean{{...}}, \\uses{{...}}, \\leanok markers after the last sync_leanok run).
-        **Frontier nodes** have every \\uses{{}} dep already \\leanok — dispatch these
-        first. Near-frontier nodes unblock as soon as the frontier nodes above them close.
+    header = dedent("""
 
-        ```
-        {out}
-        ```
+        ## Blueprint graph state (leandag) — frontier, gaps, broken deps
 
-        **Blueprint maintenance rules (act on these before dispatching provers):**
-        - "Ready but missing \\lean{{}}" entries need a \\lean{{Name}} added to the
-          blueprint chapter before a prover can be dispatched. Do this as part of
-          your planning pass.
-        - "Broken \\uses{{}}" entries reference a label that exists in no chapter.
-          Either the dependency is wrong (remove it) or the dependency is real but
-          lacks a blueprint entry (add the corresponding \\begin{{lemma/definition}}
-          block with \\label{{}}, \\lean{{}}, and \\uses{{}} in the appropriate chapter).
-          Fix broken refs before dispatching work that depends on them.
-        - If a declaration on the frontier looks like it SHOULD depend on something
-          that is not yet \\leanok, add the missing \\uses{{label}} to the blueprint
-          so the DAG reflects the true mathematical dependency. Do not dispatch
-          a prover to a declaration whose \\uses{{}} list is incomplete.
+        Computed deterministically from the leandag dependency graph (the same
+        graph the dashboard DAG page and `archon dag` use), reflecting
+        \\lean{}/\\uses{}/\\leanok as of the last sync. Choose objectives from it
+        directly — you do NOT need to re-parse the blueprint.
 
-        You do NOT need to re-parse the blueprint to derive this ordering.
-        For the full JSON graph: python3 $LEAN4_SCRIPTS/dependency_graph.py . --format=frontier
-    """)
+        """)
+    footer = dedent("""
+
+        **Act on these before dispatching provers:**
+        - **Ready to prove** — every \\uses{} dep is done. Dispatch the frontier first.
+        - **∞ effort / ∞ sources** — a statement with NO informal proof. Formalizing it is blind progress: **never dispatch a prover at an ∞-effort node.** Write the missing informal proof (or dispatch a blueprint subagent) to give it finite effort first.
+        - **Broken \\uses{}** — fix the ref (remove it, or add the missing \\begin{lemma} block with \\label/\\lean/\\uses) before dispatching anything that depends on it.
+        - If a frontier node SHOULD depend on something not yet done, add the missing \\uses{label} so the graph reflects the true dependency — an incomplete \\uses list makes a node look ready when it isn't.
+        """)
+    return header + body + "\n" + footer
 
 
 def _protected_block(project_path: Path) -> str:
@@ -1116,7 +1117,7 @@ def build_plan_prompt(
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
         - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
-        - The blueprint frontier (which declarations are ready to prove) is injected below under `## Blueprint frontier`. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def _lean_files_block(project_path: Path) -> str:
@@ -1288,7 +1289,6 @@ def build_dag_prompt(
     lean_block = _lean_files_block(project_path) if lean_aware else ""
     chapters_block = _existing_chapters_block(project_path)
     goal_block = _goal_description_block(state_dir, project_path)
-    frontier_block = _blueprint_frontier_block(project_path)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     leandag_block = _leandag_block(project_path)
     sidecar_block = _dag_iter_sidecar_block(state_dir, iter_num)
@@ -1308,10 +1308,9 @@ def build_dag_prompt(
 
         Notes on what has already been done for you this iteration:
         - The blueprint-doctor findings from the prior iter are injected below (when present).
-        - The blueprint frontier (broken \\uses{{}} refs, orphan chapters) is injected below.
         - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
         - The current DAG_STATUS.md is injected below.
-        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs).""") + status_block + goal_block + lean_block + chapters_block + refs_block + frontier_block + doctor_block + leandag_block + sidecar_block + catalog_block
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + sidecar_block + catalog_block
 
 
 def build_prover_prompt(
