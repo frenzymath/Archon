@@ -47,6 +47,7 @@ DAG_SUBAGENTS = (
     "blueprint-reviewer",
     "reference-retriever",
     "strategy-critic",
+    "dag-walker",
 )
 
 
