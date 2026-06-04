@@ -81,3 +81,29 @@ export function useBlueprint(file: string, name: string) {
     enabled: !!file && !!name,
   });
 }
+
+export interface BlueprintChapter { slug: string; title: string; tex: string; }
+export interface BlueprintChaptersResponse {
+  chapters: BlueprintChapter[];
+  macros?: Record<string, string>;
+  hasBlueprint: boolean;
+  commit: string | null;
+  error: string | null;
+}
+
+/**
+ * The whole blueprint as ordered chapters (raw tex, comments preserved), or —
+ * when `commit` is given — as it was at that inner-git commit (read via
+ * `git show` server-side, never cached).
+ */
+export function useBlueprintChapters(commit?: string | null) {
+  return useQuery<BlueprintChaptersResponse>({
+    queryKey: ['blueprintChapters', commit ?? null],
+    queryFn: () => fetchJson(
+      commit
+        ? `/api/blueprint/chapters?commit=${encodeURIComponent(commit)}`
+        : '/api/blueprint/chapters',
+    ),
+    staleTime: commit ? Infinity : 30_000,
+  });
+}

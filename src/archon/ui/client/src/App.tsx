@@ -6,6 +6,7 @@ import Journal from './views/Journal';
 import DiffPlayback from './views/DiffPlayback';
 import ProofGraph from './views/ProofGraph';
 import DagView from './views/DagView';
+import Blueprint from './views/Blueprint';
 // Vite's resolveJsonModule (enabled by default) lets us import the
 // version from package.json so the badge stays in sync with releases
 // without manual updates. If you move package.json or the build setup
@@ -40,6 +41,7 @@ export default function App() {
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/graph" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Graph</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
+          <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
           <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
           <NavLink to="/diffs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Diffs</NavLink>
           <NavLink to="/journal" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Journal</NavLink>
@@ -50,6 +52,7 @@ export default function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/graph" element={<ProofGraph />} />
           <Route path="/dag" element={<DagView />} />
+          <Route path="/blueprint" element={<Blueprint />} />
           <Route path="/logs" element={<LogViewer />} />
           <Route path="/diffs" element={<DiffPlayback />} />
           <Route path="/journal" element={<Journal />} />

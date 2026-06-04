@@ -18,7 +18,7 @@ export interface GitCommit {
   fileSlug?: string;
 }
 
-function runGit(gitDir: string, projectPath: string, args: string[]): string {
+export function runGit(gitDir: string, projectPath: string, args: string[]): string {
   const r = spawnSync('git', args, {
     env: { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: projectPath },
     cwd: projectPath,
@@ -77,7 +77,7 @@ function stripTexComments(src: string): string {
  * are skipped silently — a handful of exotic definitions shouldn't stop the
  * rest from rendering.
  */
-function parseMacros(src: string): Record<string, string> {
+export function parseMacros(src: string): Record<string, string> {
   const out: Record<string, string> = {};
   const source = stripTexComments(src);
   const re = /\\(newcommand|renewcommand|providecommand|DeclareMathOperator)\*?\s*/g;
@@ -136,7 +136,7 @@ function parseMacros(src: string): Record<string, string> {
 }
 
 /** Read every .tex file in `blueprint/src/macros/` and merge macro definitions. */
-function loadBlueprintMacros(projectPath: string): Record<string, string> {
+export function loadBlueprintMacros(projectPath: string): Record<string, string> {
   const macrosDir = path.join(projectPath, 'blueprint', 'src', 'macros');
   if (!fs.existsSync(macrosDir) || !fs.statSync(macrosDir).isDirectory()) return {};
   const merged: Record<string, string> = {};

@@ -175,6 +175,29 @@ const ZOOM_MAX = 3.0;
 const FIT_FLOOR = 0.34;
 
 type NodeSet = 'union' | 'blueprint' | 'lean';
+// Review-oriented graph queries (what to do next / what's wrong / what's dead).
+type DagQuery =
+  | 'all'        // no query filter
+  | 'frontier'   // ready to prove: unproved, every dep done
+  | 'zeroEffort' // sorry-free draft, just needs \leanok
+  | 'sorry'      // has a sorry/admit
+  | 'gaps'       // ∞ effort: no informal proof (roadmap hole)
+  | 'unproved'   // not \leanok and not \mathlibok
+  | 'leaves'     // nothing depends on it (rdep_count 0)
+  | 'roots'      // depends on nothing (dep_count 0)
+  | 'isolated';  // no edges at all (dep 0 and rdep 0) — possibly dead
+
+const QUERY_LABEL: Record<DagQuery, string> = {
+  all: 'All nodes',
+  frontier: 'Frontier (ready to prove)',
+  zeroEffort: 'Zero effort (needs \\leanok)',
+  sorry: 'Has sorry',
+  gaps: '∞ effort (no proof)',
+  unproved: 'Unproved',
+  leaves: 'Leaves (nothing uses)',
+  roots: 'Roots (no deps)',
+  isolated: 'Isolated (dead?)',
+};
 
 export default function DagView() {
   // Time-travel: when a commit is selected, the DAG is built at that commit
@@ -218,6 +241,7 @@ export default function DagView() {
   const [selId, setSelId] = useState<string>('');
   const [search, setSearch] = useState('');
   const [statsOpen, setStatsOpen] = useState(true);
+  const [query, setQuery] = useState<DagQuery>('all');
 
   // ── Derived graph structures ──────────────────────────────────────────────
   const macros = useMemo(() => (data?.meta?.macros ?? {}) as Record<string, string>, [data]);
@@ -312,14 +336,46 @@ export default function DagView() {
     return true;
   }, [allNodes, nodeset]);
 
+  // A node needs no more work if it's leanok, in mathlib, or has a Lean proof.
+  const isDoneNode = useCallback(
+    (n: DagNode) => n.proved || !!n.mathlib_ok || n.effort_local === 0, [],
+  );
+  const doneIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const n of allNodes.values()) if (isDoneNode(n)) s.add(n.id);
+    return s;
+  }, [allNodes, isDoneNode]);
+
+  // Predicate for the active review query (see DagQuery).
+  const matchesQuery = useCallback((id: string): boolean => {
+    const n = allNodes.get(id); if (!n) return false;
+    switch (query) {
+      case 'frontier':
+        return n.type !== 'lean_aux' && !isDoneNode(n)
+          && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d));
+      case 'zeroEffort':
+        return n.type !== 'lean_aux' && !n.proved && !n.mathlib_ok && n.effort_local === 0;
+      case 'sorry': return n.has_sorry;
+      case 'gaps': return n.effort_local === null || n.effort_local === undefined;
+      case 'unproved': return n.type !== 'lean_aux' && !n.proved && !n.mathlib_ok;
+      case 'leaves': return n.rdep_count === 0;
+      case 'roots': return n.dep_count === 0;
+      case 'isolated': return n.dep_count === 0 && n.rdep_count === 0;
+      default: return true;
+    }
+  }, [allNodes, query, isDoneNode, doneIds]);
+
   const visibleSet = useMemo(() => {
     if (focus && allNodes.has(focus)) return new Set([...coneOf(focus)].filter(inNodeset));
     let ids = [...allNodes.keys()].filter(inNodeset);
-    if (!showOrphans) ids = ids.filter((id) => !isOrphan(id));
+    // The orphan filter only applies to the default view — an active review
+    // query (leaves / roots / gaps / …) wants every match, isolated included.
+    if (query === 'all' && !showOrphans) ids = ids.filter((id) => !isOrphan(id));
     if (componentSel !== null) ids = ids.filter((id) => compOf.get(id) === componentSel);
     if (chapterSel) ids = ids.filter((id) => allNodes.get(id)!.chapter === chapterSel);
+    if (query !== 'all') ids = ids.filter(matchesQuery);
     return new Set(ids);
-  }, [focus, allNodes, coneOf, inNodeset, showOrphans, componentSel, chapterSel, compOf, isOrphan]);
+  }, [focus, allNodes, coneOf, inNodeset, showOrphans, componentSel, chapterSel, compOf, isOrphan, query, matchesQuery]);
 
   // ── Imperative graph helpers (read latest via refs) ───────────────────────
   const recomputeBounds = useCallback(() => {
@@ -466,30 +522,37 @@ export default function DagView() {
   }, [search, allNodes, goTo]);
 
   const resetView = useCallback(() => {
-    setShowOrphans(false); setFocus(null); setComponentSel(null); setChapterSel(''); setNodeset('union'); setSearch('');
+    setShowOrphans(false); setFocus(null); setComponentSel(null); setChapterSel(''); setNodeset('union'); setSearch(''); setQuery('all');
+  }, []);
+
+  // Toggle a review query from a clickable stat row (click again to clear).
+  const toggleQuery = useCallback((q: DagQuery) => {
+    setQuery((prev) => (prev === q ? 'all' : q));
+    setFocus(null);
   }, []);
 
   // ── Stats overlay ─────────────────────────────────────────────────────────
   const stats = useMemo(() => {
     const vals = [...allNodes.values()];
     const bp = vals.filter((n) => n.type !== 'lean_aux');
-    // A node needs no more work if it's leanok, in mathlib, or has a Lean proof.
-    const isDone = (n: DagNode) => n.proved || !!n.mathlib_ok || n.effort_local === 0;
     const proved = bp.filter((n) => n.proved).length;
     const mathlib = bp.filter((n) => n.mathlib_ok).length;
     const sorry = vals.filter((n) => n.has_sorry).length;
-    const doneIds = new Set(vals.filter(isDone).map((n) => n.id));
-    const ready = bp.filter((n) => !isDone(n) && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d))).length;
+    const ready = bp.filter((n) => !isDoneNode(n) && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d))).length;
     const gaps = bp.filter((n) => !n.lean_name && !n.mathlib_ok).length;
     const leanok = bp.filter((n) => !n.proved && !n.mathlib_ok && n.effort_local === 0).length;
+    // Structure / health.
+    const leaves = vals.filter((n) => n.rdep_count === 0).length;
+    const roots = vals.filter((n) => n.dep_count === 0).length;
+    const isolated = vals.filter((n) => n.dep_count === 0 && n.rdep_count === 0).length;
     let done = 0, remLower = 0, infNodes = 0;
     for (const n of vals) {
       if (n.proof_size_lean != null) done += n.proof_size_lean;
       if (n.effort_local == null) infNodes++; else remLower += n.effort_local;
     }
     const pct = bp.length ? Math.round((100 * proved) / bp.length) : 0;
-    return { provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes };
-  }, [allNodes]);
+    return { provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes, leaves, roots, isolated };
+  }, [allNodes, isDoneNode, doneIds]);
 
   const sel = selId ? allNodes.get(selId) : undefined;
 
@@ -502,9 +565,23 @@ export default function DagView() {
   const dups = m.duplicate_ids ?? [];
   const fmt = (v: number) => v.toLocaleString();
 
+  // A stat row that doubles as a graph filter (click to apply, click again to clear).
+  const qRow = (label: string, value: number, q: DagQuery, vClass = '') => (
+    <div className={`row dv-qrow ${query === q ? 'dv-qon' : ''}`}
+      onClick={() => toggleQuery(q)} title={`Filter graph: ${QUERY_LABEL[q]}`}>
+      <span>{label}</span><span className={`v ${vClass}`}>{value}</span>
+    </div>
+  );
+
   return (
     <div className="dv-root">
       <style>{DV_CSS}</style>
+      <style>{`
+        .dv-stats .dv-qrow { cursor: pointer; border-radius: 4px; padding-left: 3px; margin-left: -3px; }
+        .dv-stats .dv-qrow:hover { background: var(--bg-tertiary); }
+        .dv-stats .dv-qrow.dv-qon { background: rgba(59,130,246,0.16); }
+        .dv-select.dv-select-on { border-color: #3b82f6; color: #1d4ed8; font-weight: 600; }
+      `}</style>
 
       {/* Toolbar */}
       <div className="dv-toolbar">
@@ -544,7 +621,14 @@ export default function DagView() {
           <option value="">All chapters</option>
           {chapters.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
-        <label className="dv-chk"><input type="checkbox" checked={showOrphans} onChange={(e) => { setShowOrphans(e.target.checked); setFocus(null); }} /> show isolated nodes</label>
+        <select className={`dv-select ${query !== 'all' ? 'dv-select-on' : ''}`} value={query}
+          onChange={(e) => { setQuery(e.target.value as DagQuery); setFocus(null); }}
+          title="Filter to a review query">
+          {(Object.keys(QUERY_LABEL) as DagQuery[]).map((q) => (
+            <option key={q} value={q}>{QUERY_LABEL[q]}</option>
+          ))}
+        </select>
+        <label className="dv-chk"><input type="checkbox" checked={showOrphans} onChange={(e) => { setShowOrphans(e.target.checked); setFocus(null); }} disabled={query !== 'all'} /> show isolated nodes</label>
         {focus && (
           <span className="dv-pill" title="Clear focus" onClick={() => setFocus(null)}>
             <span className="lbl">focus: {focus.split(':').pop()}</span><span className="x">×</span>
@@ -565,15 +649,21 @@ export default function DagView() {
             <div className="row"><span>Proved (leanok)</span><span className="v done">{stats.provedN}/{stats.bpN} · {stats.pct}%</span></div>
             <div className="bar"><span style={{ width: `${stats.pct}%` }} /></div>
             {stats.mathlib > 0 && <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>}
-            <div className="row"><span>With sorry</span><span className={`v ${stats.sorry ? 'inf' : ''}`}>{stats.sorry}</span></div>
-            <div className="row"><span>Ready to formalize</span><span className="v">{stats.ready}</span></div>
+            {qRow('With sorry', stats.sorry, 'sorry', stats.sorry ? 'inf' : '')}
+            {qRow('Ready to formalize', stats.ready, 'frontier')}
             <div className="row"><span>Needs \lean{'{}'}</span><span className="v">{stats.gaps}</span></div>
-            <div className="row"><span>Needs \leanok</span><span className="v">{stats.leanok}</span></div>
+            {qRow('Needs \\leanok', stats.leanok, 'zeroEffort')}
+            <div className="sep" />
+            <h4>Structure</h4>
+            <div className="row"><span>Components</span><span className="v">{components.length}</span></div>
+            {qRow('Leaves', stats.leaves, 'leaves')}
+            {qRow('Roots', stats.roots, 'roots')}
+            {qRow('Isolated', stats.isolated, 'isolated', stats.isolated ? 'inf' : '')}
             <div className="sep" />
             <h4>Effort (chars)</h4>
             <div className="row"><span>Done</span><span className="v done">{fmt(stats.done)}</span></div>
             <div className="row"><span>Remaining ≥</span><span className="v work">{fmt(stats.remLower)}</span></div>
-            <div className="row"><span>∞ nodes</span><span className="v inf">{stats.infNodes}</span></div>
+            {qRow('∞ nodes', stats.infNodes, 'gaps', 'inf')}
           </div>
         ) : (
           <button className="dv-stats-show" title="Show project stats" onClick={() => setStatsOpen(true)}>

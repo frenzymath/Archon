@@ -23,6 +23,7 @@ import { register as registerProofGraph } from './routes/proofgraph.js';
 import { register as registerGit } from './routes/git.js';
 import { register as registerMultilane } from './routes/multilane.js';
 import { register as registerDag } from './routes/dag.js';
+import { register as registerBlueprint } from './routes/blueprint.js';
 import type { ProjectPaths } from './routes/project.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,6 +80,7 @@ export async function createServer(options: { projectPath: string; port: number 
   registerGit(fastify, paths);
   registerMultilane(fastify, paths);
   registerDag(fastify, paths);
+  registerBlueprint(fastify, paths);
 
   // Bind dual-stack (IPv6 `::` with IPV6_V6ONLY=0 accepts IPv4 too on Linux/macOS).
   // Binding to `0.0.0.0` alone causes "waiting for host…" when the browser
