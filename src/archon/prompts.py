@@ -1036,6 +1036,35 @@ def _protected_block(project_path: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _prover_dag_hint_block(project_path: Path) -> str:
+    """Short DAG-navigation note injected into every prover prompt.
+
+    A prover running in a mode reads the mode body *instead of*
+    ``prover-prover.md``, so this lives in the prompt builder (like
+    ``_protected_block``) to reach provers regardless of mode. Only shown
+    when the project has a blueprint — otherwise there is no graph to query.
+    """
+    if not (project_path / "blueprint" / "src" / "chapters").is_dir():
+        return ""
+    return dedent("""
+
+        ## Blueprint dependency graph (leandag)
+
+        You can navigate the project's dependency graph read-only to find the
+        proven lemmas/defs your goal can lean on (with the exact `\\lean{}`
+        names to apply) instead of re-deriving them. `archon` is on PATH;
+        `--json` prints parseable JSON to stdout (banner to stderr):
+
+        ```
+        archon dag-query ancestors --node <blueprint-label-of-your-target>   # proven deps available to you
+        archon dag-query node      --node <label>                            # one declaration's status
+        ```
+
+        It is a navigation aid only — the proof obligation and your blueprint
+        chapter remain the source of truth.
+        """)
+
+
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int,
@@ -1334,7 +1363,7 @@ def build_prover_prompt(
             Project state directory: {state_dir}
             Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
             All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-            + memory_block + _protected_block(project_path) + mode_block \
+            + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
@@ -1344,7 +1373,7 @@ def build_prover_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-        + memory_block + _protected_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+        + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
@@ -1391,7 +1420,7 @@ def build_parallel_prover_prompt(
             - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
             - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
             - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-            + bp_hint + memory_block + _protected_block(project_path) + mode_block \
+            + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
     stage_path = normalize_stage_for_prompt_path(stage)
@@ -1409,7 +1438,7 @@ def build_parallel_prover_prompt(
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
         - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-        + bp_hint + memory_block + _protected_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+        + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(
