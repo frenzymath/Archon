@@ -23,6 +23,9 @@ export interface DagNode {
   descendant_count?: number;
   effort_total: number | null;
   effort_local: number | null;
+  /** Source files (leandag GraphNode.tex_file / lean_file). */
+  tex_file?: string | null;
+  lean_file?: string | null;
   proof_tex?: string;
   lean_source?: string;
   proof_size_tex?: number | null;

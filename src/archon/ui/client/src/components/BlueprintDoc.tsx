@@ -32,7 +32,10 @@ const NUMBERED = new Set([
   'example', 'conjecture', 'notation', 'convention', 'exercise', 'claim',
 ]);
 const LIST_ENVS = new Set(['itemize', 'enumerate', 'description']);
-const MATH_ENVS = new Set(['align', 'align*', 'aligned', 'equation', 'equation*', 'gather', 'gather*']);
+const MATH_ENVS = new Set([
+  'align', 'align*', 'aligned', 'equation', 'equation*', 'gather', 'gather*',
+  'array', 'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'cases', 'split', 'multline', 'multline*',
+]);
 
 // ── inline / block node types ────────────────────────────────────────────────
 type Inline =
@@ -212,6 +215,12 @@ function parseBlocks(src: string): Block[] {
   };
   let i = 0;
   while (i < src.length) {
+    // Math regions first, so a `\begin{array}` / `\begin{aligned}` inside math
+    // is never mistaken for a block environment.
+    if (src.startsWith('\\[', i)) { const e = src.indexOf('\\]', i + 2); if (e !== -1) { flushBuf(); out.push({ t: 'displaymath', v: src.slice(i + 2, e) }); i = e + 2; continue; } }
+    if (src.startsWith('$$', i)) { const e = src.indexOf('$$', i + 2); if (e !== -1) { flushBuf(); out.push({ t: 'displaymath', v: src.slice(i + 2, e) }); i = e + 2; continue; } }
+    if (src.startsWith('\\(', i)) { const e = src.indexOf('\\)', i + 2); if (e !== -1) { buf += src.slice(i, e + 2); i = e + 2; continue; } }
+    if (src[i] === '$') { const e = src.indexOf('$', i + 1); if (e !== -1) { buf += src.slice(i, e + 1); i = e + 1; continue; } }
     // section / subsection
     const sec = /^\\(sub)?section\*?\s*\{/.exec(src.slice(i));
     if (sec) {
@@ -240,8 +249,13 @@ function parseBlocks(src: string): Block[] {
           i = endIdx + `\\end{${name}}`.length;
           if (LIST_ENVS.has(name)) { out.push(parseList(rawBody, name === 'enumerate')); continue; }
           if (MATH_ENVS.has(name)) {
-            // KaTeX renders `aligned` for all of align/equation/gather variants.
-            out.push({ t: 'displaymath', v: `\\begin{aligned}${rawBody}\\end{aligned}` });
+            // align/equation/gather → KaTeX `aligned`; matrix-family keep their
+            // own environment (so e.g. array's `{ccc}` column spec survives).
+            const bare = name.replace(/\*$/, '');
+            const v = (bare === 'align' || bare === 'equation' || bare === 'gather' || bare === 'multline' || bare === 'split')
+              ? `\\begin{aligned}${rawBody}\\end{aligned}`
+              : `\\begin{${name}}${rawBody}\\end{${name}}`;
+            out.push({ t: 'displaymath', v });
             continue;
           }
           // amsthm-like env (or unknown — render its body)
@@ -279,60 +293,62 @@ function parseList(body: string, ordered: boolean): Block {
 }
 
 function parseEnv(name: string, raw: string): Block {
-  // optional [human name] right after \begin{env}
-  let body = raw, human: string | undefined;
-  const hm = /^\s*\[/.exec(body);
-  if (hm) {
-    const open = body.indexOf('[');
-    const close = matchBracket(body, open);
-    if (close !== -1) { human = parseInlineToText(body.slice(open + 1, close)); body = body.slice(close + 1); }
-  }
-  const meta: EnvMeta = { lean: [], uses: [], leanok: false, mathlibok: false, notready: false, human };
+  const meta: EnvMeta = { lean: [], uses: [], leanok: false, mathlibok: false, notready: false };
+  // Strip the metadata commands first — they can appear in any order in the
+  // env head (e.g. `\begin{definition}\leanok\n[Name]\n\label{}\lean{}`).
+  let body = raw;
   body = body.replace(/\\label\s*\{([^{}]*)\}/, (_, v) => { meta.label = v.trim(); return ''; });
   body = body.replace(/\\lean\s*\{([^{}]*)\}/g, (_, v) => { for (const t of String(v).split(',').map((s: string) => s.trim()).filter(Boolean)) meta.lean.push(t); return ''; });
   body = body.replace(/\\uses\s*\{([^{}]*)\}/g, (_, v) => { for (const t of String(v).split(',').map((s: string) => s.trim()).filter(Boolean)) meta.uses.push(t); return ''; });
   body = body.replace(/\\leanok\b/g, () => { meta.leanok = true; return ''; });
   body = body.replace(/\\mathlibok\b/g, () => { meta.mathlibok = true; return ''; });
   body = body.replace(/\\notready\b/g, () => { meta.notready = true; return ''; });
+  // Now the optional [human name] is the first non-space token (kept raw so its
+  // math renders).
+  const lead = body.replace(/^\s+/, '');
+  if (lead[0] === '[') {
+    const close = matchBracket(lead, 0);
+    if (close !== -1) { meta.human = lead.slice(1, close).trim(); body = lead.slice(close + 1); }
+  }
   return { t: 'env', name, meta, body: parseBlocks(body) };
 }
 
-/** Render an inline-LaTeX fragment to a flat plain string (for the `[name]` arg / titles fallback). */
-function parseInlineToText(src: string): string {
-  return src.replace(/\\(textbf|emph|textit|texttt|text)\s*\{([^{}]*)\}/g, '$2')
-    .replace(/[{}]/g, '').trim();
-}
+// ── numbering pass (cheap — no KaTeX; runs over ALL chapters so cross-refs and
+//    numbers stay global even when only some chapters are rendered) ───────────
+export interface TocSection { num: string; anchor: string; title: Inline[]; level: 2 | 3; }
+export interface NumberedChapter { slug: string; num: number; anchor: string; title: Inline[]; blocks: Block[]; sections: TocSection[]; }
+export interface BlueprintModel { doc: NumberedChapter[]; labels: LabelMap; }
 
-// ── numbering pass ───────────────────────────────────────────────────────────
-interface NumberedChapter { slug: string; num: number; anchor: string; title: Inline[]; blocks: Block[]; }
-function numberDoc(chapters: DocChapter[]): { doc: NumberedChapter[]; labels: LabelMap } {
+export function buildBlueprintModel(chapters: DocChapter[], showComments = true): BlueprintModel {
   const labels: LabelMap = new Map();
   const doc: NumberedChapter[] = [];
   let chapNum = 0;
-  for (const ch of chapters) {
+  for (const raw of chapters) {
     chapNum++;
-    const anchor = `ch-${ch.slug}`;
-    // chapter label: first \label{} before any \section/\begin
+    const tex = encodeComments(raw.tex, showComments);
+    const anchor = `ch-${raw.slug}`;
     const cut = Math.min(
-      ...['\\section', '\\begin{'].map(t => { const k = ch.tex.indexOf(t); return k === -1 ? ch.tex.length : k; }),
+      ...['\\section', '\\begin{'].map(t => { const k = tex.indexOf(t); return k === -1 ? tex.length : k; }),
     );
-    const chLab = /\\label\s*\{([^{}]*)\}/.exec(ch.tex.slice(0, cut));
+    const chLab = /\\label\s*\{([^{}]*)\}/.exec(tex.slice(0, cut));
     if (chLab) labels.set(chLab[1].trim(), { kind: 'Chapter', num: String(chapNum), anchor });
 
-    const blocks = parseBlocks(ch.tex);
+    const blocks = parseBlocks(tex);
+    const sections: TocSection[] = [];
     let sec = 0, sub = 0, stmt = 0;
     for (const b of blocks) {
       if (b.t === 'section') {
         if (b.level === 2) { sec++; sub = 0; b.num = `${chapNum}.${sec}`; }
-        else { sub++; b.num = `${chapNum}.${sec}.${sub}`; }
+        else { sub++; b.num = `${chapNum}.${sec || 1}.${sub}`; }
         b.anchor = `sec-${anchor}-${b.num.replace(/\./g, '_')}`;
         if (b.label) labels.set(b.label, { kind: 'Section', num: b.num, anchor: b.anchor });
+        sections.push({ num: b.num, anchor: b.anchor, title: b.title, level: b.level });
       } else if (b.t === 'env' && NUMBERED.has(b.name)) {
         stmt++; b.num = `${chapNum}.${stmt}`; b.anchor = `stmt-${anchor}-${b.num.replace(/\./g, '_')}`;
         if (b.meta.label) labels.set(b.meta.label, { kind: ENV_LABELS[b.name] ?? b.name, num: b.num, anchor: b.anchor });
       }
     }
-    doc.push({ slug: ch.slug, num: chapNum, anchor, title: parseInline(ch.title), blocks });
+    doc.push({ slug: raw.slug, num: chapNum, anchor, title: parseInline(raw.title), blocks, sections });
   }
   return { doc, labels };
 }
@@ -347,6 +363,35 @@ function renderMath(tex: string, display: boolean, macros: Record<string, string
 }
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+/** Drop `\\[2pt]`-style spacing args KaTeX chokes on. */
+function cleanDisplay(v: string): string {
+  return v.replace(/\\\\\s*\[[^\]]*\]/g, '\\\\');
+}
+
+// ── Lean syntax highlighting (mirrors the DAG view) ──────────────────────────
+const LN_KW = /\b(def|lemma|theorem|instance|class|structure|inductive|abbrev|noncomputable|private|protected|section|namespace|end|open|variable|where|do|let|have|show|suffices|calc|if|then|else|return|for|in|fun|match|with|by|sorry)\b/g;
+const LN_TAC = /\b(simp|ext|rfl|exact|intro|intros|apply|refine|constructor|use|rw|rewrite|rcases|rintro|obtain|push_neg|norm_num|ring|linarith|omega|decide|trivial|assumption|congr|tauto|aesop|cases|induction|revert|clear|all_goals|repeat|try|first|fin_cases|positivity|gcongr|field_simp)\b/g;
+const LN_TY = /\b(Nat|Int|Bool|String|List|Array|Option|Type|Prop|Sort|True|False|And|Or|Not|Iff|Eq|Scheme|Module|Ring|Field|CommRing|Ideal|Set)\b/g;
+const LN_NUM = /\b(\d+)\b/g;
+const LN_STR = /("(?:[^"\\]|\\.)*")/g;
+function highlightLean(raw: string): string {
+  return raw.split('\n').map((line) => {
+    let commentAt = -1, inStr = false;
+    for (let i = 0; i < line.length - 1; i++) {
+      if (line[i] === '"' && (i === 0 || line[i - 1] !== '\\')) inStr = !inStr;
+      if (!inStr && line[i] === '-' && line[i + 1] === '-') { commentAt = i; break; }
+    }
+    const code = commentAt >= 0 ? line.slice(0, commentAt) : line;
+    const comment = commentAt >= 0 ? line.slice(commentAt) : '';
+    let h = escapeHtml(code);
+    h = h.replace(LN_STR, m => `<span class="${styles.hlStr}">${m}</span>`);
+    h = h.replace(LN_KW, m => `<span class="${styles.hlKw}">${m}</span>`);
+    h = h.replace(LN_TAC, m => `<span class="${styles.hlTac}">${m}</span>`);
+    h = h.replace(LN_TY, m => `<span class="${styles.hlTy}">${m}</span>`);
+    h = h.replace(LN_NUM, m => `<span class="${styles.hlNum}">${m}</span>`);
+    return h + (comment ? `<span class="${styles.hlComment}">${escapeHtml(comment)}</span>` : '');
+  }).join('\n');
 }
 
 interface Ctx { macros: Record<string, string>; labels: LabelMap; lean: Map<string, string>; }
@@ -377,8 +422,9 @@ function LeanChip({ name, ctx }: { name: string; ctx: Ctx }) {
         title={src ? 'Show Lean source' : 'No Lean source found'}>
         λ {name.split('.').pop()}
       </button>
-      {open && (
-        <pre className={styles.leanCode}>{src ?? `-- Lean source for ${name} not found in the cached graph.`}</pre>
+      {open && (src
+        ? <pre className={styles.leanCode} dangerouslySetInnerHTML={{ __html: highlightLean(src) }} />
+        : <pre className={styles.leanCode}>{`-- Lean source for ${name} not found in the cached graph.`}</pre>
       )}
     </span>
   );
@@ -439,7 +485,7 @@ function parseCommentEntries(value: string): { tag: string; text: string }[] {
 
 function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   if (b.t === 'para') return <p className={styles.p}><Inlines nodes={b.c} ctx={ctx} k={k} /></p>;
-  if (b.t === 'displaymath') return <div className={styles.dblock} dangerouslySetInnerHTML={{ __html: renderMath(b.v, true, ctx.macros) }} />;
+  if (b.t === 'displaymath') return <div className={styles.dblock} dangerouslySetInnerHTML={{ __html: renderMath(cleanDisplay(b.v), true, ctx.macros) }} />;
   if (b.t === 'list') {
     const Tag = b.ordered ? 'ol' : 'ul';
     return <Tag className={styles.list}>{b.items.map((it, i) => <li key={i}>{it.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${i}-${j}`} />)}</li>)}</Tag>;
@@ -474,44 +520,30 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   );
 }
 
-export interface BlueprintDocHandle { toc: { slug: string; num: number; anchor: string; title: Inline[] }[]; }
-
-export default function BlueprintDoc({
-  chapters, macros, leanSource, showComments = true, onToc,
+/** Render one already-numbered chapter (this is where KaTeX runs — call it only
+ *  for chapters the user has actually selected, so the page loads lazily). */
+export function ChapterView({
+  chapter, macros, labels, leanSource,
 }: {
-  chapters: DocChapter[];
+  chapter: NumberedChapter;
   macros: Record<string, string>;
+  labels: LabelMap;
   leanSource: Map<string, string>;
-  showComments?: boolean;
-  onToc?: (toc: { slug: string; num: number; anchor: string }[]) => void;
 }) {
-  const { doc, labels } = useMemo(() => {
-    const encoded = chapters.map(c => ({ ...c, tex: encodeComments(c.tex, showComments) }));
-    return numberDoc(encoded);
-  }, [chapters, showComments]);
-
   const ctx: Ctx = useMemo(() => ({ macros, labels, lean: leanSource }), [macros, labels, leanSource]);
-
-  // surface a TOC for the parent (numbers + anchors)
-  useMemo(() => { onToc?.(doc.map(c => ({ slug: c.slug, num: c.num, anchor: c.anchor }))); }, [doc]); // eslint-disable-line
-
   return (
-    <div className={styles.root}>
-      {doc.map(ch => (
-        <section key={ch.slug} id={ch.anchor} className={styles.chapter}>
-          <h2 className={styles.chapterTitle}>
-            <span className={styles.chapNum}>{ch.num}</span> <Inlines nodes={ch.title} ctx={ctx} k={`ch${ch.num}`} />
-          </h2>
-          {ch.blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${ch.num}-${j}`} />)}
-        </section>
-      ))}
-    </div>
+    <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
+      <h2 className={styles.chapterTitle}>
+        <span className={styles.chapNum}>{chapter.num}</span> <Inlines nodes={chapter.title} ctx={ctx} k={`ch${chapter.num}`} />
+      </h2>
+      {chapter.blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
+    </section>
   );
 }
 
-/** Render an inline-LaTeX title (math-aware) to React — for the TOC. */
-export function TitleInline({ tex, macros }: { tex: string; macros: Record<string, string> }) {
-  const nodes = useMemo(() => parseInline(tex), [tex]);
+/** Render an inline-LaTeX title (math-aware) to React — for the TOC / headings. */
+export function TitleInline({ nodes, tex, macros }: { nodes?: Inline[]; tex?: string; macros: Record<string, string> }) {
+  const parsed = useMemo(() => nodes ?? parseInline(tex ?? ''), [nodes, tex]);
   const ctx: Ctx = { macros, labels: new Map(), lean: new Map() };
-  return <Inlines nodes={nodes} ctx={ctx} k="t" />;
+  return <Inlines nodes={parsed} ctx={ctx} k="t" />;
 }

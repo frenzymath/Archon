@@ -241,7 +241,13 @@ export default function DagView() {
   const [selId, setSelId] = useState<string>('');
   const [search, setSearch] = useState('');
   const [statsOpen, setStatsOpen] = useState(true);
+  // Highlight overlay (does NOT subset the canvas — it dims the rest so the
+  // matched subgraph stays embedded in its context). Combined with AND.
   const [query, setQuery] = useState<DagQuery>('all');
+  const [depRange, setDepRange] = useState<[number, number]>([0, Infinity]);
+  const [effRange, setEffRange] = useState<[number, number]>([0, Infinity]);
+  const [fileSel, setFileSel] = useState<string>('');
+  const [typeSel, setTypeSel] = useState<string>('');
 
   // ── Derived graph structures ──────────────────────────────────────────────
   const macros = useMemo(() => (data?.meta?.macros ?? {}) as Record<string, string>, [data]);
@@ -312,6 +318,13 @@ export default function DagView() {
 
   const chapters = useMemo(() => [...new Set(uniqueNodes.map((n) => n.chapter).filter(Boolean))].sort(), [uniqueNodes]);
 
+  // Slider / select domains for the highlight overlay.
+  const fileOf = useCallback((n: DagNode) => (n.lean_file || n.tex_file || '') as string, []);
+  const depMax = useMemo(() => uniqueNodes.reduce((mx, n) => Math.max(mx, n.dep_count ?? 0), 0), [uniqueNodes]);
+  const effMax = useMemo(() => uniqueNodes.reduce((mx, n) => (n.effort_total != null ? Math.max(mx, n.effort_total) : mx), 0), [uniqueNodes]);
+  const files = useMemo(() => [...new Set(uniqueNodes.map(fileOf).filter(Boolean))].sort(), [uniqueNodes, fileOf]);
+  const types = useMemo(() => [...new Set(uniqueNodes.map((n) => n.type).filter(Boolean))].sort(), [uniqueNodes]);
+
   // Cone (ancestors ∪ descendants ∪ self) and ancestors-only walkers.
   const coneOf = useCallback((id: string) => {
     const out = new Set<string>([id]);
@@ -365,17 +378,44 @@ export default function DagView() {
     }
   }, [allNodes, query, isDoneNode, doneIds]);
 
+  // What's actually loaded on the canvas — structural filters only (nodeset /
+  // component / chapter / focus / orphans). The review query and the slider /
+  // file / type filters do NOT subset here; they highlight (see highlightSet).
   const visibleSet = useMemo(() => {
     if (focus && allNodes.has(focus)) return new Set([...coneOf(focus)].filter(inNodeset));
     let ids = [...allNodes.keys()].filter(inNodeset);
-    // The orphan filter only applies to the default view — an active review
-    // query (leaves / roots / gaps / …) wants every match, isolated included.
-    if (query === 'all' && !showOrphans) ids = ids.filter((id) => !isOrphan(id));
+    if (!showOrphans) ids = ids.filter((id) => !isOrphan(id));
     if (componentSel !== null) ids = ids.filter((id) => compOf.get(id) === componentSel);
     if (chapterSel) ids = ids.filter((id) => allNodes.get(id)!.chapter === chapterSel);
-    if (query !== 'all') ids = ids.filter(matchesQuery);
     return new Set(ids);
-  }, [focus, allNodes, coneOf, inNodeset, showOrphans, componentSel, chapterSel, compOf, isOrphan, query, matchesQuery]);
+  }, [focus, allNodes, coneOf, inNodeset, showOrphans, componentSel, chapterSel, compOf, isOrphan]);
+
+  // Highlight overlay: query ∧ dep-range ∧ effort-range ∧ file ∧ type. When any
+  // of these is engaged we keep the whole visible graph but dim everything that
+  // doesn't match, so the subgraph stays visible *in context* (its edges to the
+  // rest are still drawn). null ⇒ nothing to highlight (full colour).
+  const highlightActive =
+    query !== 'all' ||
+    depRange[0] > 0 || (depRange[1] !== Infinity && depRange[1] < depMax) ||
+    effRange[0] > 0 || (effRange[1] !== Infinity && effRange[1] < effMax) ||
+    !!fileSel || !!typeSel;
+
+  const matchesHighlight = useCallback((id: string): boolean => {
+    const n = allNodes.get(id); if (!n) return false;
+    if (query !== 'all' && !matchesQuery(id)) return false;
+    const dc = n.dep_count ?? 0;
+    if (dc < depRange[0] || dc > depRange[1]) return false;
+    const eff = n.effort_total ?? Infinity;
+    if (eff < effRange[0] || eff > effRange[1]) return false;
+    if (fileSel && fileOf(n) !== fileSel) return false;
+    if (typeSel && n.type !== typeSel) return false;
+    return true;
+  }, [allNodes, query, matchesQuery, depRange, effRange, fileSel, typeSel, fileOf]);
+
+  const highlightSet = useMemo<Set<string> | null>(() => {
+    if (!highlightActive) return null;
+    return new Set([...visibleSet].filter(matchesHighlight));
+  }, [highlightActive, visibleSet, matchesHighlight]);
 
   // ── Imperative graph helpers (read latest via refs) ───────────────────────
   const recomputeBounds = useCallback(() => {
@@ -412,12 +452,28 @@ export default function DagView() {
     }));
   }, [coneOf, baseVisById]);
 
-  const clearHighlight = useCallback(() => {
+  // Base skin (no node cone selected): honour the highlight overlay if one is
+  // active (dim non-matches but keep them on canvas), else full colour.
+  const applyBaseStyling = useCallback(() => {
     const nodesDS = nodesDSRef.current, edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS) return;
-    nodesDS.update((nodesDS.getIds() as string[]).map((nid) => baseVisById.get(nid)).filter(Boolean));
-    edgesDS.update((edgesDS.get() as any[]).map((e) => ({ id: e.id, color: { color: '#cbd5e1', highlight: '#64748b' }, width: 1 })));
-  }, [baseVisById]);
+    const hl = highlightSet;
+    if (!hl) {
+      nodesDS.update((nodesDS.getIds() as string[]).map((nid) => baseVisById.get(nid)).filter(Boolean));
+      edgesDS.update((edgesDS.get() as any[]).map((e) => ({ id: e.id, color: { color: '#cbd5e1', highlight: '#64748b' }, width: 1 })));
+      return;
+    }
+    nodesDS.update((nodesDS.getIds() as string[]).map((nid) =>
+      hl.has(nid) ? baseVisById.get(nid)
+        : { id: nid, color: { background: '#e5e7eb', border: '#d1d5db' }, font: { color: '#cbd5e1' } }).filter(Boolean));
+    edgesDS.update((edgesDS.get() as any[]).map((e) => {
+      const on = hl.has(e.from) && hl.has(e.to);
+      return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2 : 1 };
+    }));
+  }, [baseVisById, highlightSet]);
+  const clearHighlight = applyBaseStyling;
+  const applyBaseRef = useRef(applyBaseStyling);
+  applyBaseRef.current = applyBaseStyling;
 
   // Reveal a node by relaxing filters, then jump to it once it is visible.
   const goTo = useCallback((id: string) => {
@@ -466,7 +522,7 @@ export default function DagView() {
           net.moveTo({ position: { x: nx, y: ny }, animation: false } as any);
         }
       },
-      settled: () => { const net = netRef.current; if (!net) return; net.setOptions({ physics: false }); fitFloored(); doJump(); },
+      settled: () => { const net = netRef.current; if (!net) return; net.setOptions({ physics: false }); fitFloored(); if (selIdRef.current) doJump(); else applyBaseStyling(); },
     };
   });
 
@@ -509,11 +565,18 @@ export default function DagView() {
     nodesDS.clear(); edgesDS.clear();
     nodesDS.add(nodes); edgesDS.add(es);
     if (nodes.length > 1) net.setOptions({ physics: PHYSICS_OPTS as any });
-    else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); doJump(); }, 0); }
+    else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0); }
     // Deps intentionally exclude selection-derived callbacks (fitFloored/doJump
     // are stable) so the canvas only rebuilds on real filter/data changes, not
     // when a node is clicked. eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSet, baseVisNodes, edges]);
+
+  // Re-skin when the highlight overlay changes (slider / file / type / query),
+  // unless a node cone is currently selected (that takes visual precedence).
+  useEffect(() => {
+    if (!netRef.current || selIdRef.current) return;
+    applyBaseStyling();
+  }, [highlightSet, applyBaseStyling]);
 
   // Commit a search entry.
   const commitSearch = useCallback(() => {
@@ -523,12 +586,16 @@ export default function DagView() {
 
   const resetView = useCallback(() => {
     setShowOrphans(false); setFocus(null); setComponentSel(null); setChapterSel(''); setNodeset('union'); setSearch(''); setQuery('all');
+    setDepRange([0, Infinity]); setEffRange([0, Infinity]); setFileSel(''); setTypeSel('');
   }, []);
 
-  // Toggle a review query from a clickable stat row (click again to clear).
+  // Toggle a review query from a clickable stat row (click again to clear). This
+  // now *highlights* the matches in place — it no longer subsets the canvas — so
+  // we keep any active focus cone for composition.
   const toggleQuery = useCallback((q: DagQuery) => {
     setQuery((prev) => (prev === q ? 'all' : q));
-    setFocus(null);
+    // Isolated nodes are hidden by default; reveal them so the highlight lands.
+    if (q === 'isolated') setShowOrphans(true);
   }, []);
 
   // ── Stats overlay ─────────────────────────────────────────────────────────
@@ -563,7 +630,7 @@ export default function DagView() {
 
   const m = data!.meta;
   const dups = m.duplicate_ids ?? [];
-  const fmt = (v: number) => v.toLocaleString();
+  const fmt = (v: number) => v.toLocaleString('en-US');
 
   // A stat row that doubles as a graph filter (click to apply, click again to clear).
   const qRow = (label: string, value: number, q: DagQuery, vClass = '') => (
@@ -586,7 +653,7 @@ export default function DagView() {
       {/* Toolbar */}
       <div className="dv-toolbar">
         <span className="dv-brand">Blueprint DAG</span>
-        <span className="dv-stat">{visibleSet.size} / {uniqueNodes.length} nodes · {edges.length} edges{m.entry ? ` · ${m.entry}` : ''}{selectedSha ? <span className="dv-hist"> · @{selectedSha.slice(0, 7)} (historical)</span> : ''}</span>
+        <span className="dv-stat">{visibleSet.size} / {uniqueNodes.length} nodes · {edges.length} edges{highlightSet ? ` · ${highlightSet.size} highlighted` : ''}{m.entry ? ` · ${m.entry}` : ''}{selectedSha ? <span className="dv-hist"> · @{selectedSha.slice(0, 7)} (historical)</span> : ''}</span>
         <span className="dv-legend">
           <span className="leg-dot" style={{ background: DONE_FILL }} /><span className="leg-txt">done</span>
           <span className="leg-dot" style={{ background: MATHLIB_FILL }} /><span className="leg-txt">mathlib</span>
@@ -622,13 +689,31 @@ export default function DagView() {
           {chapters.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select className={`dv-select ${query !== 'all' ? 'dv-select-on' : ''}`} value={query}
-          onChange={(e) => { setQuery(e.target.value as DagQuery); setFocus(null); }}
-          title="Filter to a review query">
+          onChange={(e) => { const q = e.target.value as DagQuery; setQuery(q); if (q === 'isolated') setShowOrphans(true); }}
+          title="Highlight a review query (dims the rest, keeps it on canvas)">
           {(Object.keys(QUERY_LABEL) as DagQuery[]).map((q) => (
             <option key={q} value={q}>{QUERY_LABEL[q]}</option>
           ))}
         </select>
-        <label className="dv-chk"><input type="checkbox" checked={showOrphans} onChange={(e) => { setShowOrphans(e.target.checked); setFocus(null); }} disabled={query !== 'all'} /> show isolated nodes</label>
+        <select className={`dv-select ${typeSel ? 'dv-select-on' : ''}`} value={typeSel}
+          onChange={(e) => setTypeSel(e.target.value)} title="Highlight by declaration type">
+          <option value="">Any type</option>
+          {types.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select className={`dv-select ${fileSel ? 'dv-select-on' : ''}`} value={fileSel}
+          onChange={(e) => setFileSel(e.target.value)} title="Highlight by source file">
+          <option value="">Any file</option>
+          {files.map((f) => <option key={f} value={f}>{f.split('/').pop()}</option>)}
+        </select>
+        {depMax > 0 && (
+          <DualRange label="deps" min={0} max={depMax} step={1} value={depRange}
+            onChange={setDepRange} fmt={(v) => String(v)} />
+        )}
+        {effMax > 0 && (
+          <DualRange label="effort" min={0} max={effMax} step={Math.max(1, Math.round(effMax / 100))}
+            value={effRange} onChange={setEffRange} fmt={(v) => v.toLocaleString('en-US')} infiniteTop />
+        )}
+        <label className="dv-chk"><input type="checkbox" checked={showOrphans} onChange={(e) => { setShowOrphans(e.target.checked); setFocus(null); }} /> show isolated nodes</label>
         {focus && (
           <span className="dv-pill" title="Clear focus" onClick={() => setFocus(null)}>
             <span className="lbl">focus: {focus.split(':').pop()}</span><span className="x">×</span>
@@ -707,12 +792,12 @@ export default function DagView() {
 // ── Sidebar node panel ───────────────────────────────────────────────────────
 function charVal(v: number | null | undefined) {
   if (v === null || v === undefined) return <span className="m-val m-inf">∞</span>;
-  return <span className="m-val">{v.toLocaleString()}</span>;
+  return <span className="m-val">{v.toLocaleString('en-US')}</span>;
 }
 function workVal(v: number | null | undefined) {
   if (v === null || v === undefined) return <span className="m-val m-inf">∞</span>;
   if (v === 0) return <span className="m-val m-done">0 ✓</span>;
-  return <span className="m-val m-work">{v.toLocaleString()}</span>;
+  return <span className="m-val m-work">{v.toLocaleString('en-US')}</span>;
 }
 function charsPair(rel: number | null | undefined, cum: number | null | undefined) {
   const f = (v: number | null | undefined) => (v === null || v === undefined)
@@ -782,6 +867,29 @@ function NodePanel({ n, ancestors, macros, focused, onGoTo, onToggleFocus }: {
           ? <pre className="code-block" dangerouslySetInnerHTML={{ __html: highlightLean(n.lean_source) }} />
           : <pre className="code-block empty">declaration not found</pre>}
       </div>
+    </div>
+  );
+}
+
+// Two range thumbs (min / max) with a live readout. The max thumb at its ceiling
+// stores Infinity so unbounded (∞-effort) nodes stay included in the highlight.
+function DualRange({ label, min, max, step, value, onChange, fmt, infiniteTop }: {
+  label: string; min: number; max: number; step: number;
+  value: [number, number]; onChange: (v: [number, number]) => void;
+  fmt: (v: number) => string; infiniteTop?: boolean;
+}) {
+  const [lo, hi] = value;
+  const hiVal = hi === Infinity ? max : hi;
+  const hiDisp = hi === Infinity ? (infiniteTop ? '∞' : fmt(max)) : fmt(hi);
+  const active = lo > min || (hi !== Infinity && hi < max);
+  return (
+    <div className={`dv-range ${active ? 'dv-range-on' : ''}`} title={`Highlight by ${label}`}>
+      <span className="dv-range-lbl">{label}</span>
+      <input className="dv-slider" type="range" min={min} max={max} step={step} value={lo}
+        onChange={(e) => { const v = Math.min(Number(e.target.value), hiVal); onChange([v, hi]); }} />
+      <input className="dv-slider" type="range" min={min} max={max} step={step} value={hiVal}
+        onChange={(e) => { const v = Number(e.target.value); onChange([Math.min(lo, v), v >= max ? Infinity : Math.max(v, lo)]); }} />
+      <span className="dv-range-val">{fmt(lo)}–{hiDisp}</span>
     </div>
   );
 }
@@ -899,4 +1007,9 @@ const DV_CSS = `
 .dv-root .code-block.empty { color:var(--text-muted); font-style:italic; white-space:normal; background:var(--bg-tertiary); }
 .dv-root .hl-kw { color:#c678dd; } .dv-root .hl-tactic { color:#61afef; } .dv-root .hl-type { color:#e5c07b; }
 .dv-root .hl-comment { color:#7d8590; font-style:italic; } .dv-root .hl-str { color:#98c379; } .dv-root .hl-num { color:#d19a66; }
+.dv-range { display:flex; align-items:center; gap:6px; padding:1px 8px; border:1px solid var(--border); border-radius:5px; background:var(--bg-primary); }
+.dv-range.dv-range-on { border-color:#3b82f6; }
+.dv-range-lbl { font-size:11px; color:var(--text-muted); font-weight:600; text-transform:lowercase; }
+.dv-range .dv-slider { width:60px; accent-color:#3b82f6; cursor:pointer; height:14px; }
+.dv-range-val { font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); min-width:48px; text-align:right; }
 `;

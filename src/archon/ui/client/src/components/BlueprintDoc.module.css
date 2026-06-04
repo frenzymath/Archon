@@ -63,6 +63,12 @@
   background: var(--bg-primary); border: 1px solid var(--border); border-radius: 5px;
   white-space: pre; color: var(--text-primary);
 }
+.hlKw { color: #cf222e; }
+.hlTac { color: #8250df; }
+.hlTy { color: #0550ae; }
+.hlNum { color: #0a7d33; }
+.hlStr { color: #0a7d33; }
+.hlComment { color: var(--text-muted); font-style: italic; }
 
 /* \uses dependency tags --------------------------------------------- */
 .usesRow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 6px; }

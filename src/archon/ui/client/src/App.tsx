@@ -4,7 +4,6 @@ import Overview from './views/Overview';
 import LogViewer from './views/LogViewer';
 import Journal from './views/Journal';
 import DiffPlayback from './views/DiffPlayback';
-import ProofGraph from './views/ProofGraph';
 import DagView from './views/DagView';
 import Blueprint from './views/Blueprint';
 // Vite's resolveJsonModule (enabled by default) lets us import the
@@ -39,7 +38,6 @@ export default function App() {
         {project && <span className="project-badge" title={project.path}>{project.name}</span>}
         <nav className="header-nav">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
-          <NavLink to="/graph" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Graph</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
           <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
@@ -50,7 +48,8 @@ export default function App() {
       <main className="main-content">
         <Routes>
           <Route path="/" element={<Overview />} />
-          <Route path="/graph" element={<ProofGraph />} />
+          {/* The old proof-graph view is superseded by the DAG. */}
+          <Route path="/graph" element={<Navigate to="/dag" replace />} />
           <Route path="/dag" element={<DagView />} />
           <Route path="/blueprint" element={<Blueprint />} />
           <Route path="/logs" element={<LogViewer />} />
