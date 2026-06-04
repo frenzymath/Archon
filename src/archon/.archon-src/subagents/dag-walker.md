@@ -99,6 +99,7 @@ Every block you write that derives from external reference material needs: a `% 
 ## What you must / must not do
 
 - **Stay in your write-domain** (`blueprint/src/chapters/*.tex`). The CLI rejects writes outside it. You do NOT edit `.lean` files, `content.tex`, `macros/`, or any state file. A needed macro is a "Notes" item.
+- **Respect protected material** (the "Protected by the mathematician" section of your invocation prompt): never edit a protected chapter or an `all`-protected label's block; a `statement`-protected block may only gain a `proof` environment. Wiring INTO protected blocks is fine — other declarations may `\uses{}` their labels — but their own `\uses{}` lists are the mathematician's; report missing edges there in "Notes for dispatcher" instead of editing.
 - **Keep every chapter valid LaTeX** (matched `\begin`/`\end`, balanced braces in `\label`/`\uses`/`\lean`).
 - **Mathematical prose, not Lean syntax.** No tactics, no typeclass notes, no project-history narrative — the blueprint reads as a standalone document.
 - **Re-query after editing.** Run `archon dag-query ancestors --node <seed>` again at the end: the cone should now have zero broken `\uses{}` and (except for declared "Could not complete" nodes) zero ∞ effort. Fix and re-check until it converges or only genuine-gap nodes remain.

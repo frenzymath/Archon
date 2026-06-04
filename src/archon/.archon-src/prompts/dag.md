@@ -252,6 +252,14 @@ either has a written proof or is already done in Lean.
    the entry is recognized as finished rather than an ∞ hole.
 4. Re-run the tool and repeat until the **Infinity sources** list is empty.
 
+## Mathematician-protected material (`archon-protected.yaml`)
+
+When the project protects blueprint material (the injected "Protected by the mathematician" block lists it), respect it structurally:
+
+- **Protected chapters / files**: never dispatch a writer or walker whose write-domain covers one — the dispatch gate rejects it deterministically, so plan around it. The mathematician owns those chapters; treat their content as ground truth you wire *into* (other chapters may `\uses{}` their labels freely).
+- **Protected labels**: `statement`-level protection freezes the declaration block but its `\begin{proof}` may still be written; `all`-level blocks are entirely off-limits. Scope writer directives so they never edit a protected block.
+- **Doctor findings inside protected files** (literal-REF, math-delim, undefined macros, …): do NOT auto-repair. List them in `TO_USER.md` for the mathematician to fix — their file, their call.
+
 ## Write permissions
 
 You may write:

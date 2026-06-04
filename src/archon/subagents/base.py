@@ -187,6 +187,60 @@ def _glob_covers(parent: str, child: str) -> bool:
     return False
 
 
+def _subagent_protected_block(project_path: Path) -> str:
+    """The archon-protected.yaml block for subagent prompts.
+
+    Reuses the same renderer the plan/prover/dag prompts get so every
+    writer/walker/reviewer sees the mathematician's rules without having to
+    open the file. Empty when nothing is protected.
+    """
+    try:
+        from archon.prompts import _protected_block
+        return _protected_block(project_path)
+    except Exception:
+        return ""
+
+
+def assert_write_domain_not_protected(
+    project_path: Path, write_domain: list[str],
+) -> None:
+    """Raise WriteDomainViolation when a write-domain covers a protected file.
+
+    The deterministic half of archon-protected.yaml: whole-file protection
+    (``files:`` globs and ``blueprint: - file:`` rules) is enforced HERE, at
+    dispatch time — an agent cannot even declare a write-domain that covers a
+    mathematician-owned file. Declaration/label-level protection stays
+    advisory (prompt-enforced, reviewer-audited) because it needs semantic
+    judgment about *what* changed inside a writable file.
+
+    Resolution is concrete: each protected glob is expanded against the tree
+    and every matched file is tested against the declared write-domain.
+    """
+    if not write_domain:
+        return
+    from archon.commands.tooling import protect
+
+    ps = protect.load(project_path)
+    globs = ps.protected_file_globs()
+    if not globs:
+        return
+    for pat in globs:
+        try:
+            matched = [p for p in project_path.glob(pat) if p.is_file()]
+        except (ValueError, OSError):
+            continue
+        for f in matched:
+            rel = f.relative_to(project_path).as_posix()
+            for wd in write_domain:
+                if _glob_covers(wd, rel):
+                    raise WriteDomainViolation(
+                        f"write-domain {wd!r} covers {rel!r}, which is "
+                        f"protected by {protect.PROTECTED_FILENAME} "
+                        f"(pattern {pat!r}). Mathematician-owned files are "
+                        f"read-only for agents — narrow the write-domain."
+                    )
+
+
 class Subagent:
     """One descriptor-driven subagent invocation.
 
@@ -263,7 +317,8 @@ class Subagent:
             (When invoked as a child of another subagent, your report
             lands at task_results/<parent_slug>/{self.name}-{slug}.md
             — the Archon CLI handles the path automatically.)
-            {read_only_note}""") + debug_feedback_block(
+            {read_only_note}""") + _subagent_protected_block(self.project_path) \
+            + debug_feedback_block(
                 debug_feedback, state_dir, f"{self.name} ({slug})", iter_num,
             )
 
@@ -289,6 +344,11 @@ class Subagent:
         cancel_event: threading.Event | None = None,
     ) -> SubagentResult:
         write_domain = list(write_domain or [])
+
+        # Hard gate: protected files (archon-protected.yaml) are read-only
+        # for every agent — refuse the dispatch outright rather than trust
+        # the prompt.
+        assert_write_domain_not_protected(self.project_path, write_domain)
 
         dispatch_log = self._dispatch_log_for(log_base, iter_num)
         if dispatch_log is not None:

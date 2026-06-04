@@ -24,6 +24,10 @@ export function runGit(gitDir: string, projectPath: string, args: string[]): str
     cwd: projectPath,
     encoding: 'utf-8',
     timeout: 8000,
+    // Default maxBuffer is 1 MB — a full `log --name-only` over a long inner
+    // history exceeds that and the child gets killed (status null, output
+    // silently dropped). 64 MB matches the dag-graph CLI call's headroom.
+    maxBuffer: 64 * 1024 * 1024,
   });
   return r.status === 0 ? (r.stdout ?? '') : '';
 }

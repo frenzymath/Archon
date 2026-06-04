@@ -1006,34 +1006,66 @@ def _blueprint_frontier_block(project_path: Path) -> str:
 
 
 def _protected_block(project_path: Path) -> str:
-    """Compact list of protected (frozen-signature) declarations.
+    """Compact rendering of archon-protected.yaml for prompt injection.
 
     Injected into the plan and prover prompts so neither has to remember
-    to open ``archon-protected.yaml``. Protected = the *signature* is
-    frozen (the mathematician owns it); the proof *body* may still be
-    filled. Empty / missing file → empty block (no noise on projects that
-    protect nothing).
+    to open the file. Covers all rule types: frozen Lean signatures
+    (body may be filled), fully-frozen Lean declarations (untouchable even
+    with a sorry), read-only files/blueprint chapters (also enforced
+    deterministically by the dispatch gate), and protected blueprint
+    blocks by label. Empty / missing file → empty block.
     """
     from archon.commands.tooling import protect
 
     ps = protect.load(project_path)
-    if not ps.entries:
+    if ps.total_count() == 0:
         return ""
     lines = [
         "",
-        "## Protected declarations (frozen signatures)",
+        "## Protected by the mathematician (`archon-protected.yaml`)",
         "",
-        "From `archon-protected.yaml`. These signatures are frozen by the "
-        "mathematician — you may fill a protected declaration's proof "
-        "*body*, but never rename / re-type / reorder args / weaken "
-        "hypotheses. Do NOT set or accept an objective that requires "
-        "changing one of these signatures.",
+        "The mathematician owns everything below; respect every rule. Do "
+        "NOT set or accept an objective that requires violating one.",
         "",
     ]
-    for f in sorted(ps.entries):
-        names = ", ".join(f"`{n}`" for n in ps.entries[f])
-        lines.append(f"- `{f}`: {names}")
-    return "\n".join(lines) + "\n"
+    sig = [r for r in ps.lean_rules if r.level == "signature"]
+    full = [r for r in ps.lean_rules if r.level == "all"]
+    if sig:
+        lines.append(
+            "**Frozen signatures** (you MAY fill the proof body / close a "
+            "`sorry`, but never rename / re-type / reorder args / weaken "
+            "hypotheses):"
+        )
+        lines += [f"- `{r.file}`: `{r.name}`" for r in sig]
+        lines.append("")
+    if full:
+        lines.append(
+            "**Fully frozen declarations** (do not touch AT ALL — not even "
+            "to fill a `sorry`; the body is the mathematician's):"
+        )
+        lines += [f"- `{r.file}`: `{r.name}`" for r in full]
+        lines.append("")
+    bp_files = [r for r in ps.blueprint_rules if r.kind == "file"]
+    bp_labels = [r for r in ps.blueprint_rules if r.kind == "label"]
+    if bp_files or ps.file_rules:
+        lines.append(
+            "**Read-only files** (never write these; the dispatch gate also "
+            "rejects any write-domain that covers them):"
+        )
+        lines += [f"- `{r.pattern}` (blueprint chapter)" for r in bp_files]
+        lines += [f"- `{pat}`" for pat in ps.file_rules]
+        lines.append("")
+    if bp_labels:
+        lines.append(
+            "**Protected blueprint blocks** (matched by `\\label{}`, globs "
+            "allowed). `statement` = the declaration block (statement + "
+            "`\\label`/`\\lean`/`\\uses` annotations) is frozen but its "
+            "`proof` environment may be written; `all` = statement AND "
+            "proof are frozen:"
+        )
+        lines += [f"- `{r.pattern}` — {r.level}" for r in bp_labels]
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _prover_dag_hint_block(project_path: Path) -> str:
@@ -1339,7 +1371,7 @@ def build_dag_prompt(
         - The blueprint-doctor findings from the prior iter are injected below (when present).
         - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
         - The current DAG_STATUS.md is injected below.
-        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + sidecar_block + catalog_block
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + _protected_block(project_path) + sidecar_block + catalog_block
 
 
 def build_prover_prompt(
