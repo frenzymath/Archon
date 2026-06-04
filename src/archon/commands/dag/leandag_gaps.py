@@ -383,6 +383,7 @@ QUERY_VERBS: dict[str, str] = {
     "needs-leanok": "sorry-free in Lean but not marked \\leanok",
     "needs-lean": "blueprint node with no \\lean{} link",
     "ancestors": "the dependency closure of --node (everything it transitively uses)",
+    "cone": "closure of --node seed(s) (comma-separated; seeds included); --complement inverts",
     "node": "a single node by --node id",
     "all": "every node",
 }
@@ -401,20 +402,26 @@ def run_query(
     node: str | None = None,
     limit: int | None = 50,
     sort: str | None = None,
+    complement: bool = False,
 ) -> dict:
     """Run a read-only navigation query over the leandag graph.
 
     Returns ``{verb, count, total, nodes: [brief...], error}`` where ``total``
     is the pre-limit match count and ``nodes`` is the (optionally sorted and)
-    limited briefs. ``ancestors``/``node`` require ``node``. Never raises —
-    failures land in ``error`` with an empty node list.
+    limited briefs. ``ancestors``/``node``/``cone`` require ``node``; ``cone``
+    accepts a comma-separated seed list and, with ``complement``, returns every
+    node NOT in the seeds' dependency closure. Never raises — failures land in
+    ``error`` with an empty node list.
     """
     if verb not in QUERY_VERBS:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": f"unknown verb {verb!r}; valid: {', '.join(QUERY_VERBS)}"}
-    if verb in ("ancestors", "node") and not node:
+    if verb in ("ancestors", "node", "cone") and not node:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": f"verb {verb!r} requires --node <id>"}
+    if complement and verb != "cone":
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": "--complement is only valid with the `cone` verb"}
     if sort and sort not in _SORT_KEYS:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": f"unknown --sort {sort!r}; valid: {', '.join(_SORT_KEYS)}"}
@@ -432,6 +439,12 @@ def run_query(
         if verb in ("ancestors", "node") and node not in known:
             return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                     "error": f"node {node!r} not found in the graph"}
+        if verb == "cone":
+            seeds = [s.strip() for s in node.split(",") if s.strip()]
+            missing = [s for s in seeds if s not in known]
+            if missing:
+                return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                        "error": f"seed node(s) not found: {', '.join(missing)}"}
 
         if verb in ("frontier",):
             sel = q.ready_to_prove()
@@ -457,6 +470,14 @@ def run_query(
         elif verb == "ancestors":
             # The pure dependency closure (exclude the node itself).
             sel = [dag.node(i) for i in dag.ancestors(node) if i != node and i in known]
+        elif verb == "cone":
+            closure: set[str] = set(seeds)
+            for s in seeds:
+                closure.update(i for i in dag.ancestors(s) if i in known)
+            if complement:
+                sel = [n for n in dag.nodes if n.id not in closure]
+            else:
+                sel = [dag.node(i) for i in sorted(closure)]
         else:  # all
             sel = list(dag.nodes)
 
@@ -503,6 +524,176 @@ def format_query_text(res: dict) -> str:
         )
     if res["total"] > res["count"]:
         lines.append(f"- … and {res['total'] - res['count']} more (raise --limit)")
+    return "\n".join(lines)
+
+
+# ── Carve plan (backs ``archon dag-carve-plan``) ─────────────────────────────
+# The deterministic core of `archon extract`: given seed declarations, compute
+# the dependency closure and roll it up per .lean / .tex file so the extract
+# session executes a computed plan instead of freehanding deletions.
+
+_IMPORT_RE = None  # compiled lazily in _lean_imports
+
+
+def _lean_imports(text: str) -> list[str]:
+    """Module names imported by a .lean file (header ``import`` lines only)."""
+    global _IMPORT_RE
+    if _IMPORT_RE is None:
+        import re
+        _IMPORT_RE = re.compile(r"^import\s+([\w.«»]+)", re.MULTILINE)
+    return _IMPORT_RE.findall(text)
+
+
+def _module_of(rel_path: str) -> str:
+    """``Foo/Bar/Baz.lean`` → ``Foo.Bar.Baz`` (leandag stores posix-relative paths)."""
+    return rel_path[:-len(".lean")].replace("/", ".") if rel_path.endswith(".lean") else rel_path
+
+
+def compute_carve_plan(project_path: Path, seeds: list[str]) -> dict:
+    """Compute the deterministic carve plan for extracting ``seeds``' cone.
+
+    Returns::
+
+        {seeds, closure, closure_size, complement_size,
+         lean_files: [{file, status, total, in_cone, out_blueprint: [...],
+                       out_aux: N, imported_by: [...]}],
+         tex_files:  [{file, status, total, in_cone, out_blueprint: [...]}],
+         error}
+
+    File status semantics:
+
+    - ``keep``     — every blueprint node in the file is in the closure
+                     (out-of-cone ``lean_aux`` helpers ride along).
+    - ``mixed``    — some blueprint nodes in, some out: the file needs surgery
+                     (the ``out_blueprint`` list is what to carve).
+    - ``imported`` — no node in the closure, but a keep/mixed file transitively
+                     ``import``s it, so deleting it breaks compilation. Lean
+                     import edges are NOT ``\\uses{}`` edges — this catches
+                     dependencies the blueprint graph cannot see.
+    - ``drop``     — no node in the closure and nothing kept imports it.
+
+    Never raises — failures land in ``error``.
+    """
+    try:
+        dag, _entry, _ln, _bn = _build_dag(project_path)
+    except Exception as e:
+        return {"seeds": seeds, "closure": [], "closure_size": 0,
+                "complement_size": 0, "lean_files": [], "tex_files": [],
+                "error": f"leandag unavailable: {e}"}
+
+    try:
+        known = {n.id for n in dag.nodes}
+        missing = [s for s in seeds if s not in known]
+        if missing:
+            return {"seeds": seeds, "closure": [], "closure_size": 0,
+                    "complement_size": 0, "lean_files": [], "tex_files": [],
+                    "error": f"seed node(s) not found: {', '.join(missing)}"}
+
+        closure: set[str] = set(seeds)
+        for s in seeds:
+            closure.update(i for i in dag.ancestors(s) if i in known)
+
+        # ── Roll nodes up by source file ────────────────────────────────
+        by_lean: dict[str, list] = {}
+        by_tex: dict[str, list] = {}
+        for n in dag.nodes:
+            if n.lean_file:
+                by_lean.setdefault(n.lean_file, []).append(n)
+            if n.tex_file:
+                by_tex.setdefault(n.tex_file, []).append(n)
+
+        def _rollup(groups: dict[str, list]) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            for f, ns in groups.items():
+                in_cone = [n for n in ns if n.id in closure]
+                out_bp = [n.id for n in ns
+                          if n.id not in closure and n.type != "lean_aux"]
+                out_aux = sum(1 for n in ns
+                              if n.id not in closure and n.type == "lean_aux")
+                if not in_cone:
+                    status = "drop"
+                elif not out_bp:
+                    status = "keep"
+                else:
+                    status = "mixed"
+                out[f] = {"file": f, "status": status, "total": len(ns),
+                          "in_cone": len(in_cone), "out_blueprint": sorted(out_bp),
+                          "out_aux": out_aux}
+            return out
+
+        lean_files = _rollup(by_lean)
+        tex_files = _rollup(by_tex)
+
+        # ── Lean import closure: promote dropped files kept code imports ──
+        # \uses{} edges don't model Lean imports; a "drop" file imported by a
+        # kept file would break `lake build`. Walk imports from keep/mixed
+        # files and mark reached drop-files as "imported".
+        module_to_file = {_module_of(f): f for f in by_lean}
+        importers: dict[str, list[str]] = {}
+        frontier = [f for f, d in lean_files.items() if d["status"] in ("keep", "mixed")]
+        seen = set(frontier)
+        while frontier:
+            f = frontier.pop()
+            try:
+                text = (project_path / f).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for mod in _lean_imports(text):
+                tgt = module_to_file.get(mod)
+                if tgt is None:
+                    continue  # external (Mathlib etc.) or no scanned decls
+                importers.setdefault(tgt, []).append(f)
+                if tgt not in seen:
+                    seen.add(tgt)
+                    if lean_files[tgt]["status"] == "drop":
+                        lean_files[tgt]["status"] = "imported"
+                    frontier.append(tgt)
+        for f, d in lean_files.items():
+            d["imported_by"] = sorted(set(importers.get(f, [])))
+
+        order = {"keep": 0, "mixed": 1, "imported": 2, "drop": 3}
+        return {
+            "seeds": seeds,
+            "closure": sorted(closure),
+            "closure_size": len(closure),
+            "complement_size": len(known) - len(closure),
+            "lean_files": sorted(lean_files.values(),
+                                 key=lambda d: (order[d["status"]], d["file"])),
+            "tex_files": sorted(tex_files.values(),
+                                key=lambda d: (order[d["status"]], d["file"])),
+            "error": None,
+        }
+    except Exception as e:
+        return {"seeds": seeds, "closure": [], "closure_size": 0,
+                "complement_size": 0, "lean_files": [], "tex_files": [],
+                "error": f"carve-plan failed: {e}"}
+
+
+def format_carve_plan_text(plan: dict) -> str:
+    """Compact human/agent-readable rendering of a carve plan."""
+    if plan.get("error"):
+        return f"_carve-plan error: {plan['error']}_"
+    lines = [
+        f"carve plan — seeds: {', '.join(plan['seeds'])}",
+        f"closure: {plan['closure_size']} node(s) kept · "
+        f"complement: {plan['complement_size']} node(s) out of cone",
+    ]
+    for key, label in (("lean_files", "Lean files"), ("tex_files", "Blueprint chapters")):
+        lines.append("")
+        lines.append(f"## {label}")
+        for d in plan[key]:
+            extra = ""
+            if d["status"] == "mixed":
+                shown, dropped = _trunc(d["out_blueprint"], 10)
+                extra = " — carve out: " + ", ".join(shown)
+                if dropped:
+                    extra += f", … and {dropped} more"
+            elif d["status"] == "imported":
+                extra = " — imported by: " + ", ".join(d.get("imported_by", [])[:5])
+            lines.append(
+                f"- [{d['status']:8s}] {d['file']}  "
+                f"({d['in_cone']}/{d['total']} in cone){extra}"
+            )
     return "\n".join(lines)
 
 

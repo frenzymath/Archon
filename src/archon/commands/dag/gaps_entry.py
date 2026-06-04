@@ -16,7 +16,9 @@ from .leandag_gaps import (
     QUERY_VERBS,
     build_graph,
     build_graph_at_commit,
+    compute_carve_plan,
     compute_gaps,
+    format_carve_plan_text,
     format_json,
     format_markdown,
     format_query_text,
@@ -68,11 +70,17 @@ def dag_query(
     ),
     project_path: str = typer.Option(".", "--project-path", help="Path to Lean project"),
     node: str = typer.Option(
-        "", "--node", help="Target node id (required for `ancestors` / `node`)."
+        "", "--node",
+        help="Target node id (required for `ancestors` / `node` / `cone`; "
+             "`cone` accepts a comma-separated seed list)."
     ),
     limit: int = typer.Option(50, "--limit", help="Max nodes to return (0 = all)."),
     sort: str = typer.Option(
         "", "--sort", help="Rank results: effort | deps | impact."
+    ),
+    complement: bool = typer.Option(
+        False, "--complement",
+        help="With `cone`: return every node NOT in the seeds' closure."
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
 ) -> None:
@@ -86,11 +94,13 @@ def dag_query(
         archon dag-query frontier --sort impact --limit 20
         archon dag-query gaps
         archon dag-query ancestors --node thm:main --json
+        archon dag-query cone --node thm:a,thm:b --complement --json
     """
     import json
     res = run_query(
         Path(project_path).resolve(), verb,
         node=node or None, limit=limit, sort=sort or None,
+        complement=complement,
     )
     if as_json:
         print(json.dumps(res, ensure_ascii=False))
@@ -100,4 +110,33 @@ def dag_query(
     # unavailable) so callers/scripts can detect failure; the message/JSON is
     # already printed above.
     if res.get("error"):
+        raise typer.Exit(1)
+
+
+def dag_carve_plan(
+    project_path: str = typer.Option(".", "--project-path", help="Path to Lean project"),
+    node: list[str] = typer.Option(
+        ..., "--node",
+        help="Seed declaration label (repeatable, or comma-separated)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+) -> None:
+    """Compute the deterministic carve plan for extracting the seeds' cone.
+
+    The core instrument of `archon extract`: takes seed declarations, computes
+    their dependency closure in the blueprint DAG, and rolls the result up per
+    .lean file and per blueprint chapter — `keep` (fully in cone), `mixed`
+    (needs surgery; lists exactly which blueprint nodes to carve out),
+    `imported` (out of cone but kept code imports it — Lean import edges the
+    \\uses{} graph cannot see), `drop` (safe to delete). The extract session
+    reviews and executes this plan; it does not invent its own.
+
+        archon dag-carve-plan --node thm:picard_representable --json
+    """
+    import json
+    seeds = [s.strip() for arg in node for s in arg.split(",") if s.strip()]
+    plan = compute_carve_plan(Path(project_path).resolve(), seeds)
+    print(json.dumps(plan, ensure_ascii=False) if as_json
+          else format_carve_plan_text(plan))
+    if plan.get("error"):
         raise typer.Exit(1)
