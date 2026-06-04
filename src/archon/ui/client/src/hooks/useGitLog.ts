@@ -86,6 +86,8 @@ export interface BlueprintChapter { slug: string; title: string; tex: string; }
 export interface BlueprintChaptersResponse {
   chapters: BlueprintChapter[];
   macros?: Record<string, string>;
+  docTitle?: string | null;
+  docAuthor?: string | null;
   hasBlueprint: boolean;
   commit: string | null;
   error: string | null;

@@ -19,6 +19,8 @@ interface Chapter { slug: string; title: string; tex: string; }
 interface BlueprintChaptersResponse {
   chapters: Chapter[];
   macros: Record<string, string>;
+  docTitle: string | null;
+  docAuthor: string | null;
   hasBlueprint: boolean;
   commit: string | null;
   error: string | null;
@@ -27,6 +29,28 @@ interface BlueprintChaptersResponse {
 const CH_DIR = 'blueprint/src/chapters';
 const MACROS_DIR = 'blueprint/src/macros';
 const CONTENT = 'blueprint/src/content.tex';
+// Where \title / \author typically live (the leanblueprint entry preambles).
+const TITLE_CANDIDATES = [
+  'blueprint/src/web.tex',
+  'blueprint/src/print.tex',
+  'blueprint/src/content.tex',
+];
+
+/** Extract the balanced-brace argument of `\<cmd>{...}` from `src`, or null. */
+function bracedArg(src: string, cmd: string): string | null {
+  const at = src.indexOf(`\\${cmd}`);
+  if (at < 0) return null;
+  let i = src.indexOf('{', at);
+  if (i < 0) return null;
+  let depth = 0;
+  const start = i + 1;
+  for (; i < src.length; i++) {
+    if (src[i] === '\\') { i++; continue; }
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(start, i).trim(); }
+  }
+  return null;
+}
 
 /** Fallback display name when a chapter has no `\chapter{}`/`\section{}`. */
 function humanize(slug: string): string {
@@ -52,7 +76,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     async (req) => {
       const commit = req.query.commit?.trim() || null;
       const empty: BlueprintChaptersResponse = {
-        chapters: [], macros: {}, hasBlueprint: false, commit, error: null,
+        chapters: [], macros: {}, docTitle: null, docAuthor: null,
+        hasBlueprint: false, commit, error: null,
       };
 
       // Read a repo-relative path from disk (live) or `git show` (historical).
@@ -85,6 +110,17 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         return commit
           ? { ...empty, error: `No blueprint chapters at commit ${commit.slice(0, 7)}.` }
           : empty;
+      }
+
+      // Title / author for the intro page (first entry file that has them).
+      let docTitle: string | null = null;
+      let docAuthor: string | null = null;
+      for (const rel of TITLE_CANDIDATES) {
+        const src = readAt(rel);
+        if (!src) continue;
+        docTitle = docTitle ?? bracedArg(src, 'title');
+        docAuthor = docAuthor ?? bracedArg(src, 'author');
+        if (docTitle) break;
       }
       const bySlug = new Map(chapterFiles.map(f => [f.replace(/\.tex$/, ''), f]));
 
@@ -120,7 +156,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         macros = loadBlueprintMacros(projectPath);
       }
 
-      return { chapters, macros, hasBlueprint: true, commit, error: null };
+      return { chapters, macros, docTitle, docAuthor, hasBlueprint: true, commit, error: null };
     },
   );
 }

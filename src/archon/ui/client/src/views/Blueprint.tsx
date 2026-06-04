@@ -1,42 +1,56 @@
 /**
- * Blueprint — a reading view of the project's leanblueprint, like
- * `leanblueprint serve` but without the dependency graph (that's the DAG page).
+ * Blueprint — a leanblueprint-quality reading view of the project's blueprint.
  *
- * Chapters render in `content.tex` order with KaTeX; `% SOURCE` / `% NOTE`
- * comments surface as expandable “ chips (BlueprintRendered showComments) so
- * provenance is available on demand without cluttering the prose. The git
- * timeline at the bottom time-travels the whole view to any inner-git commit.
+ * Renders the whole blueprint with chapter/section/theorem numbering, clickable
+ * numbered cross-references, environment headers (`[name]` italic, `\lean` code
+ * chips, `\uses` dependency tags), lists, and KaTeX (incl. titles). A title page
+ * leads; `% SOURCE`/`% NOTE` comments surface as expandable chips. The resizable
+ * git timeline at the bottom time-travels the whole view to any inner-git commit.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useBlueprintChapters,
   useGitLog,
   type GitCommit,
 } from '../hooks/useGitLog';
-import BlueprintRendered from '../components/BlueprintRendered';
+import { useDag } from '../hooks/useDag';
+import BlueprintDoc, { TitleInline } from '../components/BlueprintDoc';
 import { GitTimeline } from '../components/GitTimeline';
 import styles from './Blueprint.module.css';
 
-/**
- * Readable plain text for a chapter title: chapter headings carry inline math
- * (`\(k\)-modules`, `($i=0$)`). Full KaTeX in a narrow TOC is overkill; dropping
- * the delimiters and simple commands keeps them legible (`k-modules`, `(i=0)`).
- */
-function plainTitle(s: string): string {
-  return s
-    .replace(/\\[()[\]]/g, '')       // \( \) \[ \]
-    .replace(/\$\$?/g, '')           // $  $$
-    .replace(/\\[a-zA-Z]+\s*/g, '')  // \mathbb, \mathcal, …
-    .replace(/[{}]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+/** Drag-to-resize along the y axis (the git panel grows upward as you drag up). */
+function useDragResize(initial: number, min: number, max: number) {
+  const [size, setSize] = useState(initial);
+  const start = useRef({ pos: 0, size: 0 });
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    start.current = { pos: e.clientY, size };
+    const onMove = (ev: MouseEvent) => setSize(Math.max(min, Math.min(max, start.current.size - (ev.clientY - start.current.pos))));
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [size, min, max]);
+  return { size, onMouseDown };
 }
 
 export default function Blueprint() {
   const [selectedSha, setSelectedSha] = useState('');
   const { data, isLoading, error, isFetching } = useBlueprintChapters(selectedSha || undefined);
   const { data: gitData } = useGitLog();
+  // Lean source for the `\lean{}` code chips comes from the cached leandag graph.
+  const { data: dag } = useDag(selectedSha || undefined);
 
+  const leanSource = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of dag?.nodes ?? []) {
+      if (n.lean_name && n.lean_source) {
+        for (const nm of n.lean_name.split(',').map(s => s.trim()).filter(Boolean)) m.set(nm, n.lean_source);
+      }
+    }
+    return m;
+  }, [dag]);
+
+  const git = useDragResize(160, 70, 520);
   const [gitW, setGitW] = useState(800);
   const gitPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -56,13 +70,14 @@ export default function Blueprint() {
       <div className={styles.body}>
         <aside className={styles.toc}>
           <div className={styles.tocHead}>
-            Chapters
+            Contents
             {selectedSha && <span className={styles.histTag}>@{selectedSha.slice(0, 7)}</span>}
           </div>
           {chapters.length === 0 && <div className={styles.tocEmpty}>—</div>}
-          {chapters.map(c => (
-            <a key={c.slug} href={`#ch-${c.slug}`} className={styles.tocItem} title={plainTitle(c.title)}>
-              {plainTitle(c.title)}
+          {chapters.map((c, i) => (
+            <a key={c.slug} href={`#ch-${c.slug}`} className={styles.tocItem}>
+              <span className={styles.tocNum}>{i + 1}</span>
+              <span className={styles.tocTitle}><TitleInline tex={c.title} macros={macros} /></span>
             </a>
           ))}
         </aside>
@@ -71,28 +86,36 @@ export default function Blueprint() {
           {isLoading && <div className={styles.muted}>Loading blueprint…</div>}
           {error && <div className={styles.muted}>Failed to load the blueprint.</div>}
           {data && !data.hasBlueprint && !data.error && (
-            <div className={styles.muted}>
-              No blueprint found under <code>blueprint/src/</code>.
-            </div>
+            <div className={styles.muted}>No blueprint found under <code>blueprint/src/</code>.</div>
           )}
           {data?.error && <div className={styles.muted}>{data.error}</div>}
-          {chapters.map(c => (
-            <section key={c.slug} id={`ch-${c.slug}`} className={styles.chapter}>
-              <h2 className={styles.chapterTitle}>{plainTitle(c.title)}</h2>
-              <BlueprintRendered tex={c.tex} macros={macros} showComments />
-            </section>
-          ))}
+
+          {data?.hasBlueprint && (
+            <header className={styles.titlePage}>
+              <h1 className={styles.docTitle}>
+                {data.docTitle ? <TitleInline tex={data.docTitle} macros={macros} /> : 'Blueprint'}
+              </h1>
+              {data.docAuthor && (
+                <div className={styles.docAuthor}><TitleInline tex={data.docAuthor} macros={macros} /></div>
+              )}
+              <div className={styles.docMeta}>
+                {chapters.length} chapter{chapters.length === 1 ? '' : 's'}
+                {selectedSha ? ` · historical @${selectedSha.slice(0, 7)}` : ''}
+              </div>
+            </header>
+          )}
+
+          {chapters.length > 0 && (
+            <BlueprintDoc chapters={chapters} macros={macros} leanSource={leanSource} showComments />
+          )}
         </main>
       </div>
 
-      <div className={styles.gitPanel} ref={gitPanelRef}>
+      <div className={styles.gitResize} onMouseDown={git.onMouseDown} title="Drag to resize" />
+      <div className={styles.gitPanel} ref={gitPanelRef} style={{ height: git.size }}>
         <div className={styles.gitHead}>
-          <span className={styles.gitTitle}>
-            Git history{isFetching && selectedSha ? ' · building…' : ''}
-          </span>
-          {selectedSha && (
-            <button className={styles.gitLive} onClick={() => setSelectedSha('')}>← Live</button>
-          )}
+          <span className={styles.gitTitle}>Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
+          {selectedSha && <button className={styles.gitLive} onClick={() => setSelectedSha('')}>← Live</button>}
         </div>
         <GitTimeline
           commits={gitData?.commits ?? []}
