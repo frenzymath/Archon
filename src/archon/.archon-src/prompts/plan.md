@@ -411,7 +411,15 @@ The dependency graph is already injected above under **`## Blueprint graph state
 
 Scope objectives straight from it: dispatch the frontier first (upstream-before-downstream falls out of the `\uses` order), and **never send a prover at an ∞-effort node** — a statement with no informal proof is blind formalization; write the proof (or dispatch a blueprint subagent) first.
 
-To explore the live graph beyond the injected summary, run **`archon dag-query <verb>`** (read-only, JSON with `--json`) — e.g. `archon dag-query frontier --sort impact`, `archon dag-query gaps` (the ∞ holes), or `archon dag-query ancestors --node <id>` to see a target's full dependency closure. Verbs: `frontier`, `leaves`, `roots`, `isolated`, `unproved`, `sorry`, `gaps`, `needs-leanok`, `needs-lean`, `ancestors`, `node`, `all`. (The raw `leandag` CLI — `leandag stats`/`focus` — also works.)
+To explore the live graph beyond the injected summary, run **`archon dag-query <verb>`** (read-only, JSON with `--json`) — e.g. `archon dag-query frontier --sort impact`, `archon dag-query gaps` (the ∞ holes), or `archon dag-query ancestors --node <id>` to see a target's full dependency closure. Verbs: `frontier`, `leaves`, `roots`, `isolated`, `unproved`, `sorry`, `gaps`, `needs-leanok`, `needs-lean`, `unmatched`, `ancestors`, `node`, `all`. (The raw `leandag` CLI — `leandag stats`/`focus` — also works.)
+
+### Lean ↔ blueprint 1-to-1 — you maintain it during the loop
+
+The dag agent establishes a **1-to-1 correspondence** between Lean declarations and blueprint entries; the loop must not erode it. The rule: *when there is Lean there is tex, and the tex's `\uses{}` reflects what the Lean code actually needs* — even for internal helpers that look like trivial lemmas. A helper without a blueprint entry is invisible to the dependency graph (it shows up isolated), and its missing edges silently corrupt the frontier. `archon dag-query unmatched` lists the current debt; keep it at zero:
+
+- **Prover-created helpers** (flagged in the review agent's recommendations, or visible in `unmatched`): give each a blueprint entry — statement, `\label{}`, `\lean{}`, accurate `\uses{}`, and at least a one-line informal proof. A trivial entry for a trivial helper is fine and still mandatory — the entry is what carries the dependency edges (and helps a later prover fill the sorry). Write it yourself or dispatch a blueprint subagent if your catalog has one; when a helper's Lean proof needs a fact with no blueprint entry, create that entry too.
+- **New Lean structure you direct** (scaffolder directives): the blueprint entries for the planned declarations must exist — `\lean{}` pointing at the names the scaffolder will create — *before or alongside* the dispatch. Tex may precede Lean; Lean never exists without tex.
+- **Deletions** (refactor directives): refactor agents do not touch tex — when your directive removes or renames Lean declarations, *you* update the blueprint side in the same iteration (delete or repoint the blocks, fix `\uses{}` that referenced them), so the two sides never drift.
 
 ## Stage transitions
 

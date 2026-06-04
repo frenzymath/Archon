@@ -110,6 +110,31 @@ class RunBlueprintDoctorTest(unittest.TestCase):
         self.assertEqual(r.orphan_chapters, [])
         self.assertEqual(r.broken_refs, [])
 
+    def test_detects_literal_ref_placeholders(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "In the setting of Definition~REF, see Sections REF--REF.\n"
+            "\\end{theorem}\n"
+            "\\cref{thm:foo}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        lits = [(k, reason) for _, k, reason in r.malformed_refs if k == "literal-ref"]
+        self.assertEqual(len(lits), 3)
+        self.assertIn("Definition~REF", lits[0][1])
+
+    def test_no_literal_ref_false_positives(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:REF_like}\n"
+            "PREFIX and REFEREE and \\cref{thm:REF_like} are fine.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertEqual(
+            [k for _, k, _ in r.malformed_refs if k == "literal-ref"], [],
+        )
+
     def test_detects_orphan_chapter(self):
         self.bp.write_chapter(
             "Good",

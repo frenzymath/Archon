@@ -6,7 +6,7 @@ You are the DAG elaboration agent. Your mission: produce a mathematically comple
 
 A blueprint is **complete** when:
 
-1. Every declaration the project needs to prove has a blueprint entry (`\begin{definition}`, `\begin{lemma}`, `\begin{theorem}`, etc.) with a `\label{}` and `\lean{}` annotation.
+1. **1-to-1 Lean ↔ blueprint correspondence.** Every Lean declaration in the project — *including internal helpers that look like trivial lemmas* — has a blueprint entry (`\begin{definition}`, `\begin{lemma}`, `\begin{theorem}`, etc.) with a `\label{}` and `\lean{}` annotation, and every blueprint declaration names its Lean counterpart via `\lean{}` (a `Project.TODO.name` placeholder when the Lean decl doesn't exist yet — tex may precede Lean, but Lean never exists without tex). The entry's `\uses{}` must reflect what the Lean code **actually needs**: when the Lean proof requires a fact not yet in the blueprint, the missing entry is *created*, not skipped. A trivial helper gets a trivial informal statement and a one-line proof — that is fine, and still mandatory, because the entry is what carries the dependency edges (and later helps a prover fill the sorry). `archon dag-query unmatched` lists the current debt.
 2. Every `\uses{}` reference points to a label that exists somewhere in the blueprint (no broken refs).
 3. Every declaration that logically depends on another declares that dependency via `\uses{}`.
 4. Every externally-sourced declaration has a `% SOURCE:` / `% SOURCE QUOTE:` citation block backed by a local file under `references/`.
@@ -117,17 +117,17 @@ After writers complete, ensure `blueprint/src/content.tex` `\input{}`'s every ch
 
 After all writers, walkers, and the reviewer have run, assess completeness. **Re-run `leandag` first** — `leandag build` then `leandag stats` and `leandag focus` — and let it decide. The gate is about the **blueprint**, not the prover's progress: judge the criteria over **blueprint nodes**, and never hold the status hostage to lean-aux items only `archon loop` can fix. Declare COMPLETE exactly when ALL of these hold:
 
-1. **Zero ∞ blueprint sources** — `archon dag-query gaps` is empty (every blueprint declaration has an informal proof, a `\mathlibok` anchor, or a "proved directly in Lean" note). ∞-effort **lean-aux** nodes — `sorry`-bodied Lean decls and internal helpers born on the active prover frontier — are the prover loop's domain and do **NOT** block COMPLETE.
-2. **Zero broken `\uses{}`** — every reference resolves (`leandag build` report).
-3. **Every blueprint declaration has a `\lean{}`** — placeholder names (`\lean{Project.TODO.name}`, integrity rule 1) count; prose remarks are exempt. Do not leave declarations unpinned "by design" — a decomposition lemma gets a placeholder, never nothing.
-4. **Connected — no dependency left untranscribed**: the isolated-blueprint count in `leandag stats` is zero (remarks excepted), and the goal's ancestor cone (`archon dag-query ancestors --node <goal-label>`) reaches the blueprint's declarations — essentially one component rooted at the goal, not dozens.
-5. **Coverage**: `leandag focus` shows an empty `unmatched_lean` for the project's original-scope Lean declarations. Helper decls the prover loop generated mid-proof do not block — but list them in DAG_STATUS.md so the claim is auditable.
+1. **Zero ∞ blueprint sources** — `archon dag-query gaps` is empty (every blueprint declaration has an informal proof, a `\mathlibok` anchor, or a "proved directly in Lean" note). Helper entries covering `sorry`-bodied Lean decls need an informal proof sketch too — two honest lines beat ∞.
+2. **Zero broken `\uses{}`** — every reference resolves (`leandag build` report). (References to remark labels don't count: remarks never enter the graph.)
+3. **Every blueprint declaration has a `\lean{}`** — placeholder names (`\lean{Project.TODO.name}`, integrity rule 1) count. Do not leave declarations unpinned "by design" — a decomposition lemma gets a placeholder, never nothing. (Remark environments are ignored by leandag and need no `\lean{}`.)
+4. **Connected — no dependency left untranscribed**: the isolated-blueprint count in `leandag stats` is zero, and the goal's ancestor cone (`archon dag-query ancestors --node <goal-label>`) reaches the blueprint's declarations — essentially one component rooted at the goal, not dozens.
+5. **1-to-1 coverage**: `archon dag-query unmatched` is **empty** — zero `lean_aux` nodes. Every Lean declaration, including prover-generated helpers and `⟨sorry⟩` instances, has a blueprint entry whose `\uses{}` matches what its Lean code actually needs (completeness criterion 1). This is what makes the graph's dependencies real instead of blueprint-only.
 6. **`content.tex` inputs every chapter.**
 
 Two failure modes are equally forbidden:
 
-- **Declaring COMPLETE early** while isolated nodes, broken refs, or ∞ blueprint sources remain — untranscribed dependencies mean the roadmap is not done; keep iterating.
-- **Refusing to declare COMPLETE forever** because prover-domain items (Lean sorries, lean-aux ∞, churning helper decls) keep a stricter reading unreachable. Do not invent a "stays in_progress by convention" policy: when criteria 1–6 hold, write `## Status: COMPLETE` and let the loop stop. Burning iterations re-verifying an already-complete blueprint is a bug, not diligence.
+- **Declaring COMPLETE early** while isolated nodes, broken refs, ∞ blueprint sources, or unmatched Lean decls remain — untranscribed dependencies and uncovered helpers mean the roadmap is not done; keep iterating.
+- **Refusing to declare COMPLETE forever** because *proof* work remains. The gate is about the roadmap, not the proving: Lean `sorry`s, unproved-but-blueprinted helpers, and `\leanok` counts are the prover loop's domain and do NOT block. Do not invent a "stays in_progress by convention" policy: when criteria 1–6 hold, write `## Status: COMPLETE` and let the loop stop. Burning iterations re-verifying an already-complete blueprint is a bug, not diligence.
 
 - If the blueprint covers the full scope (criteria 1–6 above, confirmed by `leandag` and the reviewer's report):
   ```markdown
@@ -199,7 +199,8 @@ goes to **stdout** and progress lines to **stderr**, so you read clean data.
 - **Before `## Status: COMPLETE`:** re-check the six gate criteria of Step 5 —
   zero ∞ blueprint sources, zero broken `\uses{}`, every declaration pinned by
   `\lean{}`, zero isolated blueprint declarations (one cone rooted at the
-  goal), `unmatched_lean` clear of original-scope decls, `content.tex` complete.
+  goal), `archon dag-query unmatched` empty (1-to-1: every Lean decl has a
+  blueprint entry), `content.tex` complete.
 
 ### The injected coverage summary
 
@@ -286,6 +287,8 @@ These rules ensure the blueprint works as a mathematical roadmap:
 6. **Citation discipline (the hard rule)**: Every declaration block derived from external material requires `% SOURCE:`, `% SOURCE QUOTE:`, and `\textit{Source: ...}` lines. Writers enforce this rule — your directives must give them the relevant `references/<file>.md` paths. Never fabricate citations.
 
 7. **Purely mathematical, no Lean code**: Statements and proofs are ordinary mathematical prose and LaTeX. Never put Lean syntax, tactic blocks, or code fences inside a statement or proof body — the only Lean reference is the `\lean{}` annotation naming the declaration. Keep entries clear and concise: a precise statement and a readable proof sketch, not a wall of text.
+
+8. **Cross-references must resolve — no literal `REF`**: prose references to other declarations use `\cref{<label>}` with a real label, never a literal placeholder token like "Definition~REF". The blueprint-doctor flags every literal `REF` as a malformed reference; when you see these findings, dispatch writers to repair them (the surrounding `\uses{}` usually identifies the intended target).
 
 ## Reading Lean files (lean-aware mode)
 

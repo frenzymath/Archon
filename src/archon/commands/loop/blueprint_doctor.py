@@ -108,6 +108,16 @@ _REF_RES = (
     re.compile(r"\\proves\s*\{\s*([^{}]*?)\s*\}"),
 )
 
+# A literal standalone "REF" token in prose ("Definition~REF",
+# "Sections REF–REF") — a writer pasted a placeholder instead of a
+# resolvable \cref{<label>}. Matched with the optional preceding
+# kind-word so the finding reads naturally.
+_LITERAL_REF_RE = re.compile(
+    r"(?:\b(?:Definition|Lemma|Theorem|Proposition|Corollary|Chapter|"
+    r"Section|Remark|Equation|Step|Part)s?[~\s]+)?"
+    r"(?<![A-Za-z\\{:_])REF(?![A-Za-z}_:])"
+)
+
 
 @dataclass
 class DoctorReport:
@@ -241,6 +251,14 @@ def _scan_labels_and_refs(
         except OSError:
             continue
         text = _strip_tex_comments(text)
+        # Literal "REF" placeholders — a writer wrote prose like
+        # "Definition~REF" instead of a resolvable \cref{<label>}. plasTeX
+        # renders them as-is, littering the blueprint with dead references.
+        for m in _LITERAL_REF_RE.finditer(text):
+            malformed.append((
+                tex, "literal-ref",
+                f'literal "{m.group(0)}" placeholder — use \\cref{{<label>}}',
+            ))
         for m in _LABEL_RE.finditer(text):
             piece = m.group(1).strip()
             if piece:

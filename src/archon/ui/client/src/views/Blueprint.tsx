@@ -168,7 +168,7 @@ export default function Blueprint() {
           {openChapters.map(ch => (
             <div key={ch.slug} className={styles.openChapter}>
               <button className={styles.closeChap} onClick={() => toggleOpen(ch.slug)} title="Close chapter">×</button>
-              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} />
+              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} />
             </div>
           ))}
         </main>

@@ -58,7 +58,7 @@ type Block =
   | { t: 'displaymath'; v: string }
   | { t: 'para'; c: Inline[] };
 
-interface RefTarget { kind: string; num: string; anchor: string; }
+interface RefTarget { kind: string; num: string; anchor: string; slug: string; }
 type LabelMap = Map<string, RefTarget>;
 
 // ── text normalisation (applied only to text nodes, never to math) ───────────
@@ -331,7 +331,7 @@ export function buildBlueprintModel(chapters: DocChapter[], showComments = true)
       ...['\\section', '\\begin{'].map(t => { const k = tex.indexOf(t); return k === -1 ? tex.length : k; }),
     );
     const chLab = /\\label\s*\{([^{}]*)\}/.exec(tex.slice(0, cut));
-    if (chLab) labels.set(chLab[1].trim(), { kind: 'Chapter', num: String(chapNum), anchor });
+    if (chLab) labels.set(chLab[1].trim(), { kind: 'Chapter', num: String(chapNum), anchor, slug: raw.slug });
 
     const blocks = parseBlocks(tex);
     const sections: TocSection[] = [];
@@ -341,11 +341,11 @@ export function buildBlueprintModel(chapters: DocChapter[], showComments = true)
         if (b.level === 2) { sec++; sub = 0; b.num = `${chapNum}.${sec}`; }
         else { sub++; b.num = `${chapNum}.${sec || 1}.${sub}`; }
         b.anchor = `sec-${anchor}-${b.num.replace(/\./g, '_')}`;
-        if (b.label) labels.set(b.label, { kind: 'Section', num: b.num, anchor: b.anchor });
+        if (b.label) labels.set(b.label, { kind: 'Section', num: b.num, anchor: b.anchor, slug: raw.slug });
         sections.push({ num: b.num, anchor: b.anchor, title: b.title, level: b.level });
       } else if (b.t === 'env' && NUMBERED.has(b.name)) {
         stmt++; b.num = `${chapNum}.${stmt}`; b.anchor = `stmt-${anchor}-${b.num.replace(/\./g, '_')}`;
-        if (b.meta.label) labels.set(b.meta.label, { kind: ENV_LABELS[b.name] ?? b.name, num: b.num, anchor: b.anchor });
+        if (b.meta.label) labels.set(b.meta.label, { kind: ENV_LABELS[b.name] ?? b.name, num: b.num, anchor: b.anchor, slug: raw.slug });
       }
     }
     doc.push({ slug: raw.slug, num: chapNum, anchor, title: parseInline(raw.title), blocks, sections });
@@ -394,7 +394,23 @@ function highlightLean(raw: string): string {
   }).join('\n');
 }
 
-interface Ctx { macros: Record<string, string>; labels: LabelMap; lean: Map<string, string>; }
+interface Ctx {
+  macros: Record<string, string>;
+  labels: LabelMap;
+  lean: Map<string, string>;
+  /** Open the target's chapter (lazy view) and scroll to its anchor. */
+  onNavigate?: (slug: string, anchor: string) => void;
+}
+
+/** Cross-reference click: route through onNavigate so a target in a not-yet-
+ *  rendered chapter gets its chapter opened first (plain #hash would no-op). */
+function refClick(ctx: Ctx, tgt: RefTarget) {
+  return (e: React.MouseEvent) => {
+    if (!ctx.onNavigate) return; // fall back to the plain anchor
+    e.preventDefault();
+    ctx.onNavigate(tgt.slug, tgt.anchor);
+  };
+}
 
 function Inlines({ nodes, ctx, k }: { nodes: Inline[]; ctx: Ctx; k: string }) {
   return <>{nodes.map((n, idx) => <InlineNode key={`${k}-${idx}`} n={n} ctx={ctx} k={`${k}-${idx}`} />)}</>;
@@ -410,7 +426,7 @@ function InlineNode({ n, ctx, k }: { n: Inline; ctx: Ctx; k: string }) {
   const tgt = ctx.labels.get(n.label);
   if (!tgt) return <span className={styles.refBroken} title={`unresolved: ${n.label}`}>?</span>;
   const text = n.cref ? `${tgt.kind} ${tgt.num}` : tgt.num;
-  return <a className={styles.ref} href={`#${tgt.anchor}`}>{text}</a>;
+  return <a className={styles.ref} href={`#${tgt.anchor}`} onClick={refClick(ctx, tgt)}>{text}</a>;
 }
 
 function LeanChip({ name, ctx }: { name: string; ctx: Ctx }) {
@@ -438,7 +454,7 @@ function UsesChips({ uses, ctx }: { uses: string[]; ctx: Ctx }) {
       {uses.map((u, i) => {
         const tgt = ctx.labels.get(u);
         return tgt
-          ? <a key={i} className={styles.usesChip} href={`#${tgt.anchor}`} title={`${tgt.kind} ${tgt.num}`}>{tgt.kind} {tgt.num}</a>
+          ? <a key={i} className={styles.usesChip} href={`#${tgt.anchor}`} onClick={refClick(ctx, tgt)} title={`${tgt.kind} ${tgt.num}`}>{tgt.kind} {tgt.num}</a>
           : <span key={i} className={`${styles.usesChip} ${styles.usesUnknown}`} title={`unresolved: ${u}`}>{u.split(':').pop()}</span>;
       })}
     </span>
@@ -523,14 +539,18 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, leanSource,
+  chapter, macros, labels, leanSource, onNavigate,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
   labels: LabelMap;
   leanSource: Map<string, string>;
+  onNavigate?: (slug: string, anchor: string) => void;
 }) {
-  const ctx: Ctx = useMemo(() => ({ macros, labels, lean: leanSource }), [macros, labels, leanSource]);
+  const ctx: Ctx = useMemo(
+    () => ({ macros, labels, lean: leanSource, onNavigate }),
+    [macros, labels, leanSource, onNavigate],
+  );
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
       <h2 className={styles.chapterTitle}>

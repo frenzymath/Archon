@@ -87,6 +87,7 @@ Lean file  Core.lean            →  chapter  blueprint/src/chapters/Core.tex
 - **Document every change** in `task_results/refactor-<slug>.md` (see Logging below).
 - **Verify the full project compiles** before finishing. Use `lean_diagnostic_messages` on every file you touched plus files that import from them.
 - **Ensure that the Lean files reflect the blueprint structure.** The plan agent gave you the directive and updated the blueprint with the intended structure. Your job is to make the necessary changes to the Lean files to match that structure.
+- **Report every deleted or renamed declaration explicitly.** The project keeps a 1-to-1 Lean ↔ blueprint correspondence; you cannot touch the tex, so the planner must mirror your changes on the blueprint side. Include a dedicated `## Declarations deleted / renamed` list in your report (old name → new name, or "deleted", with the file) — an unreported rename leaves a stale `\lean{}` pin; an unreported deletion leaves a ghost blueprint node.
 
 ### What you MUST NOT do
 - **Do NOT fill proofs.** If a proof breaks because you changed a definition, insert `sorry` and move on. Proof filling is the prover's job.

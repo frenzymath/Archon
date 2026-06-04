@@ -382,6 +382,7 @@ QUERY_VERBS: dict[str, str] = {
     "gaps": "∞ effort — statement with no informal proof (roadmap holes)",
     "needs-leanok": "sorry-free in Lean but not marked \\leanok",
     "needs-lean": "blueprint node with no \\lean{} link",
+    "unmatched": "lean_aux — Lean decls with NO blueprint entry (1-to-1 coverage debt)",
     "ancestors": "the dependency closure of --node (everything it transitively uses)",
     "cone": "closure of --node seed(s) (comma-separated; seeds included); --complement inverts",
     "node": "a single node by --node id",
@@ -465,6 +466,8 @@ def run_query(
             sel = q.needs_leanok()
         elif verb == "needs-lean":
             sel = q.needs_lean_statement()
+        elif verb == "unmatched":
+            sel = [n for n in dag.nodes if n.type == "lean_aux"]
         elif verb == "node":
             sel = [dag.node(node)]
         elif verb == "ancestors":

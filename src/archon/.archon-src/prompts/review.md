@@ -135,6 +135,7 @@ The per-session "Overall Progress" narrative (Total sorry, branches closed, solv
 - **`\lean{...}` corrections** — when a prover renamed a declaration or chose a different name from the plan agent's hint, the task result will mention it. Update the chapter's `\lean{...}` to the correct name.
 - **`% NOTE: <reason>`** — when a block is unformalized because the informal statement did not translate cleanly, annotate with a `% NOTE: ...` so the plan agent sees it.
 - **Stale `\notready`** — strip when the prover has landed the block.
+- **1-to-1 coverage debt** — run `archon dag-query unmatched --json`: every `lean_aux` node is a Lean declaration (usually a prover-created helper from this session) with **no blueprint entry**, invisible to the dependency graph. You do not write informal prose, so do NOT author the entries yourself — instead list each one in `recommendations.md` (file, declaration name, and what its Lean proof depends on, read from the source) so the planner restores the correspondence next iteration. The doctrine: when there is Lean there must be tex, even for trivial helpers.
 
 If you add `\mathlibok`, no `\leanok` is needed on the proof block — the deterministic script will leave proof-less blocks alone.
 
@@ -204,6 +205,7 @@ Before you stop, verify:
 - [ ] For every Mathlib-backed declaration in the prover's task_result, the chapter has `\mathlibok`.
 - [ ] Any `\lean{...}` rename flagged in a task_result has been applied.
 - [ ] No `\notready` remains on a block whose Lean declaration now exists.
+- [ ] `archon dag-query unmatched` was checked; every uncovered Lean decl is listed in `recommendations.md` for the planner to blueprint.
 
 ## Permissions
 

@@ -69,6 +69,7 @@ When stuck more generally: break into smaller subgoals, search Mathlib more thor
 - Keep edits minimal; don't delete comments or change labels; don't add unrelated declarations.
 - Helper lemmas you introduced may be modified if they turn out wrong.
 - Add a concise comment above each helper lemma so reuse is easy.
+- **List every helper declaration you introduce in your task_result** (name, file, and the facts its proof relies on). The project keeps a 1-to-1 Lean ↔ blueprint correspondence — the review agent and planner use your list to give each helper a blueprint entry, so unreported helpers become invisible dependencies in the graph.
 - **`change` vs `show`** — `change` reshapes the goal up to defeq; `show` is purely display-level annotation. Using `show` where `change` is needed produces a linter warning. Default to `change` when in doubt.
 
 ## Mathlib tags in PROGRESS.md
