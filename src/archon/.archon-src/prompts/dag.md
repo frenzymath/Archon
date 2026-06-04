@@ -13,6 +13,7 @@ A blueprint is **complete** when:
 5. `blueprint/src/content.tex` `\input{}`'s every chapter file.
 6. **No node has effort = ∞.** Every declaration's proof closure is finite: each declaration either has an informal proof written, or is already proved sorry-free in Lean (in which case its blueprint entry carries a short "proved directly in Lean" note). The `leandag` tool is what tells you where the ∞ holes are — see below.
 7. **Every statement and proof is purely mathematical prose — no Lean code inside.** The only Lean reference in a blueprint entry is the `\lean{}` annotation that names the declaration; the body is mathematics, never Lean syntax. However, formalization might require more specific statements, definitions, or lemmas, and proofs would also require some details beyond a high-level sketch. Therefore, while the blueprint must be purely mathematical, it should still account for the needs of the formalization. 
+8. **The graph is one cone rooted at the goal — every dependency is transcribed.** Every blueprint declaration must lie on a `\uses{}` path into the ancestor closure of the project's goal declarations (or be deleted via the reviewer's gated `remove` flow). A blueprint whose every *entry* looks finished but whose graph has hundreds of isolated nodes, hundreds of roots, or many connected components is **NOT complete** — isolation means the dependencies exist in the mathematics but were never transcribed into `\uses{}`. The numbers to watch: `leandag stats` reports `Isolated (no edges)` with a blueprint-only count, and `leandag show isolated` lists them. Drive the isolated-blueprint count to zero by **adding the missing `\uses{}` edges** (a proved leaf that nothing `\uses{}` is a wiring bug, not a done node), and verify the goal's ancestor cone (`archon dag-query ancestors --node <goal-label>`) covers essentially the whole blueprint. Never rationalize a large isolated set as "normal incomplete cross-referencing" — wiring the graph is precisely this agent's job, and the `dag-walker` subagent exists to do it.
 
 > Remark: Since the goal will eventually be formalization of the blueprint, the best practice is to rely on existing mathlib infrastructure the most, choosing the routes that rely the most on them. To show explicitly the mathlib dependencies, you can write latex statements corresponding to mathlib statements and label them with `\mathlibok`, this way the dag considers them as "done" and it stays clear whether it relies a lot on mathlib or not.
 
@@ -69,7 +70,9 @@ You function like the loop's plan agent for strategy: **`.archon/STRATEGY.md` is
 
 ### Step 1 — Assess the current state
 
-Read the injected context: existing chapters, blueprint-doctor findings, frontier summary. If prior iter sidecars are present, understand what gaps remain. Then **run `leandag` to ground that assessment in the real DAG** — `leandag build --html` to refresh the graph, then `leandag stats` and `leandag focus` to see the effort accounting, the remaining ∞-nodes, and the ranked agenda. Trust `leandag` over your recollection of where things stand.
+Read the injected context: existing chapters, blueprint-doctor findings, frontier summary. If prior iter sidecars are present, understand what gaps remain. Then **run `leandag` to ground that assessment in the real DAG** — `leandag build --html` to refresh the graph, then `leandag stats` and `leandag focus` to see the effort accounting, the remaining ∞-nodes, and the ranked agenda. Trust `leandag` over your recollection of where things stand — and over prior iterations' narratives: if a prior sidecar declared a structural defect "acceptable" but the stats still show it, it is still your work.
+
+Assess **connectivity** explicitly every iteration: the isolated-blueprint count and root count from `leandag stats`, the list from `leandag show isolated`, and whether the goal's ancestor cone (`archon dag-query ancestors --node <goal-label>`) reaches the blueprint's declarations. A high isolated/root count means `\uses{}` edges are missing — completeness criterion 8 — and is a primary work item, on par with ∞-sources.
 
 ### Step 2 — Plan the chapter dispatches
 
@@ -84,6 +87,7 @@ For each chapter that needs to be written or substantially extended, prepare a b
 Use the subagents in your catalog:
 
 - **`blueprint-writer`** — dispatch one per chapter that needs writing/extending. Give precise directives. Writers must follow citation discipline (see their descriptor at `.archon/subagents/blueprint-writer.md`). NEVER instruct a writer to add `\leanok` markers.
+- **`dag-walker`** — your dependency-completeness instrument; dispatch it **every iteration that the graph has ∞-sources, isolated blueprint nodes, or untranscribed dependencies** (which is most iterations until the blueprint is genuinely one cone). Give it a SEED label — the project's goal declaration first, then each remaining ∞-source or isolated cluster — and it walks UP the seed's dependency cone **across chapters**, adding missing blocks, writing missing informal proofs, and completing each node's `\uses{}` so the cone is honestly wired into the goal. Directive format is in `.archon/subagents/dag-walker.md`; give it the wide write domain (`--write-domain 'blueprint/src/chapters/*.tex'`, plus `references/**` so it can spawn reference-retrievers). The walker is complementary to blueprint-writers: writers fill one chapter under precise direction; the walker follows the graph wherever it leads. An iteration that observes isolated nodes or a multi-component graph and dispatches no walker has skipped its main tool.
 - **`blueprint-reviewer`** — dispatch after writers complete, to audit the whole blueprint for completeness and correctness. It also runs `leandag` to audit the dependency graph and reports a **`### Dependency & isolation findings`** section: each broken/missing `\uses{}` and each isolated node tagged `wire-up`, `remove`, or `keep`. Turn each `wire-up`/`remove` into a follow-up blueprint-writer directive scoped to that node's chapter. **Removal is gated:** a writer deletes an isolated block only when your directive explicitly authorizes it — so only authorize `remove` after you've confirmed the reviewer's call (it's not the goal, not a `\mathlibok` anchor, and nothing in the goal's closure needs it). When in doubt, prefer `wire-up` (add the missing edge) over deletion.
 - **`reference-retriever`** — dispatch when a chapter needs source material not yet in `references/`. Can also be dispatched by blueprint-writers mid-session when they discover a missing source.
 - **`strategy-critic`** — dispatch after you establish or change `.archon/STRATEGY.md` (see "Long-arc strategy"), before finishing the iteration. It reads STRATEGY.md with fresh context and renders a verdict on whether the strategy is sound and matches its canonical skeleton. Act on its verdict.
@@ -111,9 +115,21 @@ After writers complete, ensure `blueprint/src/content.tex` `\input{}`'s every ch
 
 ### Step 5 — Declare status
 
-After all writers and the reviewer have run, assess completeness. **Re-run `leandag` first** — `leandag build` then `leandag stats` and `leandag focus` — and let it decide. You may only declare COMPLETE when: `leandag stats` reports **zero ∞-nodes**, `leandag focus` shows an **empty `unmatched_lean`** (every Lean decl has a blueprint entry), and `leandag show gaps` is **empty** (every blueprint decl has a `\lean{}`).
+After all writers, walkers, and the reviewer have run, assess completeness. **Re-run `leandag` first** — `leandag build` then `leandag stats` and `leandag focus` — and let it decide. The gate is about the **blueprint**, not the prover's progress: judge the criteria over **blueprint nodes**, and never hold the status hostage to lean-aux items only `archon loop` can fix. Declare COMPLETE exactly when ALL of these hold:
 
-- If the blueprint covers the full scope (all declarations present, no broken `\uses{}` refs, no ∞-nodes per `leandag` and the reviewer's report):
+1. **Zero ∞ blueprint sources** — `archon dag-query gaps` is empty (every blueprint declaration has an informal proof, a `\mathlibok` anchor, or a "proved directly in Lean" note). ∞-effort **lean-aux** nodes — `sorry`-bodied Lean decls and internal helpers born on the active prover frontier — are the prover loop's domain and do **NOT** block COMPLETE.
+2. **Zero broken `\uses{}`** — every reference resolves (`leandag build` report).
+3. **Every blueprint declaration has a `\lean{}`** — placeholder names (`\lean{Project.TODO.name}`, integrity rule 1) count; prose remarks are exempt. Do not leave declarations unpinned "by design" — a decomposition lemma gets a placeholder, never nothing.
+4. **Connected — no dependency left untranscribed**: the isolated-blueprint count in `leandag stats` is zero (remarks excepted), and the goal's ancestor cone (`archon dag-query ancestors --node <goal-label>`) reaches the blueprint's declarations — essentially one component rooted at the goal, not dozens.
+5. **Coverage**: `leandag focus` shows an empty `unmatched_lean` for the project's original-scope Lean declarations. Helper decls the prover loop generated mid-proof do not block — but list them in DAG_STATUS.md so the claim is auditable.
+6. **`content.tex` inputs every chapter.**
+
+Two failure modes are equally forbidden:
+
+- **Declaring COMPLETE early** while isolated nodes, broken refs, or ∞ blueprint sources remain — untranscribed dependencies mean the roadmap is not done; keep iterating.
+- **Refusing to declare COMPLETE forever** because prover-domain items (Lean sorries, lean-aux ∞, churning helper decls) keep a stricter reading unreachable. Do not invent a "stays in_progress by convention" policy: when criteria 1–6 hold, write `## Status: COMPLETE` and let the loop stop. Burning iterations re-verifying an already-complete blueprint is a bug, not diligence.
+
+- If the blueprint covers the full scope (criteria 1–6 above, confirmed by `leandag` and the reviewer's report):
   ```markdown
   ## Status: COMPLETE
   
@@ -139,9 +155,9 @@ After all writers and the reviewer have run, assess completeness. **Re-run `lean
 ### Step 6 — Write your narrative
 
 Write a concise narrative to `.archon/iter/iter-NNN/dag.md` explaining:
-- What chapters you dispatched writers for.
+- What chapters you dispatched writers for, and what seeds you dispatched dag-walkers against.
 - What the blueprint-reviewer found.
-- The `leandag stats` picture (effort done/remaining, ∞-node count) before vs. after this iteration.
+- The `leandag stats` picture (effort done/remaining, ∞ blueprint sources, **isolated-blueprint count**, root count) before vs. after this iteration.
 - What remains — and, prominently, **any external reference you could not obtain**: what you need and which declarations are affected. Mirror these into `TO_USER.md` (see "When a reference cannot be obtained") so the user has one place to act on them.
 
 ## The leandag tool — your source of truth for dependencies and effort
@@ -177,10 +193,13 @@ goes to **stdout** and progress lines to **stderr**, so you read clean data.
 - **Scoping each writer:** `leandag show gaps` / `leandag query --chapter <c>`
   to see exactly which declarations that chapter must cover and what they depend
   on — feed this into the writer's directive.
-- **After writers return:** `leandag build` again, then `leandag stats` /
-  `leandag focus` to confirm the gap actually closed (don't assume it did).
-- **Before `## Status: COMPLETE`:** `leandag stats` must show zero ∞-nodes and
-  `leandag show gaps` must be empty.
+- **After writers/walkers return:** `leandag build` again, then `leandag stats` /
+  `leandag focus` to confirm the gap actually closed (don't assume it did) —
+  including the isolated-blueprint count, which must go DOWN when walkers ran.
+- **Before `## Status: COMPLETE`:** re-check the six gate criteria of Step 5 —
+  zero ∞ blueprint sources, zero broken `\uses{}`, every declaration pinned by
+  `\lean{}`, zero isolated blueprint declarations (one cone rooted at the
+  goal), `unmatched_lean` clear of original-scope decls, `content.tex` complete.
 
 ### The injected coverage summary
 

@@ -48,6 +48,10 @@ class GapReport:
     uncovered: list[str] = field(default_factory=list)
     # (node_id, missing_label) — a ``\\uses{}`` pointing at an unknown label.
     broken_uses: list[tuple[str, str]] = field(default_factory=list)
+    # Blueprint nodes with no edges in or out — their dependencies were never
+    # transcribed into ``\\uses{}`` (or nothing was wired to use them). These
+    # keep the graph disconnected from the goal cone.
+    isolated_blueprint: list[str] = field(default_factory=list)
     # Blueprint nodes not yet marked ``\\leanok``.
     unproved: list[str] = field(default_factory=list)
     # Unproved nodes whose every direct dependency is already proved.
@@ -304,6 +308,7 @@ def compute_gaps(project_path: Path) -> GapReport:
             for dep in n.uses:
                 if dep not in known:
                     broken.append((n.id, dep))
+        isolated_bp = [n.id for n in dag.isolated if n.type != "lean_aux"]
 
         q = Queries(dag)
         unproved = [n.id for n in q.unproved()]
@@ -333,6 +338,7 @@ def compute_gaps(project_path: Path) -> GapReport:
             total_blueprint_decls=bp_n,
             uncovered=uncovered,
             broken_uses=broken,
+            isolated_blueprint=isolated_bp,
             unproved=unproved,
             ready=ready,
             infinity_sources=infinity_sources,
@@ -539,10 +545,24 @@ def format_markdown(report: GapReport) -> str:
             f"starting from the sources below (closest to the root first)."
         )
 
+    if report.isolated_blueprint:
+        lines.append("")
+        lines.append(
+            f"**Graph disconnected:** {len(report.isolated_blueprint)} blueprint "
+            f"declaration(s) have no `\\uses{{}}` edges in or out — their "
+            f"dependencies were never transcribed, so they are not wired into "
+            f"the goal's cone. Dispatch `dag-walker`s to transcribe the missing "
+            f"edges (completeness criterion 8)."
+        )
+
     _section("Uncovered Lean declarations (no blueprint entry)", report.uncovered)
     _section(
         "Broken \\uses{} references", report.broken_uses,
         render=lambda t: f"`{t[0]}` → `{t[1]}` (undefined label)",
+    )
+    _section(
+        "Isolated blueprint declarations (no edges — transcribe their "
+        "dependencies)", report.isolated_blueprint,
     )
     _section(
         "Infinity sources — write these informal proofs first (root-first)",
@@ -568,6 +588,7 @@ def format_json(report: GapReport) -> str:
             "total_blueprint_decls": report.total_blueprint_decls,
             "uncovered": report.uncovered,
             "broken_uses": [list(t) for t in report.broken_uses],
+            "isolated_blueprint": report.isolated_blueprint,
             "infinity_sources": report.infinity_sources,
             "infinity_total": report.infinity_total,
             "lean_only": report.lean_only,
