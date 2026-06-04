@@ -138,18 +138,19 @@ In `summary.md`, include a "Blueprint markers updated (manual)" section listing 
 
 ## Step 7 — TO_USER.md (user-facing notice)
 
-`TO_USER.md` is reset at the start of every review phase. The UI surfaces its content as a banner. The loop is autonomous and may run unattended for many iters, so **TO_USER is a notice board, never a question queue.** Never write "awaiting your decision", an options menu, a "where to reply" section, or a "default to X if no reply" framing — anything that implies the loop is paused for a human. The loop never waits.
+`TO_USER.md` is a *persistent* shared notice board (plan, prover, and review all maintain it — it is **no longer reset each iter**). The UI surfaces its content as a banner. As the end-of-iter agent, you are its **janitor**: read the current file, **delete every bullet that is no longer true at this point** (the blocker got resolved, the decision was overtaken, the credential is now set, a prover already pruned it), then add or update bullets for what is live now. The loop is autonomous and may run unattended for many iters, so **TO_USER is a notice board, never a question queue.** Never write "awaiting your decision", an options menu, a "where to reply" section, or a "default to X if no reply" framing — anything that implies the loop is paused for a human. The loop never waits.
 
-**Check the planner's iter sidecar.** Read `iter/iter-NNN/plan.md`. Write a concise banner only for one of these two cases:
+**Check the planner's iter sidecar.** Read `iter/iter-NNN/plan.md`. Keep a concise bullet for any of these that are currently live:
 
-1. **A decision the planner made on the user's behalf** — when the sidecar records a `## Decision made` on a strategy fork. State the decision (one sentence), its one-line rationale, and that the user can change course by adding a hint to `USER_HINTS.md` (no reply is fine — the project keeps moving on the chosen option). Phrase it as *made*, not *pending*.
+1. **A decision the planner made on the user's behalf** — when the sidecar records a `## Decision made` on a strategy fork. State the decision (one sentence), its one-line rationale, and that the user can change course by adding a hint to `USER_HINTS.md` (no reply is fine — the project keeps moving on the chosen option). Phrase it as *made*, not *pending*. (The planner may already have written this — in that case verify it's still accurate and dedupe, don't duplicate.)
 2. **A genuine block the agent cannot resolve itself** — missing credentials/dependencies, a required environment action. State the action needed; note that the loop proceeds as far as it can without it.
+3. **A persistent no-progress blocker** — when the same file/route has churned across several iters with no sorry-count progress and the planner's sidecar flags it as stuck without a self-fix in reach. State, in one line, what is stuck and the cheapest thing the user could do to help (supply a reference, confirm a definition, relax a frozen signature). This is the case the loop used to swallow silently; surface it once, concisely, and prune it when progress resumes.
 
 If the planner skipped provers, that should only ever be a **mechanical** hard gate (no ready sorries; all objectives blocked by a failed upstream build) — surface that as case 2 if the user can unblock it, otherwise it needs no banner.
 
 **Rules**:
-- Be extremely concise (1–2 sentences per item, markdown).
-- If nothing relevant for the user, leave the file empty.
+- Keep the **whole file ≤ 2–3 short bullets**, each 1–2 sentences, markdown. If it's grown past that, the oldest/least-live items are the ones to cut.
+- If nothing is relevant for the user right now, leave the file empty (prune everything stale).
 
 ## Step 8 — Optional review subagents
 

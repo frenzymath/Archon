@@ -138,8 +138,12 @@ class ReviewPhase(Phase):
                     capture_output=True,
                 )
         
-        to_user_file = ctx.state_dir / "TO_USER.md"
-        to_user_file.write_text("", encoding="utf-8")
+        # TO_USER.md is a *persistent* shared notice board — plan, prover,
+        # and review may all maintain it. We deliberately do NOT clear it
+        # here: a standing notice (e.g. "set DEEPSEEK_API_KEY to unblock X")
+        # must survive quiet iters until the agent that owns the item prunes
+        # it. The review agent is told to read it, drop now-irrelevant items,
+        # and keep it to <=2-3 concise bullets (see review.md Step 7).
 
         cfg = load_project_config(ctx.project_path)
         prompt = build_review_prompt(

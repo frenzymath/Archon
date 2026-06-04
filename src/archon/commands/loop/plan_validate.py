@@ -43,6 +43,7 @@ from .blocked_deps import (
     parse_blocked_files_from_log,
 )
 from .context import LoopContext
+from .sorry_count import filter_noop_objectives
 
 
 # A line inside `## Current Objectives` matching this regex marks the
@@ -72,6 +73,12 @@ _STRATEGY_BYTES_CEILING = 20 * 1024
 # or iter sidecar where they belong.
 _LEAN_FENCE_RE = re.compile(r"^```\s*lean\b", re.IGNORECASE | re.MULTILINE)
 _TEX_THM_RE = re.compile(r"\\begin\{(theorem|lemma|proof|definition)\}")
+
+# The no-op filter (existing objective file with zero open sorries → a
+# prover that quits immediately with no work) lives in
+# ``sorry_count.filter_noop_objectives`` so the prover runner can enforce
+# it too. plan_validate runs it here to warn + hint the planner; the
+# runner runs it again at dispatch time (mirrors the blocked-deps split).
 
 
 def validate_plan_output(ctx: LoopContext) -> bool:
@@ -167,12 +174,53 @@ def validate_plan_output(ctx: LoopContext) -> bool:
             })
             return False
 
+        # No-op filter — drop objectives naming an existing .lean file
+        # with zero open sorries (already done / off-limits / reference),
+        # which would dispatch a prover that quits immediately. Scaffold
+        # dispatches and new files are exempt (see filter_noop_objectives).
+        noop_dropped: list[Path] = []
+        if getattr(ctx.options, "filter_noop_objectives", True):
+            objectives, noop_dropped = filter_noop_objectives(
+                objectives, progress_file=ctx.progress_file,
+            )
+        noop_rels = [_rel_to_project(p, ctx.project_path) for p in noop_dropped]
+        if noop_dropped:
+            log.warn(
+                f"plan-validate: dropped {len(noop_dropped)} objective(s) "
+                f"that name an existing .lean file with zero open sorries — "
+                f"a prover on them would quit immediately with no work. See "
+                f"planValidate.objectivesNoop in meta.json for details."
+            )
+            _append_noop_hint(ctx.state_dir / "USER_HINTS.md", noop_rels)
+
+        if not objectives:
+            # Every surviving objective was a no-op. Skip prover rather
+            # than fan out lanes that all quit empty (the reported
+            # "all 10 provers quit without doing anything" failure).
+            log.error(
+                "plan-validate: every objective was dropped as a no-op "
+                "(existing file with zero open sorries). Skipping prover "
+                "this iter; next iter's plan agent must list files that "
+                "actually have sorries to fill, or scaffold new ones."
+            )
+            write_meta(ctx.iter_meta, **{
+                "planValidate.status": "failed_all_noop",
+                "planValidate.objectivesProposed": original_proposed,
+                "planValidate.objectivesDispatched": 0,
+                "planValidate.objectivesNoop": noop_rels,
+                **({"planValidate.objectivesBlocked": blocked_meta}
+                   if blocked_dropped else {}),
+            })
+            return False
+
         cap = ctx.options.max_objectives
         proposed = len(objectives)
-        blocked_meta_field = (
-            {"planValidate.objectivesBlocked": blocked_meta}
-            if blocked_dropped else {}
-        )
+        filtered_meta_field = {
+            **({"planValidate.objectivesBlocked": blocked_meta}
+               if blocked_dropped else {}),
+            **({"planValidate.objectivesNoop": noop_rels}
+               if noop_dropped else {}),
+        }
         if proposed > cap:
             deferred = objectives[cap:]
             deferred_rels = [_rel_to_project(p, ctx.project_path) for p in deferred]
@@ -193,13 +241,13 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 "planValidate.objectivesProposed": proposed,
                 "planValidate.objectivesDispatched": cap,
                 "planValidate.objectivesDeferred": deferred_rels,
-                **blocked_meta_field,
+                **filtered_meta_field,
             })
             return True
         write_meta(ctx.iter_meta, **{
             "planValidate.status": "ok",
             "planValidate.objectives": proposed,
-            **blocked_meta_field,
+            **filtered_meta_field,
         })
         return True
 
@@ -342,6 +390,35 @@ def _apply_blocked_deps_filter(
         graph=graph,
         project_path=ctx.project_path,
     )
+
+
+def _append_noop_hint(hints_file: Path, noop_rels: list[str]) -> None:
+    """Append a hint listing files dropped as guaranteed no-op dispatches.
+
+    The next plan agent reads-then-clears USER_HINTS, so this lands in
+    front of the planner exactly once. It tells the planner these files
+    had nothing to prove — they were already done, or listed as
+    off-limits/reference, and should not be re-listed as objectives.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    listing = "\n".join(f"  - {r}" for r in noop_rels) or "  - (none)"
+    hint = (
+        f"\n- [{ts}] archon[plan-validate]: dropped {len(noop_rels)} "
+        f"objective(s) that name an existing `.lean` file with ZERO open "
+        f"sorries — a prover on them would quit immediately with no work. "
+        f"Do not re-list a done/off-limits/reference-only file under "
+        f"`## Current Objectives`; if you meant to scaffold new "
+        f"declarations into it, say so explicitly (\"scaffold …\"). Files:\n"
+        f"{listing}\n"
+    )
+    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if hints_file.exists():
+        try:
+            existing = hints_file.read_text()
+        except OSError:
+            pass
+    hints_file.write_text(existing + hint)
 
 
 def _append_blocked_hint(

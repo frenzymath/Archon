@@ -66,7 +66,7 @@ All Archon state files are in `.archon/`. The table below covers **phase agents*
 | `.lean` files | — | write (own file; frozen protected signatures) | — | write (via comments) |
 | `blueprint/src/chapters/*.tex` | **write** (informal prose, `\lean{...}` hints) | read | **write** (semantic markers: `\mathlibok`, `% NOTE:`, `\lean{...}` corrections — NOT `\leanok`) | read |
 | `analogies/<slug>.md` | read (when relevant) | — | — | read |
-| `TO_USER.md` | — (review owns) | — | **write** (reset at review start) | read |
+| `TO_USER.md` | **write** (shared notice board) | **write** (shared notice board) | **write** (shared notice board) | read |
 
 ### Subagent permissions
 
@@ -107,6 +107,12 @@ The user provides hints in two places:
 
 - **Strategic hints** → `.archon/USER_HINTS.md`. The Archon loop captures this file's content before each plan phase, injects it into the plan agent's prompt, and resets the file to its bundled template (an HTML-comment format guide + zero bullets) after the plan phase succeeds. The HTML-comment preamble is stripped before injection so a template-only file renders as "no hints" to the planner. The plan agent does NOT read or clear that file itself. Provers never see these hints.
 - **File-specific hints** → `/- USER: ... -/` comments directly in `.lean` files. The prover that owns that file sees them naturally.
+
+Archon talks back to the user through **`TO_USER.md`** — a single, *persistent* notice board surfaced as a UI banner. It is **shared and writable by every agent** (plan, prover, review). It is no longer cleared at the start of each review phase; content survives across iters until an agent prunes it. The discipline every writer follows:
+
+- **Concise**: the whole file stays ≤ 2–3 short bullets. It is a banner, not a log.
+- **Relevant now**: before adding anything, read the current content and **delete any bullet that is no longer true at this point** (the blocker was resolved, the decision was overtaken, the credential got set). Never let it accumulate stale notices.
+- **Notice board, never a question queue**: the loop is autonomous and may run unattended for many iters. Never write "awaiting your decision", an options menu, a "where to reply", or "default to X if no reply" — anything implying the loop is paused for a human. State decisions as *made* and blockers as *worked-around-as-far-as-possible*; the user steers asynchronously via `USER_HINTS.md`.
 
 ## Agent Roles
 

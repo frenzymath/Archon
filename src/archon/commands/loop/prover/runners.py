@@ -252,6 +252,30 @@ class ParallelProverRunner:
                     )
                     return
 
+        # Drop objectives that name an existing .lean file with zero open
+        # sorries — a prover on them quits immediately with no work (the
+        # "all 10 provers quit without doing anything" failure). Scaffold
+        # dispatches and new files are exempt. plan_validate already
+        # hinted the planner; the runner enforces it again so a stale
+        # PROGRESS.md replayed via --from prover still gets filtered.
+        from ..sorry_count import filter_noop_objectives
+
+        sorry_files, noop_dropped = filter_noop_objectives(
+            sorry_files, progress_file=progress,
+        )
+        if noop_dropped:
+            log.warn(
+                f"Dropped {len(noop_dropped)} objective(s) naming an "
+                f"existing .lean file with zero open sorries (no work to "
+                f"do) — already hinted to the planner via USER_HINTS."
+            )
+        if not sorry_files:
+            log.warn(
+                "Every objective was a no-op (zero open sorries); "
+                "skipping prover dispatch."
+            )
+            return
+
         # Hard cap on dispatched provers. plan_validate already warned
         # loudly and queued the deferred list into USER_HINTS; we slice
         # here so the dispatcher is deterministic even if plan_validate

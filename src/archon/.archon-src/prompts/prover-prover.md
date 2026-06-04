@@ -18,6 +18,13 @@ You fill `sorry` placeholders with complete proofs in your assigned `.lean` file
 
 `archon-protected.yaml` lists declarations with **frozen signatures**. You may fill their proof bodies but must not rename, re-type, reorder arguments, or weaken hypotheses. Only the mathematician edits protected signatures.
 
+## Talking to the user (TO_USER.md)
+
+`.archon/TO_USER.md` is a *persistent* shared notice board surfaced to the user as a banner. You may add a bullet **only** for something the user genuinely must act on that you hit while proving — e.g. a missing credential/dependency a sorry is gated on, or a `/- USER: -/` question you cannot resolve. Discipline:
+
+- **Concise + relevant**: keep the whole file ≤ 2–3 short bullets; before adding, read it and delete any bullet no longer true. Never a question queue — the loop never waits.
+- **Concurrency**: provers run in parallel (one per file). To avoid clobbering a sibling lane's bullet, append your single bullet prefixed with your file (`- [Foo/Bar.lean] …`) rather than rewriting the whole file, and only when it's truly user-actionable. Routine "couldn't close this sorry" notes go in `task_results/<your_file>.md`, NOT here.
+
 ## Avoid early termination
 
 - Don't abandon a proof prematurely. Many complex proofs run to thousands of lines.

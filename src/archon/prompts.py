@@ -1004,6 +1004,37 @@ def _blueprint_frontier_block(project_path: Path) -> str:
     """)
 
 
+def _protected_block(project_path: Path) -> str:
+    """Compact list of protected (frozen-signature) declarations.
+
+    Injected into the plan and prover prompts so neither has to remember
+    to open ``archon-protected.yaml``. Protected = the *signature* is
+    frozen (the mathematician owns it); the proof *body* may still be
+    filled. Empty / missing file → empty block (no noise on projects that
+    protect nothing).
+    """
+    from archon.commands.tooling import protect
+
+    ps = protect.load(project_path)
+    if not ps.entries:
+        return ""
+    lines = [
+        "",
+        "## Protected declarations (frozen signatures)",
+        "",
+        "From `archon-protected.yaml`. These signatures are frozen by the "
+        "mathematician — you may fill a protected declaration's proof "
+        "*body*, but never rename / re-type / reorder args / weaken "
+        "hypotheses. Do NOT set or accept an objective that requires "
+        "changing one of these signatures.",
+        "",
+    ]
+    for f in sorted(ps.entries):
+        names = ", ".join(f"`{n}`" for n in ps.entries[f])
+        lines.append(f"- `{f}`: {names}")
+    return "\n".join(lines) + "\n"
+
+
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int,
@@ -1071,6 +1102,7 @@ def build_plan_prompt(
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
     frontier_block = _blueprint_frontier_block(project_path)
     memory_block = _archon_memory_block(state_dir, writable=True)
+    protected_block = _protected_block(project_path)
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
@@ -1084,7 +1116,7 @@ def build_plan_prompt(
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
         - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
-        - The blueprint frontier (which declarations are ready to prove) is injected below under `## Blueprint frontier`. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The blueprint frontier (which declarations are ready to prove) is injected below under `## Blueprint frontier`. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def _lean_files_block(project_path: Path) -> str:
@@ -1303,7 +1335,7 @@ def build_prover_prompt(
             Project state directory: {state_dir}
             Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
             All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-            + memory_block + mode_block \
+            + memory_block + _protected_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
@@ -1313,7 +1345,7 @@ def build_prover_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-        + memory_block + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+        + memory_block + _protected_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
@@ -1360,7 +1392,7 @@ def build_parallel_prover_prompt(
             - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
             - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
             - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-            + bp_hint + memory_block + mode_block \
+            + bp_hint + memory_block + _protected_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
     stage_path = normalize_stage_for_prompt_path(stage)
@@ -1378,7 +1410,7 @@ def build_parallel_prover_prompt(
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
         - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-        + bp_hint + memory_block + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+        + bp_hint + memory_block + _protected_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(

@@ -240,9 +240,12 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
             (state / "logs" / "iter-042").mkdir(parents=True)
 
             # Create 13 .lean files and reference them in PROGRESS.md.
+            # Each carries an open `sorry` so the no-op filter (which drops
+            # zero-sorry objectives) keeps them — these tests exercise the
+            # cap logic, not the no-op filter.
             files = [f"F{i:02d}.lean" for i in range(13)]
             for name in files:
-                (root / name).write_text("def x : True := trivial\n")
+                (root / name).write_text("theorem x : True := by sorry\n")
             lines = ["# Progress", "", "## Current Objectives", ""]
             for i, name in enumerate(files, start=1):
                 lines.append(f"{i}. **`{name}`** — Fill sorry.")
@@ -269,7 +272,7 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
             state.mkdir()
             (state / "logs" / "iter-042").mkdir(parents=True)
 
-            (root / "Foo.lean").write_text("def x : True := trivial\n")
+            (root / "Foo.lean").write_text("theorem x : True := by sorry\n")
             (state / "PROGRESS.md").write_text(
                 "# Progress\n\n"
                 "## Current Objectives\n\n"
@@ -306,12 +309,14 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
         state = root / ".archon"
         state.mkdir()
         (state / "logs" / "iter-042").mkdir(parents=True)
-        # Chain: Downstream.lean imports Upstream.lean.
+        # Chain: Downstream.lean imports Upstream.lean. Both carry an open
+        # `sorry` so the no-op filter keeps them — these tests exercise the
+        # blocked-deps filter, not the no-op filter.
         (root / "Upstream.lean").write_text(
-            "def x : True := trivial\n", encoding="utf-8",
+            "theorem x : True := by sorry\n", encoding="utf-8",
         )
         (root / "Downstream.lean").write_text(
-            "import Upstream\n", encoding="utf-8",
+            "import Upstream\n\ntheorem y : True := by sorry\n", encoding="utf-8",
         )
         return state
 
@@ -378,7 +383,7 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             root = Path(d).resolve()
             state = self._setup_project(root)
             (root / "Independent.lean").write_text(
-                "def y : True := trivial\n", encoding="utf-8",
+                "theorem z : True := by sorry\n", encoding="utf-8",
             )
             (state / "last_lake_build.log").write_text(
                 "error: Upstream.lean:1:1: bad\n", encoding="utf-8",
@@ -394,6 +399,95 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             hints = (state / "USER_HINTS.md").read_text(encoding="utf-8")
             self.assertIn("Downstream.lean", hints)
             self.assertNotIn("Independent.lean", hints)
+
+
+class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
+    """Integration: the no-op filter drops zero-sorry objective files."""
+
+    def _make_ctx(self, project_path: Path, state_dir: Path):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            dry_run=False,
+            skip_now=set(),
+            iter_num=42,
+            iter_meta=state_dir / "logs" / "iter-042" / "meta.json",
+            project_path=project_path,
+            state_dir=state_dir,
+            progress_file=state_dir / "PROGRESS.md",
+            options=SimpleNamespace(
+                max_objectives=10,
+                block_on_blocked_deps=False,
+            ),
+        )
+
+    def _setup(self, root: Path) -> Path:
+        state = root / ".archon"
+        state.mkdir()
+        (state / "logs" / "iter-042").mkdir(parents=True)
+        return state
+
+    def test_zero_sorry_file_is_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            state = self._setup(root)
+            # Done.lean has no open sorry → no-op; Work.lean has one.
+            (root / "Done.lean").write_text("theorem a : True := trivial\n")
+            (root / "Work.lean").write_text("theorem b : True := by sorry\n")
+            (state / "PROGRESS.md").write_text(
+                "# Progress\n\n## Current Objectives\n\n"
+                "1. **`Done.lean`** — Fill sorry.\n"
+                "2. **`Work.lean`** — Fill sorry.\n",
+            )
+            ctx = self._make_ctx(root, state)
+            result = validate_plan_output(ctx)
+            self.assertTrue(result)  # Work.lean survives → dispatch proceeds
+            hints = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            self.assertIn("Done.lean", hints)
+            self.assertIn("open sorries", hints)
+            self.assertNotIn("Work.lean", hints)
+
+    def test_scaffold_dispatch_is_exempt(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            state = self._setup(root)
+            # Existing file, zero sorries, but objective says "scaffold".
+            (root / "Skeleton.lean").write_text("-- empty\n")
+            (state / "PROGRESS.md").write_text(
+                "# Progress\n\n## Current Objectives\n\n"
+                "1. **`Skeleton.lean`** — scaffold declarations for thm:x; "
+                "leave bodies as sorry.\n",
+            )
+            ctx = self._make_ctx(root, state)
+            result = validate_plan_output(ctx)
+            self.assertTrue(result)
+            self.assertFalse((state / "USER_HINTS.md").exists())
+
+    def test_new_file_is_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            state = self._setup(root)
+            # File does not exist on disk → scaffold for a new file → keep.
+            (state / "PROGRESS.md").write_text(
+                "# Progress\n\n## Current Objectives\n\n"
+                "1. **`Brand/New.lean`** — create it.\n",
+            )
+            ctx = self._make_ctx(root, state)
+            result = validate_plan_output(ctx)
+            self.assertTrue(result)
+            self.assertFalse((state / "USER_HINTS.md").exists())
+
+    def test_all_noop_skips_prover(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            state = self._setup(root)
+            (root / "Done.lean").write_text("theorem a : True := trivial\n")
+            (state / "PROGRESS.md").write_text(
+                "# Progress\n\n## Current Objectives\n\n"
+                "1. **`Done.lean`** — Fill sorry.\n",
+            )
+            ctx = self._make_ctx(root, state)
+            result = validate_plan_output(ctx)
+            self.assertFalse(result)  # nothing to do → skip prover
 
 
 if __name__ == "__main__":
