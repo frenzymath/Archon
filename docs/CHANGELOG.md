@@ -18,6 +18,18 @@ All notable changes to Archon are documented here.
   an extracted `supervise_streamed_run`. Gateway creds in `.archon/.env` (API
   key only in the child env, never argv); optional lean-lsp MCP
   (`mcp: "lean-lsp"`) and codex prompt variant (`prompt_variant: "codex"`).
+- **Harness selection at `archon init`.** A fresh `archon init` now asks which
+  engine runs the loop's roles — Claude Code + Opus (default), Codex + GPT-5.5
+  (native `~/.codex` login), or Mixed (per `plan` / `prover` / `review`; the
+  recommended mix routes only the prover to codex) — and writes the choice as
+  `loop.harness` / `loop.roles`. Deterministic prompt fired only on a brand-new
+  `config.json` (a keep/merge re-init stays silent); `archon init --harness
+  {claude-code,codex-gpt,mixed}` presets it and skips the menu. The default config
+  now ships an **inert** `harnesses` block (a `codex-gpt` descriptor, native login
+  by default; gateway noted in a comment) — never consulted unless a
+  `loop.harness` / `loop.roles` key references it, so the zero-config
+  `build_runner` short-circuit is preserved. The choice governs only the loop's
+  roles; init's own semantic pass stays on interactive Claude Code.
 
 ### Known limitations
 

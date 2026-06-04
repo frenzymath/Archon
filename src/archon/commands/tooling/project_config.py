@@ -180,6 +180,53 @@ def default_config() -> dict[str, Any]:
                 },
             },
         },
+        'harnesses': {
+            # A *harness* is the engine that runs a role (plan / prover /
+            # review). Leading-underscore keys (``_help`` / ``_env``) are
+            # human-readable metadata ignored by the loader, mirroring the
+            # ``multilane`` section above. Every NON-underscore key is a
+            # harness descriptor (see ``load_harness_descriptor``).
+            #
+            # This section is INERT by default: nothing references it. With
+            # no ``loop.harness`` / ``loop.roles`` key set, every role uses
+            # the built-in ``claude-code`` engine and this block is never
+            # consulted. ``archon init`` writes ``loop.harness`` /
+            # ``loop.roles`` here only if you pick a non-default harness at
+            # init time. No ``claude-code`` descriptor is shipped on purpose
+            # — its absence keeps the default single-Anthropic path on its
+            # zero-config fast path.
+            '_help': (
+                "A harness is the engine that runs a role (plan/prover/"
+                "review). Default is Claude Code: with no loop.harness / "
+                "loop.roles key, every role uses 'claude-code' and this "
+                "block is ignored. Route a role to codex by setting "
+                "loop.harness (all roles) or loop.roles.<role> (one role) "
+                "to a descriptor name below, e.g. 'codex-gpt'."
+            ),
+            'codex-gpt': {
+                # OpenAI Codex (`codex exec`) instead of Claude Code. Best
+                # fit for the PROVER role (the prompt_variant below is
+                # prover-tuned). Routing plan/review here also works but
+                # they inherit that prover tail and lack WebSearch/WebFetch.
+                'runner': 'codex',
+                'model': 'gpt-5.5',
+                'effort': 'xhigh',
+                'sandbox': 'danger-full-access',
+                'mcp': 'lean-lsp',
+                'prompt_variant': 'codex',
+                'extra_args': (
+                    '-c features.plugins=false '
+                    '-c features.responses_websockets=false '
+                    '-c features.responses_websockets_v2=false'
+                ),
+                '_env': (
+                    "Uses your native ~/.codex (ChatGPT) login — no API key "
+                    "needed. To route through a gateway instead, add "
+                    "'base_url_env'/'key_env' (e.g. CODEX_BASE_URL/CZ_API_KEY) "
+                    "to this descriptor and set those vars in .archon/.env."
+                ),
+            },
+        },
     }
 
 
@@ -187,16 +234,82 @@ def render_default_config() -> str:
     return json.dumps(default_config(), indent=2) + '\n'
 
 
+# ── harness selection (used by `archon init`) ─────────────────────────
+#
+# The loop roles a harness can be routed to, and the non-default harness
+# descriptors shipped in ``default_config()['harnesses']``. ``archon init``
+# uses these to validate a ``--harness`` flag and drive its menu.
+
+LOOP_ROLES = ('plan', 'prover', 'review')
+SHIPPED_HARNESSES = ('codex-gpt',)
+
+
+def apply_harness_selection(cfg: dict[str, Any], selection: Any) -> None:
+    """Route loop roles to a harness by mutating ``cfg['loop']`` in place.
+
+    ``selection`` is one of:
+
+    * ``None`` / ``"claude-code"`` — no-op (the default single-Anthropic
+      path; no ``loop.harness`` / ``loop.roles`` key is written, so the
+      ``build_runner`` zero-regression short-circuit stays in effect).
+    * a harness name string (e.g. ``"codex-gpt"``) — sets
+      ``cfg['loop']['harness']`` so *every* role uses it.
+    * a ``{role: harness_name}`` dict — sets ``cfg['loop']['roles']`` for a
+      per-role (mixed) routing. Entries naming the default ``"claude-code"``
+      are dropped (absence already means claude-code); unknown roles are
+      ignored. An all-default / empty mapping writes nothing.
+
+    Idempotent in spirit: only the keys implied by ``selection`` are
+    touched; the rest of ``cfg['loop']`` is left as-is.
+    """
+    if selection is None:
+        return
+    loop = cfg.setdefault('loop', {})
+    if isinstance(selection, str):
+        if selection and selection != DEFAULT_HARNESS:
+            loop['harness'] = selection
+        return
+    if isinstance(selection, dict):
+        roles = {
+            role: name
+            for role, name in selection.items()
+            if role in LOOP_ROLES
+            and isinstance(name, str)
+            and name
+            and name != DEFAULT_HARNESS
+        }
+        if roles:
+            loop['roles'] = roles
+        return
+    raise TypeError(
+        f"apply_harness_selection: unsupported selection {selection!r} "
+        f"(expected None, a harness name, or a {{role: name}} dict)."
+    )
+
+
 # ── load / write ──────────────────────────────────────────────────────
 
 
-def write_default_config(project_path: Path, *, force: bool = False) -> bool:
-    """Create .archon/config.json if missing. Returns True iff a new file was written."""
+def write_default_config(
+    project_path: Path,
+    *,
+    force: bool = False,
+    harness_selection: Any = None,
+) -> bool:
+    """Create .archon/config.json if missing. Returns True iff a new file was written.
+
+    ``harness_selection`` (see :func:`apply_harness_selection`) routes loop
+    roles to a non-default harness in the freshly written config; ``None``
+    (the default) writes the plain default config, preserving the
+    single-Anthropic behavior.
+    """
     path = config_path(project_path)
     if path.exists() and not force:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_default_config(), encoding='utf-8')
+    cfg = default_config()
+    apply_harness_selection(cfg, harness_selection)
+    path.write_text(json.dumps(cfg, indent=2) + '\n', encoding='utf-8')
     return True
 
 

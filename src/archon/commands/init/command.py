@@ -44,10 +44,12 @@ class InitCommand:
         *,
         force: bool = False,
         model: str = DEFAULT_MODEL,
+        harness: str | None = None,
     ) -> None:
         self.project_path_arg = project_path
         self.force = force
         self.model = model
+        self.harness = harness
         self.ctx: InitContext | None = None
 
     def run(self) -> None:
@@ -77,6 +79,7 @@ class InitCommand:
             state_dir=state_dir,
             fresh=True,
             model=self.model,
+            harness=self.harness,
         )
 
         mode = self._resolve_reinit_mode()

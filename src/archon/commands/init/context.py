@@ -24,4 +24,8 @@ class InitContext:
     state_dir: Path
     fresh: bool
     model: str
+    # Raw ``--harness`` flag (claude-code / codex-gpt / mixed), or None to
+    # ask interactively. Consumed by EnvAndConfigStep when it writes a
+    # fresh config.json; ignored on a keep/merge re-init (config preserved).
+    harness: str | None = None
     bootstrap_report: "BootstrapReport | None" = None

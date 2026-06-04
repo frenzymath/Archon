@@ -25,6 +25,13 @@ def init(
              "'sonnet', 'haiku' or a full id. Non-Anthropic (requires "
              ".archon/.env credentials): 'kimi', 'deepseek'.",
     ),
+    harness: str = typer.Option(
+        None, "--harness",
+        help="Engine for the loop's roles (plan/prover/review): "
+             "'claude-code' (default), 'codex-gpt' (Codex CLI + GPT-5.5, "
+             "native ~/.codex login), or 'mixed' (pick per role, "
+             "interactive). Omit to be asked at init time.",
+    ),
 ) -> None:
     """Initialize a new Archon project.
 
@@ -37,4 +44,4 @@ def init(
       [cyan]archon init .[/cyan]
       [cyan]archon init /path/to/lean-project[/cyan]
     """
-    InitCommand(project_path, force=force, model=model).run()
+    InitCommand(project_path, force=force, model=model, harness=harness).run()

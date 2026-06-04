@@ -20,6 +20,8 @@ class EnvAndConfigStep(InitStep):
     def run(self) -> None:
         from archon.commands.tooling import env_loader, project_config
 
+        from .harness_select import resolve_harness_selection
+
         ctx = self.ctx
         log.phase(self.number, self.name)
 
@@ -29,9 +31,35 @@ class EnvAndConfigStep(InitStep):
         else:
             log.step(".archon/.env already exists — preserved")
 
-        cfg_written = project_config.write_default_config(ctx.project_path)
+        # Only a brand-new config.json gets a harness question — an existing
+        # one is always preserved (write_default_config never overwrites), so
+        # asking would be misleading. Resolve the selection just-in-time so a
+        # keep/merge re-init stays silent.
+        config_exists = project_config.config_path(ctx.project_path).exists()
+        selection = None if config_exists else resolve_harness_selection(ctx)
+
+        cfg_written = project_config.write_default_config(
+            ctx.project_path, harness_selection=selection,
+        )
         if cfg_written:
-            log.step("Wrote .archon/config.json with default loop + multilane settings")
+            log.step(
+                "Wrote .archon/config.json with default loop + multilane "
+                f"settings (harness: {_describe_selection(selection)})"
+            )
         else:
             log.step(".archon/config.json already exists — preserved")
         log.success("Project config ready")
+
+
+def _describe_selection(selection: object) -> str:
+    """One-line human summary of the resolved harness selection for logs."""
+    if selection is None:
+        return "claude-code (default)"
+    if isinstance(selection, str):
+        return f"{selection} (all roles)"
+    if isinstance(selection, dict):
+        if not selection:
+            return "claude-code (default)"
+        roles = ", ".join(f"{r}={n}" for r, n in selection.items())
+        return f"mixed ({roles}; others claude-code)"
+    return str(selection)

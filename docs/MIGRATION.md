@@ -514,3 +514,15 @@ Gateway creds (optional — omit to use codex's native `~/.codex` login) go in
 passed to codex in the child env, never on the command line, and a half-set
 gateway fails loud. `mcp` and `prompt_variant` are optional. A non-claude lane
 harness, or an unimplemented engine (e.g. `gemini`), raises a clear error.
+
+A fresh `archon init` now offers a harness menu — Claude Code + Opus (default),
+Codex + GPT-5.5 (native `~/.codex` login), or Mixed (an engine per
+`plan` / `prover` / `review`) — and writes the chosen `loop.harness` /
+`loop.roles` for you. It fires only when a **new** `config.json` is created (a
+keep/merge re-init preserves the existing one and stays silent), and
+`archon init --harness {claude-code,codex-gpt,mixed}` presets the answer and
+skips the menu. The default config ships an **inert** `harnesses` block (a
+`codex-gpt` descriptor, native login by default) that is never consulted until a
+`loop.harness` / `loop.roles` key references it, so the zero-config path is
+unchanged. The choice governs only the loop's roles; init's own semantic pass
+stays on interactive Claude Code.
