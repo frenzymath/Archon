@@ -105,6 +105,8 @@ app.command("dag-gaps")(dag_gaps)
 app.command("dag-graph")(dag_graph)
 app.command("dag-query")(dag_query)
 app.command("dag-carve-plan")(dag_carve_plan)
+from archon.commands.loop.blueprint_doctor import blueprint_doctor_cli  # noqa: E402
+app.command("blueprint-doctor")(blueprint_doctor_cli)
 app.command()(extract)
 app.command()(loop)
 app.command()(doctor)

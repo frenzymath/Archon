@@ -165,6 +165,23 @@ class RunBlueprintDoctorTest(unittest.TestCase):
         self.assertNotIn("lem:helper", " ".join(bare))
         self.assertNotIn("thm:foo", " ".join(bare))
 
+    def test_detects_undefined_macros(self):
+        # \Pic is defined in macros/common.tex; \fppf in-chapter; \mystery nowhere.
+        (self.bp.macros / "common.tex").write_text(
+            "\\DeclareMathOperator{\\Pic}{Pic}\n", encoding="utf-8",
+        )
+        self.bp.write_chapter(
+            "Good",
+            "\\providecommand{\\fppf}{\\mathrm{fppf}}\n"
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "Then \\(\\Pic(C)_{\\fppf} \\to \\mystery(C)\\) is \\emph{flat}.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        um = [reason for _, k, reason in r.malformed_refs if k == "undefined-macro"]
+        self.assertEqual(len(um), 1, um)
+        self.assertIn("\\mystery", um[0])
+
     def test_detects_orphan_chapter(self):
         self.bp.write_chapter(
             "Good",
