@@ -96,6 +96,17 @@ Follow `references/lean-lsp-tools-api.md`. Key priority:
 3. `lean_loogle` for simple type patterns only.
 4. Never use shell `find` / `grep` to locate Mathlib theorems.
 
+## Blueprint dependency graph (leandag)
+
+You may query the project's dependency graph (read-only) to see what your target depends on and which of those dependencies are already proven — so you reach for an existing lemma instead of re-deriving it. `archon` is on PATH; `--json` prints parseable JSON to stdout (banner to stderr):
+
+```
+archon dag-query ancestors --node <blueprint-label-of-your-target>   # the proven lemmas/defs your goal can lean on (their \lean{} names)
+archon dag-query node      --node <label>                            # one declaration's status (proved? mathlib? effort?)
+```
+
+Use the `\lean{}` names it returns as the exact Mathlib/project identifiers to apply. It is a navigation aid only — the proof obligation and the blueprint chapter remain your source of truth.
+
 ## Tooling traps
 
 - **Trust `goals_after`, not just empty diagnostics**: in `lean_multi_attempt`, `diagnostics: []` can be misleading (line-scoping quirks attach errors to the enclosing `by` block). Check that `goals_after` is empty or has advanced.

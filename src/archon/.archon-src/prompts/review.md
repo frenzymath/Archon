@@ -21,6 +21,18 @@ You do NOT need to "go read" any of the following — the content is already in 
 - **Subagent catalog** (the authoritative roster of available subagents for this phase — do NOT `ls .archon/subagents/`).
 - **Blueprint doctor report path** (its findings are also referenced by the plan agent's next iter; you should incorporate any structural issues into your summary).
 
+## Blueprint dependency graph (leandag)
+
+Ground your assessment in the actual dependency graph (the same leandag graph the dashboard DAG page and the planner use) rather than recollection. Query it read-only — `archon` is on PATH, `--json` is parseable (banner on stderr):
+
+```
+archon dag-query gaps --json        # ∞ holes: statements with no informal proof (roadmap blockers to surface)
+archon dag-query frontier           # what is genuinely ready to prove right now
+archon dag-query ancestors --node <label>   # a declaration's full dependency closure — is its foundation sound?
+```
+
+Use it where it sharpens your judgment: surface a persistent ∞ hole in `TO_USER.md` (Step 7) when no in-loop fix is in reach; sanity-check that a declaration's `\uses{}` closure is complete before treating it as done; and when applying `\mathlibok` (Step 6), confirm the node really is a Mathlib-backed leaf. It is read-only — you never mutate the graph, only the blueprint markers your steps already own.
+
 ## Step 1 — Identify context
 
 1. Note the session number from your invocation prompt (= iter number).
