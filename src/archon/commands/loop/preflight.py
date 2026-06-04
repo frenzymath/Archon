@@ -163,29 +163,30 @@ def check_informal_agent_keys() -> None:
         return
 
     # Validate Moonshot key — "sk-kimi-" prefix means Kimi-for-Coding
-    # (Anthropic-compatible, only accessible through coding agents like
-    # Claude Code). Direct OpenAI-compatible calls return 401.
+    # (Anthropic-compatible). It works for the informal agent via the
+    # kimi-anthropic provider (coding endpoint), but NOT the OpenAI-compatible
+    # `kimi` route, which returns 401. The informal agent auto-detects the
+    # prefix and routes accordingly, so the key stays usable — we just note
+    # it and skip the OpenAI-style /models probe below (which would 401).
     moonshot_key = os.environ.get("MOONSHOT_API_KEY", "")
-    if moonshot_key and any(moonshot_key.startswith(p) for p in _KIMI_CODING_PREFIXES):
-        log.warn(
-            "Informal-agent tool is unavailable (optional dependency). "
-            "MOONSHOT_API_KEY starts with 'sk-kimi-' — this is a "
-            "Kimi-for-Coding key that only works through Claude Code's "
-            "Anthropic-compatible interface (used by multilane). Direct "
-            "OpenAI-compatible calls from archon-informal-agent.py return "
-            "HTTP 401. To use the informal agent with Kimi, get a standard "
-            "Moonshot key from platform.moonshot.cn (starts with 'sk-', "
-            "not 'sk-kimi-') and set MOONSHOT_API_KEY to that value, or "
-            "use a different provider (DeepSeek / OpenRouter / OpenAI / Gemini)."
+    moonshot_is_coding = moonshot_key and any(
+        moonshot_key.startswith(p) for p in _KIMI_CODING_PREFIXES
+    )
+    if moonshot_is_coding:
+        log.step(
+            "MOONSHOT_API_KEY is a Kimi-for-Coding key (sk-kimi-) — the "
+            "informal agent will use the Anthropic-compatible coding endpoint "
+            "(provider 'kimi-anthropic', base from MOONSHOT_BASE_URL). The "
+            "OpenAI-compatible 'kimi' provider won't work with this key."
         )
-        # Remove it from the "usable" set for the remaining checks.
-        set_keys = [k for k in set_keys if k != "MOONSHOT_API_KEY"]
 
     # Quick /models probe for keys that look plausible but may still be invalid.
+    # The Moonshot probe is OpenAI-compatible, so skip it for coding keys.
     _PROBES = {
-        "MOONSHOT_API_KEY": "https://api.moonshot.cn/v1/models",
         "DEEPSEEK_API_KEY": "https://api.deepseek.com/v1/models",
     }
+    if not moonshot_is_coding:
+        _PROBES["MOONSHOT_API_KEY"] = "https://api.moonshot.cn/v1/models"
     for var, probe_url in _PROBES.items():
         if var not in set_keys:
             continue

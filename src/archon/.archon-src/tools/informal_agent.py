@@ -7,8 +7,14 @@ Supported providers:
     openrouter      https://openrouter.ai/api/v1           → OPENROUTER_API_KEY
     deepseek        https://api.deepseek.com/v1            → DEEPSEEK_API_KEY
     kimi            https://api.moonshot.cn/v1  (OpenAI-compatible)   → MOONSHOT_API_KEY
-    kimi-anthropic  https://api.moonshot.cn/v1  (Anthropic-compatible) → MOONSHOT_API_KEY
+    kimi-anthropic  Anthropic-compatible Messages endpoint            → MOONSHOT_API_KEY
     auto            pick the best available key automatically (default)
+
+Two flavours of MOONSHOT_API_KEY are supported automatically:
+    sk-...        standard Moonshot key → OpenAI-compatible (provider "kimi")
+    sk-kimi-...   Kimi-for-Coding key   → Anthropic-compatible coding endpoint
+                  (provider "kimi-anthropic"); base URL taken from
+                  MOONSHOT_BASE_URL, default https://api.kimi.com/coding
 
 No dependencies beyond Python 3.10+ stdlib.
 
@@ -183,11 +189,28 @@ def call_kimi(prompt: str, model: str, think: bool) -> str:
     return _openai_chat(prompt, model, {"Authorization": f"Bearer {key}"}, _kimi_base())
 
 
+def _is_kimi_coding_key() -> bool:
+    """True if MOONSHOT_API_KEY is a Kimi-for-Coding key (sk-kimi-...).
+
+    These keys are Anthropic-compatible and valid only against the coding
+    endpoint (api.kimi.com/coding) — not the OpenAI-compatible api.moonshot.cn.
+    """
+    return os.environ.get("MOONSHOT_API_KEY", "").startswith("sk-kimi-")
+
+
 def _kimi_anthropic_base() -> str:
-    # Moonshot exposes an Anthropic-compatible endpoint at the same domain.
-    # Override via MOONSHOT_ANTHROPIC_BASE_URL if the hostname ever changes.
-    base = os.environ.get("MOONSHOT_ANTHROPIC_BASE_URL", "https://api.moonshot.cn").rstrip("/")
-    return base
+    # Explicit override always wins.
+    override = os.environ.get("MOONSHOT_ANTHROPIC_BASE_URL", "")
+    if override:
+        return override.rstrip("/")
+    # Kimi-for-Coding keys speak the Anthropic Messages format against the
+    # coding endpoint. Reuse MOONSHOT_BASE_URL (set by multilane, e.g.
+    # https://api.kimi.com/coding/) and fall back to the public default.
+    if _is_kimi_coding_key():
+        base = os.environ.get("MOONSHOT_BASE_URL", "https://api.kimi.com/coding")
+        return base.rstrip("/")
+    # Standard Moonshot keys: same domain as the OpenAI-compatible route.
+    return "https://api.moonshot.cn"
 
 
 def call_kimi_anthropic(prompt: str, model: str, think: bool) -> str:
@@ -225,6 +248,10 @@ def _auto_provider() -> str:
     """Return the highest-priority provider whose API key is set."""
     for provider in _AUTO_PRIORITY:
         if os.environ.get(_AUTO_KEY[provider]):
+            # A Kimi-for-Coding key (sk-kimi-) only works through the
+            # Anthropic-compatible coding endpoint, not the OpenAI route.
+            if provider == "kimi" and _is_kimi_coding_key():
+                return "kimi-anthropic"
             return provider
     keys = " / ".join(_AUTO_KEY.values())
     sys.exit(f"Error: no API key found. Set one of: {keys}")

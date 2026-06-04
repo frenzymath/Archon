@@ -143,10 +143,11 @@ def render_env_template(*, shell_env: dict[str, str] | None = None) -> str:
         '',
         '# ── Informal agent (one key is enough; pick whichever you have) ──',
         '# Used by archon-informal-agent.py for proof sketches via direct API calls.',
-        '# NOTE: Kimi-for-Coding keys (sk-kimi-...) do NOT work here — they are',
-        '#       coding-agent-only and only usable via the Moonshot multilane section',
-        '#       below. For Kimi/Moonshot informal agent use, get a standard key from',
-        '#       platform.moonshot.cn (starts with sk-, not sk-kimi-).',
+        '# NOTE: MOONSHOT_API_KEY lives in the multilane section below. Both key',
+        '#       flavours work with the informal agent: a standard key (sk-...) uses',
+        '#       the OpenAI-compatible route; a Kimi-for-Coding key (sk-kimi-...) is',
+        '#       auto-routed to the Anthropic-compatible coding endpoint using',
+        '#       MOONSHOT_BASE_URL. Standard keys come from platform.moonshot.cn.',
     ]
     for key in INFORMAL_AGENT_KEYS:
         lines.append(_line(key))

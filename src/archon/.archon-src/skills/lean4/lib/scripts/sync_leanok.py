@@ -381,11 +381,20 @@ def _add_leanok(body: str) -> str:
     insert_at = 0
     metadata_re = re.compile(r'^\s*\\(label|lean|uses|proves)\s*\{')
     leading = 0
+    depth = 0  # unbalanced-brace depth carried across multi-line metadata
     for i, line in enumerate(lines):
+        if depth > 0:
+            # Continuation of a multi-line metadata macro (e.g. a `\uses{...}`
+            # whose labels span several lines). Consume it whole — inserting
+            # `\leanok` inside the brace group corrupts the cross-reference.
+            depth += line.count('{') - line.count('}')
+            leading = i + 1
+            continue
         if line.strip() == '':
             leading = i + 1
             continue
         if metadata_re.match(line):
+            depth += line.count('{') - line.count('}')
             leading = i + 1
             continue
         break

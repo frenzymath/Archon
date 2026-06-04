@@ -134,8 +134,9 @@ class ApiKeysDoctorCheck(DoctorCheck):
         "GEMINI_API_KEY": "Gemini",
     }
 
-    # "sk-kimi-" prefix → Kimi-for-Coding key; works only through Claude Code
-    # (multilane), not for direct OpenAI-compatible informal-agent calls.
+    # "sk-kimi-" prefix → Kimi-for-Coding key; Anthropic-compatible. Usable by
+    # the informal agent via the kimi-anthropic provider (coding endpoint), but
+    # not the OpenAI-compatible `kimi` route.
     _KIMI_CODING_PREFIX = "sk-kimi-"
 
     _PROBES: dict[str, str] = {
@@ -171,13 +172,16 @@ class ApiKeysDoctorCheck(DoctorCheck):
                 rows.append((f"{label} key", "skipped", "not set"))
                 continue
 
-            # Kimi-for-Coding key — usable for multilane but NOT informal agent
+            # Kimi-for-Coding key — Anthropic-compatible. Usable by the informal
+            # agent via the kimi-anthropic provider (and by multilane), but not
+            # the OpenAI-compatible `kimi` route, so skip the /models probe.
             if var == "MOONSHOT_API_KEY" and val.startswith(self._KIMI_CODING_PREFIX):
                 rows.append((
                     f"{label} key",
-                    "warning",
-                    "sk-kimi- prefix = Kimi-for-Coding (multilane only, not informal agent)",
+                    "ok",
+                    "sk-kimi- = Kimi-for-Coding (informal agent uses kimi-anthropic)",
                 ))
+                found_any = True
                 continue
 
             # Probe known endpoints for auth validity
