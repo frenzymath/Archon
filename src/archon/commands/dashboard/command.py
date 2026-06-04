@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import subprocess
 import webbrowser
 from importlib import resources
@@ -129,7 +128,9 @@ class DashboardCommand:
         server.port = self.port
         server.pid_file = registry.pidfile_for(self.port)
         server.pid_file.write_text(str(server.proc.pid))
-        atexit.register(server.cleanup)
+        # Registers atexit + SIGTERM/SIGHUP handlers so closing the terminal
+        # (SIGHUP) tears the detached server down instead of orphaning it.
+        server.install_signal_handlers()
 
         vite = client_dir / "node_modules" / "vite" / "bin" / "vite.js"
         try:

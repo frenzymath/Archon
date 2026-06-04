@@ -122,15 +122,23 @@ class ServerProcess:
             self.cleanup()
             raise SystemExit(128 + signum)
 
-        # Forward SIGTERM (e.g. `kill <python-pid>` or a parent shell
-        # exiting) to the server's process group before we exit, so the
-        # listening port releases cleanly even when we aren't dying via
-        # Ctrl+C.
-        try:
-            signal.signal(signal.SIGTERM, _on_term)
-        except (ValueError, OSError):
-            # Not on the main thread, or platform doesn't support it.
-            pass
+        # Forward terminating signals to the server's process group before we
+        # exit, so the listening port releases cleanly even when we aren't
+        # dying via Ctrl+C. SIGTERM = `kill <python-pid>` / a parent shell
+        # exiting. SIGHUP = the terminal closing or an SSH session dropping —
+        # the case we used to miss: its default action kills us WITHOUT
+        # running atexit, and the server (a detached session leader) doesn't
+        # get the terminal's SIGHUP itself, so it would orphan and keep the
+        # port. Catch both.
+        for sig_name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(signal, sig_name, None)
+            if sig is None:
+                continue  # e.g. SIGHUP on Windows
+            try:
+                signal.signal(sig, _on_term)
+            except (ValueError, OSError):
+                # Not on the main thread, or platform doesn't support it.
+                pass
 
     # ── private ────────────────────────────────────────────────────────
 

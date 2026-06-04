@@ -209,6 +209,12 @@ class LoopCommand:
         ctx = self.ctx
         opts = self.options
 
+        # Make the background-service cleanups (registered via atexit) fire on
+        # SIGHUP/SIGTERM too — otherwise closing the terminal leaks the
+        # detached dashboard/blueprint servers and holds their ports.
+        from .services import install_signal_exit
+        install_signal_exit()
+
         if not opts.dry_run and not opts.no_dashboard:
             dashboard = DashboardProcess(opts.project_path, open_browser=opts.open_browser)
             url = dashboard.start()
