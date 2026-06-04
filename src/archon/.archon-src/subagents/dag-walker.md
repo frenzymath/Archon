@@ -67,7 +67,7 @@ Use **`archon dag-query`** (read-only) to navigate — do not eyeball the graph 
 ```
 archon dag-query node      --node <seed> --json      # inspect the seed
 archon dag-query ancestors --node <seed> --json      # the full dependency closure (everything it transitively uses)
-archon dag-query gaps --json                          # all ∞ holes, project-wide
+archon dag-query gaps --json                         # all ∞ holes, project-wide
 ```
 
 `archon` is on PATH. JSON goes to stdout (the banner to stderr), so `--json` is parseable. For each node in the cone, check the **three completeness conditions** below, fix what's broken, and **recurse**: a block you add has its own dependencies — add those too, walking up until you bottom out at a done node (`\leanok` / `\mathlibok`) or an axiom (a node with no further dependencies).

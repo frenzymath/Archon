@@ -58,14 +58,13 @@ _BUILD_ERROR_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
-# `import Foo.Bar.Baz` at start of a line — same convention as
-# ``skills/lean4/lib/scripts/dependency_graph.py``. Lean accepts a few
-# odd shapes (runtime module strings, ``import all``); in practice every
-# project we care about uses dotted module names.
+# `import Foo.Bar.Baz` at start of a line. Lean accepts a few odd shapes
+# (runtime module strings, ``import all``); in practice every project we
+# care about uses dotted module names.
 _IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\b")
 
-# Directory parts pruned wholesale from the project's .lean scan.
-# Mirrors ``dependency_graph.py``'s skip set (when --include-deps is off).
+# Directory parts pruned wholesale from the project's .lean scan — build
+# output and archon state; third-party deps live under .lake / lake-packages.
 _SKIP_PARTS = {".git", ".archon", ".lake", "lake-packages"}
 
 

@@ -4,7 +4,7 @@ description: Deep-reasoning gatekeeper. Compares STRATEGY.md and planner directi
 write_domain: "task_results/**"
 read_only: true
 can_spawn: false
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
   - Dispatch before starting a major new phase or route.
   - It reads actual PDFs/TeXs (using the .md index cards as pointers) to flag unnecessary case splits, hallucinated routes, missing prerequisites, or silent assumptions.

@@ -4,7 +4,7 @@ description: Post-write blueprint gate. Strips Lean leakage, project history, an
 write_domain: "blueprint/src/chapters/*.tex"
 read_only: false
 can_spawn: true
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
   - Dispatch this subagent AFTER a blueprint-writer round and BEFORE dispatching provers.
   - Required to ensure blueprint purity (math-only).

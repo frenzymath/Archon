@@ -4,7 +4,7 @@ description: "Structural file setup. Reads blueprints, strategy, and PROGRESS to
 write_domain: "*.lean"
 read_only: false
 can_spawn: false
-default_enabled: true
+default_enabled: false
 dispatcher_notes: |
   - Dispatch this agent when you have "Medium content" implementation hints (e.g. typeclass strategies, verified Mathlib lemma paths) that the prover needs.
   - The scaffolder injects exact Lean signatures and your hints into a block comment directly above the `sorry`.
