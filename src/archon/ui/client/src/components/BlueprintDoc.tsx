@@ -62,13 +62,34 @@ interface RefTarget { kind: string; num: string; anchor: string; slug: string; }
 type LabelMap = Map<string, RefTarget>;
 
 // ── text normalisation (applied only to text nodes, never to math) ───────────
+// TeX accent commands → combining characters: \'e é, \`e è, \^e ê, \"o ö,
+// \~n ñ, \c{c} ç, \v{C} Č ("\v{C}ech"). Braced and bare one-letter args.
+const ACCENT_MAP: Record<string, string> = {
+  "'": '\u0301', '`': '\u0300', '^': '\u0302', '"': '\u0308', '~': '\u0303',
+  '=': '\u0304', '.': '\u0307', 'v': '\u030c', 'u': '\u0306', 'c': '\u0327',
+  'H': '\u030b', 'r': '\u030a',
+};
+function applyAccents(s: string): string {
+  // Braced arg may follow whitespace (\v {C}); a bare arg must be immediate
+  // (\'e) so prose like "etc\. Next" never accents the following word.
+  return s.replace(
+    /\\(['`^"~=.]|[vucHr](?![A-Za-z]))(?:\s*\{([A-Za-z])\}|([A-Za-z]))/g,
+    (_, acc: string, braced?: string, bare?: string) =>
+      ((braced ?? bare ?? '') + ACCENT_MAP[acc]).normalize('NFC'),
+  );
+}
+
 function normText(s: string): string {
-  return s
+  return applyAccents(s)
     .replace(/---/g, '—')      // em dash
     .replace(/--/g, '–')       // en dash
     .replace(/``/g, '“').replace(/''/g, '”')  // “ ”
     .replace(/~/g, ' ')        // non-breaking space
-    .replace(/\\ldots\b/g, '…')
+    .replace(/\\(ldots|dots)\b/g, '…')
+    .replace(/\\S(?![A-Za-z])/g, '§')
+    .replace(/\\P(?![A-Za-z])/g, '¶')
+    .replace(/\\([%&#_$])/g, '$1')  // escaped specials
+    .replace(/\\\\\s*/g, ' ')        // \\ line break
     .replace(/\s+/g, ' ');
 }
 
@@ -402,6 +423,10 @@ interface Ctx {
   onNavigate?: (slug: string, anchor: string) => void;
   /** Jump to this declaration's node on the DAG page. */
   onOpenInGraph?: (label: string) => void;
+  /** Snapshot slug of this declaration's Lean file (null = no diff target). */
+  diffSlugFor?: (label: string) => string | null;
+  /** Open a Lean file's snapshot timeline on the Diffs page. */
+  onOpenInDiffs?: (slug: string) => void;
 }
 
 /** Cross-reference click: route through onNavigate so a target in a not-yet-
@@ -533,6 +558,10 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
           <button className={styles.graphChip} title="Show this node on the DAG page"
             onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
         )}
+        {b.meta.label && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
+          <button className={styles.graphChip} title="Open this declaration's Lean file on the Diffs page"
+            onClick={() => ctx.onOpenInDiffs!(ctx.diffSlugFor!(b.meta.label!)!)}>± diff</button>
+        )}
       </div>
       <div className={styles.envBody}>
         {b.body.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${j}`} />)}
@@ -545,7 +574,7 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph,
+  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
@@ -553,10 +582,12 @@ export function ChapterView({
   leanSource: Map<string, string>;
   onNavigate?: (slug: string, anchor: string) => void;
   onOpenInGraph?: (label: string) => void;
+  diffSlugFor?: (label: string) => string | null;
+  onOpenInDiffs?: (slug: string) => void;
 }) {
   const ctx: Ctx = useMemo(
-    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph }),
-    [macros, labels, leanSource, onNavigate, onOpenInGraph],
+    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs }),
+    [macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs],
   );
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>

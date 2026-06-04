@@ -288,7 +288,11 @@ These rules ensure the blueprint works as a mathematical roadmap:
 
 7. **Purely mathematical, no Lean code**: Statements and proofs are ordinary mathematical prose and LaTeX. Never put Lean syntax, tactic blocks, or code fences inside a statement or proof body — the only Lean reference is the `\lean{}` annotation naming the declaration. Keep entries clear and concise: a precise statement and a readable proof sketch, not a wall of text.
 
-8. **Cross-references must resolve — no literal `REF`**: prose references to other declarations use `\cref{<label>}` with a real label, never a literal placeholder token like "Definition~REF". The blueprint-doctor flags every literal `REF` as a malformed reference; when you see these findings, dispatch writers to repair them (the surrounding `\uses{}` usually identifies the intended target).
+8. **Well-formed prose and references — repair every doctor `malformed` finding**: the blueprint-doctor flags three classes of writer damage, and all three are yours to repair by dispatching writers at the affected chapters:
+   - `literal-ref` — a literal placeholder token like "Definition~REF" instead of `\cref{<label>}` (the surrounding `\uses{}` usually identifies the intended target);
+   - `math-delim` — interleaved or unbalanced math delimiters (`$ … \( … \) … $`), which shred the rendered output mid-formula; pick ONE delimiter style per formula (`\( … \)`) and never switch inside;
+   - `bare-label` — a raw label id in prose ("Thm.~th:main") instead of `\cref{...}` or the human-readable theorem number from the source.
+   Also: every macro a chapter uses must be defined (in `blueprint/src/macros/common.tex`, or `\providecommand` in the chapter) — an undefined macro renders as raw TeX in both the dashboard and the compiled blueprint.
 
 ## Reading Lean files (lean-aware mode)
 

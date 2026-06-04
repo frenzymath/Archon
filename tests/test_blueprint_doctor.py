@@ -135,6 +135,36 @@ class RunBlueprintDoctorTest(unittest.TestCase):
             [k for _, k, _ in r.malformed_refs if k == "literal-ref"], [],
         )
 
+    def test_detects_interleaved_math_delimiters(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "Let $P \\subseteq Q\\( be the subsheaf whose \\)T$-points vanish.\n"
+            "Then \\(H^1(C, \\mathcal{O}) = 0\\) and $x = y$.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        probs = [reason for _, k, reason in r.malformed_refs if k == "math-delim"]
+        self.assertTrue(any("inside $…$" in p for p in probs), probs)
+        # The well-formed formulas on the next line produce no findings.
+        self.assertTrue(all("line 3" not in p for p in probs), probs)
+
+    def test_detects_bare_labels_in_prose(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\\uses{lem:helper}\n"
+            "By Kleiman Thm.~th:main the claim follows; see \\cref{thm:foo}.\n"
+            "\\end{theorem}\n"
+            "\\begin{lemma}\\label{lem:helper}H.\\end{lemma}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        bare = [reason for _, k, reason in r.malformed_refs if k == "bare-label"]
+        self.assertEqual(len(bare), 1, bare)
+        self.assertIn("th:main", bare[0])
+        # labels inside \uses{} / \cref{} / \label{} are never flagged.
+        self.assertNotIn("lem:helper", " ".join(bare))
+        self.assertNotIn("thm:foo", " ".join(bare))
+
     def test_detects_orphan_chapter(self):
         self.bp.write_chapter(
             "Good",

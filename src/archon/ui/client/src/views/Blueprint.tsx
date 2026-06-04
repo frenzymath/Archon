@@ -98,6 +98,21 @@ export default function Blueprint() {
     (label: string) => navigate(`/dag?node=${encodeURIComponent(label)}`),
     [navigate],
   );
+
+  // label → snapshot slug of its Lean file (for the "± diff" chips).
+  const leanFileByLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of dag?.nodes ?? []) if (n.lean_file) m.set(n.id, String(n.lean_file));
+    return m;
+  }, [dag]);
+  const diffSlugFor = useCallback((label: string) => {
+    const f = leanFileByLabel.get(label);
+    return f ? f.replace(/\.lean$/, '').replace(/\//g, '_') : null;
+  }, [leanFileByLabel]);
+  const openInDiffs = useCallback(
+    (slug: string) => navigate(`/diffs?file=${encodeURIComponent(slug)}`),
+    [navigate],
+  );
   const toggleOpen = useCallback((slug: string) => setOpen(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
   const toggleExpand = useCallback((slug: string) => setExpanded(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
 
@@ -196,7 +211,7 @@ export default function Blueprint() {
           {openChapters.map(ch => (
             <div key={ch.slug} className={styles.openChapter}>
               <button className={styles.closeChap} onClick={() => toggleOpen(ch.slug)} title="Close chapter">×</button>
-              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} onOpenInGraph={openInGraph} />
+              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} onOpenInGraph={openInGraph} diffSlugFor={diffSlugFor} onOpenInDiffs={openInDiffs} />
             </div>
           ))}
         </main>

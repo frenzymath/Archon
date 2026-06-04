@@ -155,6 +155,13 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       } else {
         macros = loadBlueprintMacros(projectPath);
       }
+      // Chapters may carry their own \providecommand/\newcommand (e.g. a
+      // chapter-local \fatsemi) — collect those too so KaTeX sees them.
+      // \providecommand semantics: macros/*.tex definitions win on collision.
+      for (const ch of chapters) {
+        const chMacros = parseMacros(ch.tex);
+        for (const k of Object.keys(chMacros)) if (!(k in macros)) macros[k] = chMacros[k];
+      }
 
       return { chapters, macros, docTitle, docAuthor, hasBlueprint: true, commit, error: null };
     },

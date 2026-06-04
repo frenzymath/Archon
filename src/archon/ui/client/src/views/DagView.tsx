@@ -484,18 +484,26 @@ export default function DagView() {
     }
   }, [allNodes, visibleSet, inNodeset, isOrphan]);
 
-  // Cross-page deep link: /dag?node=<id> (from the Blueprint page's ⬡ chips).
-  // Consumed once, after the graph data is in.
+  // Cross-page deep links: /dag?node=<id> (Blueprint ⬡ chips) and
+  // /dag?file=<lean-or-tex-file> (Diffs page). Consumed once, after the
+  // graph data is in.
   const [searchParams, setSearchParams] = useSearchParams();
   const consumedNodeLink = useRef(false);
   useEffect(() => {
     if (consumedNodeLink.current || !allNodes.size) return;
     const id = searchParams.get('node');
-    if (!id) return;
+    const file = searchParams.get('file');
+    if (!id && !file) return;
     consumedNodeLink.current = true;
     setSearchParams({}, { replace: true });
-    if (allNodes.has(id)) { goTo(id); setSearch(id); }
-  }, [allNodes, searchParams, setSearchParams, goTo]);
+    if (id && allNodes.has(id)) { goTo(id); setSearch(id); return; }
+    if (file && files.includes(file)) {
+      setFileSel(file);
+      // Select the file's first node so the panel has context.
+      const first = uniqueNodes.find((n) => fileOf(n) === file);
+      if (first) goTo(first.id);
+    }
+  }, [allNodes, files, uniqueNodes, fileOf, searchParams, setSearchParams, goTo]);
 
   // Read selection via a ref so doJump stays stable across clicks — otherwise
   // selecting a node would re-create doJump, re-run the apply effect, and
@@ -779,7 +787,8 @@ export default function DagView() {
               onOpenBlueprint={(label) => navigate(`/blueprint?focus=${encodeURIComponent(label)}`)}
               onOpenBlueprintAt={(slug, anchor) => navigate(`/blueprint?slug=${encodeURIComponent(slug)}&anchor=${encodeURIComponent(anchor)}`)}
               onOpenLogs={(iter) => navigate(`/logs?iter=${encodeURIComponent(iter)}`)}
-              onOpenDiffs={(iter) => navigate(`/diffs?iter=${encodeURIComponent(iter)}`)} />
+              onOpenDiffs={(iter) => navigate(`/diffs?iter=${encodeURIComponent(iter)}`)}
+              onOpenDiffsFile={(slug) => navigate(`/diffs?file=${encodeURIComponent(slug)}`)} />
           )}
         </aside>
       </div>
@@ -837,7 +846,7 @@ function ModChip({ label, mod, onOpenLogs, onOpenDiffs }: {
   );
 }
 
-function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onToggleFocus, onOpenBlueprint, onOpenBlueprintAt, onOpenLogs, onOpenDiffs }: {
+function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onToggleFocus, onOpenBlueprint, onOpenBlueprintAt, onOpenLogs, onOpenDiffs, onOpenDiffsFile }: {
   n: DagNode; ancestors: Set<string>; macros: Record<string, string>; focused: boolean;
   labels: ReturnType<typeof buildBlueprintModel>['labels'];
   lastMod: Record<string, FileMod> | undefined;
@@ -846,6 +855,7 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
   onOpenBlueprintAt: (slug: string, anchor: string) => void;
   onOpenLogs: (iter: string) => void;
   onOpenDiffs: (iter: string) => void;
+  onOpenDiffsFile: (slug: string) => void;
 }) {
   const statusBadge = n.proved
     ? <span className="badge badge-proved">✓ leanok</span>
@@ -873,6 +883,12 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
         <button className="btn-focus" onClick={onToggleFocus}>⊙ {focused ? 'Clear focus' : 'Focus dependency cone'}</button>
         {inBlueprint && (
           <button className="btn-focus" onClick={() => onOpenBlueprint(n.id)}>📖 Open in blueprint</button>
+        )}
+        {n.lean_file && (
+          <button className="btn-focus"
+            onClick={() => onOpenDiffsFile(String(n.lean_file).replace(/\.lean$/, '').replace(/\//g, '_'))}>
+            ± Open in diffs
+          </button>
         )}
       </div>
 

@@ -118,6 +118,72 @@ _LITERAL_REF_RE = re.compile(
     r"(?<![A-Za-z\\{:_])REF(?![A-Za-z}_:])"
 )
 
+# A bare label-like token in prose ("Thm.~th:main", "Cor.~cor:algsch") — a
+# writer pasted a LaTeX label id instead of the human theorem number or a
+# \cref{}. Only matched OUTSIDE braces (annotation arguments are stripped
+# before the scan).
+_BARE_LABEL_RE = re.compile(
+    r"(?<![\\{:\w])(?:thm?|lemma|lem|lm|cor|defn?|prop|sec|chap|eqn?|rem|rmk)"
+    r":[A-Za-z][A-Za-z0-9_-]+"
+)
+# Strip every {...} argument so labels inside \uses{}/\cref{}/\label{} (and
+# any other command argument) never reach the bare-label scan.
+_BRACE_ARG_RE = re.compile(r"\{[^{}]*\}")
+
+
+def _scan_math_delims(text: str) -> list[tuple[int, str]]:
+    """Detect interleaved/unbalanced math delimiters: ``$ … \\( … \\) … $``.
+
+    Balanced *counts* don't catch the real failure mode (a writer switching
+    delimiter style mid-formula), so this walks the file with a tiny mode
+    machine. Returns ``(line_number, problem)`` pairs.
+    """
+    probs: list[tuple[int, str]] = []
+    mode: str | None = None  # None | '$' | '$$' | 'paren'
+    line = 1
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1; i += 1; continue
+        if c == "\\":
+            nxt = text[i + 1: i + 2]
+            if nxt == "(":
+                if mode in ("$", "$$"):
+                    probs.append((line, f"\\( opened inside {mode}…{mode} math"))
+                elif mode == "paren":
+                    probs.append((line, "nested \\( inside \\(…\\)"))
+                else:
+                    mode = "paren"
+                i += 2; continue
+            if nxt == ")":
+                if mode == "paren":
+                    mode = None
+                else:
+                    probs.append((line, "\\) without a matching \\("))
+                i += 2; continue
+            i += 2; continue  # skip escaped char (\$, \\, …)
+        if c == "$":
+            if text[i + 1: i + 2] == "$":
+                if mode is None:
+                    mode = "$$"
+                elif mode == "$$":
+                    mode = None
+                else:
+                    probs.append((line, f"$$ inside {mode} math"))
+                i += 2; continue
+            if mode is None:
+                mode = "$"
+            elif mode == "$":
+                mode = None
+            else:
+                probs.append((line, "$ inside \\(…\\) math"))
+            i += 1; continue
+        i += 1
+    if mode is not None:
+        probs.append((line, f"unclosed {mode} math at end of file"))
+    return probs
+
 
 @dataclass
 class DoctorReport:
@@ -258,6 +324,18 @@ def _scan_labels_and_refs(
             malformed.append((
                 tex, "literal-ref",
                 f'literal "{m.group(0)}" placeholder — use \\cref{{<label>}}',
+            ))
+        # Interleaved/unbalanced math delimiters ($ … \( … \) … $) — these
+        # shred the rendered output mid-formula in both plasTeX and the
+        # dashboard. Capped so one badly damaged file doesn't flood the report.
+        for line_no, prob in _scan_math_delims(text)[:8]:
+            malformed.append((tex, "math-delim", f"line {line_no}: {prob}"))
+        # Bare label ids in prose ("Thm.~th:main") — outside any {...}.
+        for m in _BARE_LABEL_RE.finditer(_BRACE_ARG_RE.sub(" ", text)):
+            malformed.append((
+                tex, "bare-label",
+                f'bare label "{m.group(0)}" in prose — use \\cref{{{m.group(0)}}} '
+                f"or the human-readable number",
             ))
         for m in _LABEL_RE.finditer(text):
             piece = m.group(1).strip()
