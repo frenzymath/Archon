@@ -64,6 +64,12 @@
 }
 .graphChip:hover { border-color: var(--blue); color: var(--blue); }
 .fragEmpty { color: var(--text-tertiary); }
+.iterChip {
+  font-family: var(--font-mono); font-size: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
+  padding: 0 5px; border-radius: 4px; margin-left: 4px; vertical-align: middle;
+}
+.iterChip:hover { border-color: var(--blue); color: var(--blue); }
 .leanCode {
   display: block; margin: 6px 0; padding: 8px 10px; overflow-x: auto;
   font-family: var(--font-mono); font-size: 11.5px; line-height: 1.45;

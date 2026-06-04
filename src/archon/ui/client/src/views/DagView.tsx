@@ -827,7 +827,12 @@ function workVal(v: number | null | undefined) {
 function charsPair(rel: number | null | undefined, cum: number | null | undefined) {
   const f = (v: number | null | undefined) => (v === null || v === undefined)
     ? <span className="chars-inf">∞</span> : <span className="chars-val">{v}</span>;
-  return <span className="chars-pair">ℓ<sub>local</sub>={f(rel)} &nbsp; ℓ<sub>total</sub>={f(cum)}</span>;
+  return (
+    <span className="chars-pair dv-help"
+      title="ℓ_local = proof length (characters) of this declaration alone · ℓ_total = summed over the declaration and all its ancestors (its full dependency cone); ∞ when something in the cone has no proof yet">
+      ℓ<sub>local</sub>={f(rel)} &nbsp; ℓ<sub>total</sub>={f(cum)}
+    </span>
+  );
 }
 
 function ModChip({ label, mod, onOpenLogs, onOpenDiffs }: {
@@ -908,10 +913,12 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
       <div className="card">
         <div className="card-title">Complexity</div>
         <div className="metrics-grid">
-          <span /><span className="col-head">local</span><span className="col-head">total</span>
-          <span className="m-label">LaTeX ℓ</span>{charVal(n.proof_size_tex)}{charVal(n.proof_size_tex_total)}
-          <span className="m-label">Lean ℓ</span>{charVal(n.proof_size_lean)}{charVal(n.proof_size_lean_total)}
-          <span className="m-label">Effort</span>{workVal(n.effort_local)}{workVal(n.effort_total)}
+          <span />
+          <span className="col-head dv-help" title="local = this declaration alone">local</span>
+          <span className="col-head dv-help" title="total = this declaration plus ALL its ancestors (everything it transitively \uses). ∞ as soon as any ancestor is ∞.">total</span>
+          <span className="m-label dv-help" title="ℓ = length (characters) of the informal LaTeX proof. — means no informal proof is written yet.">LaTeX ℓ</span>{charVal(n.proof_size_tex)}{charVal(n.proof_size_tex_total)}
+          <span className="m-label dv-help" title="ℓ = length (characters) of the Lean proof. — means the declaration has no (matched) Lean proof yet.">Lean ℓ</span>{charVal(n.proof_size_lean)}{charVal(n.proof_size_lean_total)}
+          <span className="m-label dv-help" title="effort = 0 if proved sorry-free in Lean · |LaTeX proof| if only an informal proof exists (work still to formalize) · ∞ if neither (a roadmap hole). total sums it over the dependency cone.">Effort</span>{workVal(n.effort_local)}{workVal(n.effort_total)}
         </div>
       </div>
 
@@ -926,7 +933,11 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
       </div>
 
       <div className="card">
-        <div className="sec-hdr"><span className="card-title" style={{ margin: 0 }}>LaTeX proof</span>{charsPair(n.proof_size_tex, n.proof_size_tex_total)}</div>
+        <div className="sec-hdr">
+          <span className="card-title" style={{ margin: 0 }}>LaTeX proof</span>
+          <ModChip label="tex" mod={texMod} onOpenLogs={onOpenLogs} onOpenDiffs={onOpenDiffs} />
+          {charsPair(n.proof_size_tex, n.proof_size_tex_total)}
+        </div>
         <div className="latex-rendered">
           <TexFragment tex={n.proof_tex ? n.proof_tex.trim() : ''} macros={macros} labels={labels} onNavigate={onOpenBlueprintAt} />
         </div>
@@ -1078,6 +1089,7 @@ const DV_CSS = `
 .dv-root .latex-rendered .katex-display { margin:6px 0; overflow-x:auto; }
 .dv-root .latex-rendered em { font-style:italic; color:var(--text-primary); } .dv-root .latex-rendered strong { font-weight:600; color:var(--text-primary); }
 .dv-root .dv-empty-mark { color:var(--text-muted); font-style:italic; }
+.dv-root .dv-help { cursor:help; text-decoration:underline dotted var(--text-muted); text-underline-offset:3px; }
 .dv-root .mod-chip { display:inline-flex; align-items:center; gap:3px; margin-left:auto; }
 .dv-root .mod-lbl { font-size:9.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; }
 .dv-root .mod-iter, .dv-root .mod-diff { font-family:var(--font-mono); font-size:10px; cursor:pointer; border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-secondary); padding:0 5px; border-radius:4px; }

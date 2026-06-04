@@ -15,7 +15,7 @@ import {
   useGitLog,
   type GitCommit,
 } from '../hooks/useGitLog';
-import { useDag } from '../hooks/useDag';
+import { useDag, useDagLastModified } from '../hooks/useDag';
 import { buildBlueprintModel, ChapterView, TitleInline } from '../components/BlueprintDoc';
 import { GitTimeline } from '../components/GitTimeline';
 import styles from './Blueprint.module.css';
@@ -111,6 +111,24 @@ export default function Blueprint() {
   }, [leanFileByLabel]);
   const openInDiffs = useCallback(
     (slug: string) => navigate(`/diffs?file=${encodeURIComponent(slug)}`),
+    [navigate],
+  );
+
+  // "✎ iter-NNN" chips: last archon commit per file (live view only — the
+  // historical view shows the blueprint at a commit, where "last modified"
+  // would be misleading).
+  const { data: lastModData } = useDagLastModified();
+  const lastMod = selectedSha ? undefined : lastModData?.files;
+  const chapterModFor = useCallback(
+    (slug: string) => lastMod?.[`blueprint/src/chapters/${slug}.tex`],
+    [lastMod],
+  );
+  const leanModFor = useCallback((label: string) => {
+    const f = leanFileByLabel.get(label);
+    return f ? lastMod?.[f] : undefined;
+  }, [leanFileByLabel, lastMod]);
+  const openLogs = useCallback(
+    (iter: string) => navigate(`/logs?iter=${encodeURIComponent(iter)}`),
     [navigate],
   );
   const toggleOpen = useCallback((slug: string) => setOpen(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
@@ -211,7 +229,7 @@ export default function Blueprint() {
           {openChapters.map(ch => (
             <div key={ch.slug} className={styles.openChapter}>
               <button className={styles.closeChap} onClick={() => toggleOpen(ch.slug)} title="Close chapter">×</button>
-              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} onOpenInGraph={openInGraph} diffSlugFor={diffSlugFor} onOpenInDiffs={openInDiffs} />
+              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} onOpenInGraph={openInGraph} diffSlugFor={diffSlugFor} onOpenInDiffs={openInDiffs} leanModFor={leanModFor} onOpenLogs={openLogs} chapterMod={chapterModFor(ch.slug)} />
             </div>
           ))}
         </main>

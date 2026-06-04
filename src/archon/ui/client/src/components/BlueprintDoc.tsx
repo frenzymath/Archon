@@ -427,6 +427,28 @@ interface Ctx {
   diffSlugFor?: (label: string) => string | null;
   /** Open a Lean file's snapshot timeline on the Diffs page. */
   onOpenInDiffs?: (slug: string) => void;
+  /** Last archon commit that touched this declaration's Lean file. */
+  leanModFor?: (label: string) => BlueprintFileMod | undefined;
+  /** Open an iteration's logs (from a ✎ iter-NNN chip). */
+  onOpenLogs?: (iter: string) => void;
+}
+
+/** Mirrors hooks/useDag's FileMod (kept structural to avoid a hook import). */
+export interface BlueprintFileMod {
+  sha: string; date: string; subject: string; iteration?: string; phase?: string;
+}
+
+/** "✎ iter-NNN/phase" chip → the iteration's logs. */
+function IterChip({ kind, mod, onOpenLogs }: {
+  kind: string; mod: BlueprintFileMod | undefined; onOpenLogs?: (iter: string) => void;
+}) {
+  if (!mod?.iteration || !onOpenLogs) return null;
+  return (
+    <button className={styles.iterChip} title={`${kind} last modified by:\n${mod.subject}\n${mod.date} — click to open the logs`}
+      onClick={() => onOpenLogs(mod.iteration!)}>
+      ✎ {mod.iteration}{mod.phase ? `/${mod.phase}` : ''}
+    </button>
+  );
 }
 
 /** Cross-reference click: route through onNavigate so a target in a not-yet-
@@ -562,6 +584,9 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
           <button className={styles.graphChip} title="Open this declaration's Lean file on the Diffs page"
             onClick={() => ctx.onOpenInDiffs!(ctx.diffSlugFor!(b.meta.label!)!)}>± diff</button>
         )}
+        {b.meta.label && (
+          <IterChip kind="Lean file" mod={ctx.leanModFor?.(b.meta.label)} onOpenLogs={ctx.onOpenLogs} />
+        )}
       </div>
       <div className={styles.envBody}>
         {b.body.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${j}`} />)}
@@ -574,7 +599,7 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs,
+  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs, chapterMod,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
@@ -584,15 +609,20 @@ export function ChapterView({
   onOpenInGraph?: (label: string) => void;
   diffSlugFor?: (label: string) => string | null;
   onOpenInDiffs?: (slug: string) => void;
+  leanModFor?: (label: string) => BlueprintFileMod | undefined;
+  onOpenLogs?: (iter: string) => void;
+  /** Last archon commit that touched this chapter's .tex (statements + proofs). */
+  chapterMod?: BlueprintFileMod;
 }) {
   const ctx: Ctx = useMemo(
-    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs }),
-    [macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs],
+    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs }),
+    [macros, labels, leanSource, onNavigate, onOpenInGraph, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
   );
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
       <h2 className={styles.chapterTitle}>
         <span className={styles.chapNum}>{chapter.num}</span> <Inlines nodes={chapter.title} ctx={ctx} k={`ch${chapter.num}`} />
+        <IterChip kind="Chapter .tex (statements & proofs)" mod={chapterMod} onOpenLogs={onOpenLogs} />
       </h2>
       {chapter.blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
     </section>
