@@ -9,6 +9,7 @@
  * into sections. The resizable git timeline time-travels the whole view.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useBlueprintChapters,
   useGitLog,
@@ -70,6 +71,33 @@ export default function Blueprint() {
     pending.current = anchor ?? `ch-${slug}`;
     setOpen(v => { const n = new Set(v); n.add(slug); return n; });
   }, [open]);
+
+  // Cross-page deep links: /blueprint?focus=<label> (from the DAG node panel)
+  // or ?slug=<chapter>&anchor=<id> (from a fragment's \cref). Consumed once.
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const consumedLink = useRef(false);
+  useEffect(() => {
+    if (consumedLink.current || doc.length === 0) return;
+    const focusLabel = searchParams.get('focus');
+    const slugP = searchParams.get('slug');
+    if (focusLabel) {
+      const tgt = labels.get(focusLabel);
+      if (!tgt) return; // label not in this build of the doc
+      consumedLink.current = true;
+      openTo(tgt.slug, tgt.anchor);
+      setSearchParams({}, { replace: true });
+    } else if (slugP) {
+      consumedLink.current = true;
+      openTo(slugP, searchParams.get('anchor') ?? undefined);
+      setSearchParams({}, { replace: true });
+    }
+  }, [doc, labels, searchParams, openTo, setSearchParams]);
+
+  const openInGraph = useCallback(
+    (label: string) => navigate(`/dag?node=${encodeURIComponent(label)}`),
+    [navigate],
+  );
   const toggleOpen = useCallback((slug: string) => setOpen(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
   const toggleExpand = useCallback((slug: string) => setExpanded(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
 
@@ -168,7 +196,7 @@ export default function Blueprint() {
           {openChapters.map(ch => (
             <div key={ch.slug} className={styles.openChapter}>
               <button className={styles.closeChap} onClick={() => toggleOpen(ch.slug)} title="Close chapter">×</button>
-              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} />
+              <ChapterView chapter={ch} macros={macros} labels={labels} leanSource={leanSource} onNavigate={openTo} onOpenInGraph={openInGraph} />
             </div>
           ))}
         </main>

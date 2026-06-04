@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectPaths } from './project.js';
+import { runGit, parseIter } from './git.js';
 
 interface DagNode {
   id: string; type: string; title: string; chapter: string; statement: string;
@@ -60,8 +61,48 @@ function readCache(projectPath: string): DagGraph | null {
   }
 }
 
+export interface FileMod {
+  sha: string;
+  date: string;
+  subject: string;
+  iteration?: string;
+  phase?: string;
+}
+
 export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath } = paths;
+  const { projectPath, archonPath } = paths;
+  const gitDir = path.join(archonPath, 'git-dir');
+
+  // Per-file "last modified by which archon iteration" map, derived from the
+  // inner git in one `log --name-only` walk (newest-first; first appearance
+  // wins). Backs the DAG node panel's clickable iter-NNN chips. Cached per
+  // HEAD — the inner git only moves between iterations.
+  let lastModCache: { head: string; files: Record<string, FileMod> } | null = null;
+
+  fastify.get('/api/dag/last-modified', async () => {
+    if (!fs.existsSync(gitDir)) return { files: {} };
+    const head = runGit(gitDir, projectPath, ['rev-parse', 'HEAD']).trim();
+    if (!head) return { files: {} };
+    if (lastModCache?.head === head) return { files: lastModCache.files };
+
+    // \x01 marks commit headers so file lines can't be confused with them.
+    const out = runGit(gitDir, projectPath, [
+      'log', '--name-only', '--no-renames', '--pretty=format:%x01%H%x09%aI%x09%s',
+    ]);
+    const files: Record<string, FileMod> = {};
+    let cur: FileMod | null = null;
+    for (const line of out.split('\n')) {
+      if (line.startsWith('\x01')) {
+        const [sha, date, ...rest] = line.slice(1).split('\t');
+        const subject = rest.join('\t');
+        cur = { sha, date, subject, ...parseIter(subject) };
+      } else if (line.trim() && cur && !(line in files)) {
+        files[line] = cur;
+      }
+    }
+    lastModCache = { head, files };
+    return { files };
+  });
 
   fastify.get<{ Querystring: { commit?: string } }>('/api/dag', async (req) => {
     const commit = req.query.commit?.trim();

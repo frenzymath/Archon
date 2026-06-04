@@ -400,6 +400,8 @@ interface Ctx {
   lean: Map<string, string>;
   /** Open the target's chapter (lazy view) and scroll to its anchor. */
   onNavigate?: (slug: string, anchor: string) => void;
+  /** Jump to this declaration's node on the DAG page. */
+  onOpenInGraph?: (label: string) => void;
 }
 
 /** Cross-reference click: route through onNavigate so a target in a not-yet-
@@ -527,6 +529,10 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
         {b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
         {b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
         {b.meta.lean.map((nm, i) => <LeanChip key={i} name={nm} ctx={ctx} />)}
+        {b.meta.label && ctx.onOpenInGraph && (
+          <button className={styles.graphChip} title="Show this node on the DAG page"
+            onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
+        )}
       </div>
       <div className={styles.envBody}>
         {b.body.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${j}`} />)}
@@ -539,17 +545,18 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, leanSource, onNavigate,
+  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
   labels: LabelMap;
   leanSource: Map<string, string>;
   onNavigate?: (slug: string, anchor: string) => void;
+  onOpenInGraph?: (label: string) => void;
 }) {
   const ctx: Ctx = useMemo(
-    () => ({ macros, labels, lean: leanSource, onNavigate }),
-    [macros, labels, leanSource, onNavigate],
+    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph }),
+    [macros, labels, leanSource, onNavigate, onOpenInGraph],
   );
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
@@ -566,4 +573,27 @@ export function TitleInline({ nodes, tex, macros }: { nodes?: Inline[]; tex?: st
   const parsed = useMemo(() => nodes ?? parseInline(tex ?? ''), [nodes, tex]);
   const ctx: Ctx = { macros, labels: new Map(), lean: new Map() };
   return <Inlines nodes={parsed} ctx={ctx} k="t" />;
+}
+
+/** Render a loose LaTeX fragment (a statement or proof body from the DAG)
+ *  through the same pipeline as the Blueprint page — math, \emph, comments,
+ *  and \cref{} resolved against the full blueprint's label map. Used by the
+ *  DAG node panel so the two pages read identically. */
+export function TexFragment({ tex, macros, labels, onNavigate }: {
+  tex: string | null | undefined;
+  macros: Record<string, string>;
+  labels?: LabelMap;
+  onNavigate?: (slug: string, anchor: string) => void;
+}) {
+  const blocks = useMemo(() => parseBlocks(encodeComments(tex ?? '', true)), [tex]);
+  const ctx: Ctx = useMemo(
+    () => ({ macros, labels: labels ?? new Map(), lean: new Map(), onNavigate }),
+    [macros, labels, onNavigate],
+  );
+  if (!tex || !tex.trim()) return <span className={styles.fragEmpty}>—</span>;
+  return (
+    <div className={styles.root}>
+      {blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`frag-${j}`} />)}
+    </div>
+  );
 }

@@ -30,7 +30,7 @@ export function runGit(gitDir: string, projectPath: string, args: string[]): str
 
 const ARCHON_MSG_RE = /archon\[(\d+)\/([^/\]]+)(?:\/([^\]]+))?\]/;
 
-function parseIter(subject: string): { iteration?: string; phase?: string; fileSlug?: string } {
+export function parseIter(subject: string): { iteration?: string; phase?: string; fileSlug?: string } {
   const m = subject.match(ARCHON_MSG_RE);
   if (!m) return {};
   const num = parseInt(m[1], 10);

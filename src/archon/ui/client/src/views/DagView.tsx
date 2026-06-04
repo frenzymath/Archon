@@ -19,13 +19,14 @@
  * to `.leandag/dag.json`); node fields mirror leandag's `GraphNode.to_dict()`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
-import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { useDag, type DagNode } from '../hooks/useDag';
-import { useGitLog, type GitCommit } from '../hooks/useGitLog';
+import { useDag, useDagLastModified, type DagNode, type FileMod } from '../hooks/useDag';
+import { useGitLog, useBlueprintChapters, type GitCommit } from '../hooks/useGitLog';
 import { GitTimeline } from '../components/GitTimeline';
+import { buildBlueprintModel, TexFragment } from '../components/BlueprintDoc';
 
 // ── Effort colour scale (mirrors leandag.exporters) ─────────────────────────
 const DONE_FILL = '#22c55e', DONE_BORDER = '#15803d'; // effort 0 — formalised
@@ -100,37 +101,12 @@ function visNode(n: DagNode, maxEffort: number) {
   };
 }
 
-// ── LaTeX rendering (KaTeX, mirrors leandag's renderLatex) ───────────────────
+// ── LaTeX rendering ──────────────────────────────────────────────────────────
+// Statement/proof bodies render through BlueprintDoc's TexFragment (the same
+// pipeline as the Blueprint page: math, \emph, comments, resolved \cref{}),
+// so the two pages read identically. Only the Lean highlighter stays local.
 function esc(s: string): string {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function processNonMath(s: string): string {
-  return esc(s)
-    .replace(/\\emph\{([^}]*)\}/g, '<em>$1</em>')
-    .replace(/\\textbf\{([^}]*)\}/g, '<strong>$1</strong>')
-    .replace(/\\textit\{([^}]*)\}/g, '<em>$1</em>')
-    .replace(/\\text\{([^}]*)\}/g, '$1');
-}
-function renderLatexHtml(text: string | null | undefined, macros: Record<string, string>): string {
-  if (!text || !text.trim()) return '<span class="dv-empty-mark">—</span>';
-  const re = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:[^$\\]|\\.)+?\$)/g;
-  let html = '', last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    html += processNonMath(text.slice(last, m.index));
-    const raw = m[0];
-    let disp: boolean, math: string;
-    if (raw.startsWith('$$')) { disp = true; math = raw.slice(2, -2); }
-    else if (raw.startsWith('\\[')) { disp = true; math = raw.slice(2, -2); }
-    else if (raw.startsWith('\\(')) { disp = false; math = raw.slice(2, -2); }
-    else { disp = false; math = raw.slice(1, -1); }
-    try {
-      html += katex.renderToString(math, { displayMode: disp, throwOnError: false, macros });
-    } catch { html += esc(raw); }
-    last = re.lastIndex;
-  }
-  html += processNonMath(text.slice(last));
-  return html;
 }
 
 // ── Lean syntax highlighter (mirrors leandag's highlightLean) ────────────────
@@ -206,6 +182,19 @@ export default function DagView() {
   const { data, isLoading, error, refetch, isFetching } = useDag(selectedSha || undefined);
   const { data: gitData } = useGitLog();
   const commits = gitData?.commits ?? [];
+  const navigate = useNavigate();
+
+  // The blueprint label map (cheap numbering pass over all chapters) so the
+  // node panel renders statements/proofs exactly like the Blueprint page —
+  // \cref{} resolved — and can deep-link into it. Same commit as the graph.
+  const { data: bpData } = useBlueprintChapters(selectedSha || undefined);
+  const bpLabels = useMemo(
+    () => buildBlueprintModel(bpData?.chapters ?? [], true).labels,
+    [bpData],
+  );
+  // Per-file "last modified at iter-NNN" chips (inner git, live view only).
+  const { data: lastModData } = useDagLastModified();
+  const lastMod = selectedSha ? undefined : lastModData?.files;
 
   // Resizable sidebar (width) and bottom timeline (height).
   const sideResize = useDragResize(340, 240, 680, 'x');
@@ -231,6 +220,9 @@ export default function DagView() {
     click: () => {}, dbl: () => {}, wheel: () => {}, settled: () => {},
   });
   const jumpRef = useRef<string | null>(null);
+  // Filled once doJump exists (defined after the highlight machinery); goTo
+  // calls through the ref so a jump can fire even when no filter changes.
+  const doJumpRef = useRef<() => void>(() => {});
 
   // Filter / selection state.
   const [nodeset, setNodeset] = useState<NodeSet>('union');
@@ -484,8 +476,26 @@ export default function DagView() {
       setFocus(null); setComponentSel(null); setChapterSel('');
       if (!inNodeset(id)) setNodeset('union');
       if (isOrphan(id)) setShowOrphans(true);
+    } else {
+      // Already on canvas: no filter change will fire, so doJump would never
+      // run — the panel would open without selecting/centering the node on
+      // the graph. Jump explicitly (deferred so doJumpRef is current).
+      setTimeout(() => doJumpRef.current(), 0);
     }
   }, [allNodes, visibleSet, inNodeset, isOrphan]);
+
+  // Cross-page deep link: /dag?node=<id> (from the Blueprint page's ⬡ chips).
+  // Consumed once, after the graph data is in.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const consumedNodeLink = useRef(false);
+  useEffect(() => {
+    if (consumedNodeLink.current || !allNodes.size) return;
+    const id = searchParams.get('node');
+    if (!id) return;
+    consumedNodeLink.current = true;
+    setSearchParams({}, { replace: true });
+    if (allNodes.has(id)) { goTo(id); setSearch(id); }
+  }, [allNodes, searchParams, setSearchParams, goTo]);
 
   // Read selection via a ref so doJump stays stable across clicks — otherwise
   // selecting a node would re-create doJump, re-run the apply effect, and
@@ -502,6 +512,7 @@ export default function DagView() {
       highlightCone(selIdRef.current);
     }
   }, [highlightCone]);
+  doJumpRef.current = doJump;
 
   // Keep latest imperative callbacks reachable from the once-registered handlers.
   useEffect(() => {
@@ -763,7 +774,12 @@ export default function DagView() {
             <div className="dv-sidebar-empty"><p>Click a node to inspect it</p></div>
           ) : (
             <NodePanel n={sel} ancestors={ancestorsOf(selId)} macros={macros} focused={focus === selId}
-              onGoTo={goTo} onToggleFocus={() => (focus === selId ? setFocus(null) : (setFocus(selId), setSelId(selId)))} />
+              labels={bpLabels} lastMod={lastMod}
+              onGoTo={goTo} onToggleFocus={() => (focus === selId ? setFocus(null) : (setFocus(selId), setSelId(selId)))}
+              onOpenBlueprint={(label) => navigate(`/blueprint?focus=${encodeURIComponent(label)}`)}
+              onOpenBlueprintAt={(slug, anchor) => navigate(`/blueprint?slug=${encodeURIComponent(slug)}&anchor=${encodeURIComponent(anchor)}`)}
+              onOpenLogs={(iter) => navigate(`/logs?iter=${encodeURIComponent(iter)}`)}
+              onOpenDiffs={(iter) => navigate(`/diffs?iter=${encodeURIComponent(iter)}`)} />
           )}
         </aside>
       </div>
@@ -805,9 +821,31 @@ function charsPair(rel: number | null | undefined, cum: number | null | undefine
   return <span className="chars-pair">ℓ<sub>local</sub>={f(rel)} &nbsp; ℓ<sub>total</sub>={f(cum)}</span>;
 }
 
-function NodePanel({ n, ancestors, macros, focused, onGoTo, onToggleFocus }: {
+function ModChip({ label, mod, onOpenLogs, onOpenDiffs }: {
+  label: string; mod: FileMod | undefined;
+  onOpenLogs: (iter: string) => void; onOpenDiffs: (iter: string) => void;
+}) {
+  if (!mod || !mod.iteration) return null;
+  return (
+    <span className="mod-chip" title={`${mod.subject}\n${mod.date}`}>
+      <span className="mod-lbl">{label}</span>
+      <button className="mod-iter" onClick={() => onOpenLogs(mod.iteration!)}
+        title={`Open ${mod.iteration} logs`}>✎ {mod.iteration}{mod.phase ? `/${mod.phase}` : ''}</button>
+      <button className="mod-diff" onClick={() => onOpenDiffs(mod.iteration!)}
+        title={`Open ${mod.iteration} diffs`}>±</button>
+    </span>
+  );
+}
+
+function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onToggleFocus, onOpenBlueprint, onOpenBlueprintAt, onOpenLogs, onOpenDiffs }: {
   n: DagNode; ancestors: Set<string>; macros: Record<string, string>; focused: boolean;
+  labels: ReturnType<typeof buildBlueprintModel>['labels'];
+  lastMod: Record<string, FileMod> | undefined;
   onGoTo: (id: string) => void; onToggleFocus: () => void;
+  onOpenBlueprint: (label: string) => void;
+  onOpenBlueprintAt: (slug: string, anchor: string) => void;
+  onOpenLogs: (iter: string) => void;
+  onOpenDiffs: (iter: string) => void;
 }) {
   const statusBadge = n.proved
     ? <span className="badge badge-proved">✓ leanok</span>
@@ -816,6 +854,13 @@ function NodePanel({ n, ancestors, macros, focused, onGoTo, onToggleFocus }: {
   const directSet = new Set(n.uses);
   const indirect = [...ancestors].filter((x) => !directSet.has(x)).sort();
   const Chip = ({ u }: { u: string }) => <span className="dep-chip" onClick={() => onGoTo(u)}>{u}</span>;
+  const inBlueprint = labels.has(n.id);
+  // lean_file is project-relative (matches the inner-git paths); tex_file is
+  // relative to blueprint/src/ — try both forms.
+  const lookupMod = (f?: string | null) =>
+    lastMod && f ? (lastMod[f] ?? lastMod[`blueprint/src/${f}`]) : undefined;
+  const texMod = lookupMod(n.tex_file);
+  const leanMod = lookupMod(n.lean_file);
 
   return (
     <div className="dv-sidebar-content">
@@ -826,6 +871,9 @@ function NodePanel({ n, ancestors, macros, focused, onGoTo, onToggleFocus }: {
         {n.chapter && <div className="node-chapter">§ {n.chapter}</div>}
         {n.lean_name && <div className="lean-ref">Lean: <code>{n.lean_name}</code></div>}
         <button className="btn-focus" onClick={onToggleFocus}>⊙ {focused ? 'Clear focus' : 'Focus dependency cone'}</button>
+        {inBlueprint && (
+          <button className="btn-focus" onClick={() => onOpenBlueprint(n.id)}>📖 Open in blueprint</button>
+        )}
       </div>
 
       <div className="card">
@@ -852,17 +900,28 @@ function NodePanel({ n, ancestors, macros, focused, onGoTo, onToggleFocus }: {
       </div>
 
       <div className="card">
-        <div className="sec-hdr"><span className="card-title" style={{ margin: 0 }}>LaTeX statement</span></div>
-        <div className="latex-rendered" dangerouslySetInnerHTML={{ __html: renderLatexHtml(n.statement, macros) }} />
+        <div className="sec-hdr">
+          <span className="card-title" style={{ margin: 0 }}>LaTeX statement</span>
+          <ModChip label="tex" mod={texMod} onOpenLogs={onOpenLogs} onOpenDiffs={onOpenDiffs} />
+        </div>
+        <div className="latex-rendered">
+          <TexFragment tex={n.statement} macros={macros} labels={labels} onNavigate={onOpenBlueprintAt} />
+        </div>
       </div>
 
       <div className="card">
         <div className="sec-hdr"><span className="card-title" style={{ margin: 0 }}>LaTeX proof</span>{charsPair(n.proof_size_tex, n.proof_size_tex_total)}</div>
-        <div className="latex-rendered" dangerouslySetInnerHTML={{ __html: renderLatexHtml(n.proof_tex ? n.proof_tex.trim() : '', macros) }} />
+        <div className="latex-rendered">
+          <TexFragment tex={n.proof_tex ? n.proof_tex.trim() : ''} macros={macros} labels={labels} onNavigate={onOpenBlueprintAt} />
+        </div>
       </div>
 
       <div className="card">
-        <div className="sec-hdr"><span className="card-title" style={{ margin: 0 }}>Lean code</span>{charsPair(n.proof_size_lean, n.proof_size_lean_total)}</div>
+        <div className="sec-hdr">
+          <span className="card-title" style={{ margin: 0 }}>Lean code</span>
+          <ModChip label="lean" mod={leanMod} onOpenLogs={onOpenLogs} onOpenDiffs={onOpenDiffs} />
+          {charsPair(n.proof_size_lean, n.proof_size_lean_total)}
+        </div>
         {n.lean_source
           ? <pre className="code-block" dangerouslySetInnerHTML={{ __html: highlightLean(n.lean_source) }} />
           : <pre className="code-block empty">declaration not found</pre>}
@@ -1003,6 +1062,10 @@ const DV_CSS = `
 .dv-root .latex-rendered .katex-display { margin:6px 0; overflow-x:auto; }
 .dv-root .latex-rendered em { font-style:italic; color:var(--text-primary); } .dv-root .latex-rendered strong { font-weight:600; color:var(--text-primary); }
 .dv-root .dv-empty-mark { color:var(--text-muted); font-style:italic; }
+.dv-root .mod-chip { display:inline-flex; align-items:center; gap:3px; margin-left:auto; }
+.dv-root .mod-lbl { font-size:9.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.dv-root .mod-iter, .dv-root .mod-diff { font-family:var(--font-mono); font-size:10px; cursor:pointer; border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-secondary); padding:0 5px; border-radius:4px; }
+.dv-root .mod-iter:hover, .dv-root .mod-diff:hover { border-color:#3b82f6; color:#3b82f6; }
 .dv-root .code-block { font-family:var(--font-mono); font-size:11px; line-height:1.6; background:#0d1117; color:#c9d1d9; border:1px solid var(--border-strong); border-radius:5px; padding:10px 12px; white-space:pre; overflow:auto; max-height:220px; margin:0; }
 .dv-root .code-block.empty { color:var(--text-muted); font-style:italic; white-space:normal; background:var(--bg-tertiary); }
 .dv-root .hl-kw { color:#c678dd; } .dv-root .hl-tactic { color:#61afef; } .dv-root .hl-type { color:#e5c07b; }

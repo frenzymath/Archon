@@ -69,3 +69,20 @@ export function useDag(commit?: string | null) {
     staleTime: commit ? Infinity : 30_000,
   });
 }
+
+/** Last archon commit that touched each project file (inner git). */
+export interface FileMod {
+  sha: string;
+  date: string;
+  subject: string;
+  iteration?: string;
+  phase?: string;
+}
+
+export function useDagLastModified() {
+  return useQuery({
+    queryKey: ['dagLastModified'],
+    queryFn: () => fetchJson<{ files: Record<string, FileMod> }>('/api/dag/last-modified'),
+    staleTime: 30_000,
+  });
+}
