@@ -350,6 +350,156 @@ def _trunc(items: list, n: int = _MAX_LIST) -> tuple[list, int]:
     return items[:n], len(items) - n
 
 
+# ── Read-only navigation queries (back ``archon dag-query``) ─────────────────
+# A focused query surface over the leandag graph so the plan/review agents and
+# the graph subagents (walker / auditor / effort-breaker) can ask specific
+# questions — the frontier, the ∞ holes, a node's dependency closure — without
+# dumping the whole graph (dag-graph) or re-parsing the blueprint.
+
+# Compact per-node fields surfaced in a query result: enough to navigate and
+# decide, without the full statement/proof bodies.
+_QUERY_NODE_FIELDS = (
+    "id", "type", "title", "chapter", "lean_name",
+    "proved", "mathlib_ok", "has_sorry",
+    "dep_count", "rdep_count", "descendant_count",
+    "effort_local", "effort_total",
+)
+
+# verb → one-line description (also the source of the valid-verb list).
+QUERY_VERBS: dict[str, str] = {
+    "frontier": "ready to prove — unproved, every \\uses dep done",
+    "leaves": "nothing depends on them (rdep_count 0)",
+    "roots": "depend on nothing (dep_count 0)",
+    "isolated": "no edges at all — possibly dead",
+    "unproved": "blueprint nodes without \\leanok",
+    "sorry": "Lean proof contains sorry/admit",
+    "gaps": "∞ effort — statement with no informal proof (roadmap holes)",
+    "needs-leanok": "sorry-free in Lean but not marked \\leanok",
+    "needs-lean": "blueprint node with no \\lean{} link",
+    "ancestors": "the dependency closure of --node (everything it transitively uses)",
+    "node": "a single node by --node id",
+    "all": "every node",
+}
+
+_SORT_KEYS = {"effort", "deps", "impact"}
+
+
+def _node_brief(n) -> dict:
+    return {k: getattr(n, k, None) for k in _QUERY_NODE_FIELDS}
+
+
+def run_query(
+    project_path: Path,
+    verb: str,
+    *,
+    node: str | None = None,
+    limit: int | None = 50,
+    sort: str | None = None,
+) -> dict:
+    """Run a read-only navigation query over the leandag graph.
+
+    Returns ``{verb, count, total, nodes: [brief...], error}`` where ``total``
+    is the pre-limit match count and ``nodes`` is the (optionally sorted and)
+    limited briefs. ``ancestors``/``node`` require ``node``. Never raises —
+    failures land in ``error`` with an empty node list.
+    """
+    if verb not in QUERY_VERBS:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": f"unknown verb {verb!r}; valid: {', '.join(QUERY_VERBS)}"}
+    if verb in ("ancestors", "node") and not node:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": f"verb {verb!r} requires --node <id>"}
+    if sort and sort not in _SORT_KEYS:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": f"unknown --sort {sort!r}; valid: {', '.join(_SORT_KEYS)}"}
+
+    try:
+        from leandag import Queries
+        dag, _entry, _ln, _bn = _build_dag(project_path)
+    except Exception as e:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": f"leandag unavailable: {e}"}
+
+    try:
+        q = Queries(dag)
+        known = {n.id for n in dag.nodes}
+        if verb in ("ancestors", "node") and node not in known:
+            return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                    "error": f"node {node!r} not found in the graph"}
+
+        if verb in ("frontier",):
+            sel = q.ready_to_prove()
+        elif verb == "leaves":
+            sel = dag.leaves
+        elif verb == "roots":
+            sel = dag.axioms
+        elif verb == "isolated":
+            sel = dag.isolated
+        elif verb == "unproved":
+            sel = q.unproved()
+        elif verb == "sorry":
+            sel = q.with_sorry()
+        elif verb == "gaps":
+            sel = [n for n in dag.nodes if n.type != "lean_aux"
+                   and getattr(n, "effort_local", None) is None]
+        elif verb == "needs-leanok":
+            sel = q.needs_leanok()
+        elif verb == "needs-lean":
+            sel = q.needs_lean_statement()
+        elif verb == "node":
+            sel = [dag.node(node)]
+        elif verb == "ancestors":
+            # The pure dependency closure (exclude the node itself).
+            sel = [dag.node(i) for i in dag.ancestors(node) if i != node and i in known]
+        else:  # all
+            sel = list(dag.nodes)
+
+        if sort == "effort":
+            sel = Queries.sort_by_effort(sel, exclude_proved=False)
+        elif sort == "deps":
+            sel = Queries.sort_by_deps(sel)
+        elif sort == "impact":
+            sel = Queries.sort_by_impact(sel)
+
+        total = len(sel)
+        if limit and limit > 0:
+            sel = sel[:limit]
+        return {"verb": verb, "count": len(sel), "total": total,
+                "nodes": [_node_brief(n) for n in sel], "error": None}
+    except Exception as e:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": f"leandag query failed: {e}"}
+
+
+def format_query_text(res: dict) -> str:
+    """Compact human/agent-readable rendering of a ``run_query`` result."""
+    if res.get("error"):
+        return f"_dag-query error: {res['error']}_"
+    verb = res["verb"]
+    desc = QUERY_VERBS.get(verb, "")
+    head = f"{verb} — {desc}  ({res['count']} of {res['total']})"
+    lines = [head]
+    for n in res["nodes"]:
+        eff = n.get("effort_local")
+        eff_s = "∞" if eff is None else str(eff)
+        tags = []
+        if n.get("proved"):
+            tags.append("leanok")
+        if n.get("mathlib_ok"):
+            tags.append("mathlib")
+        if n.get("has_sorry"):
+            tags.append("sorry")
+        lean = f" \\lean{{{n['lean_name']}}}" if n.get("lean_name") else ""
+        tag_s = f" [{', '.join(tags)}]" if tags else ""
+        lines.append(
+            f"- {n['id']}{lean}  (effort {eff_s}, "
+            f"deps {n.get('dep_count')}, used-by {n.get('rdep_count')}){tag_s}"
+        )
+    if res["total"] > res["count"]:
+        lines.append(f"- … and {res['total'] - res['count']} more (raise --limit)")
+    return "\n".join(lines)
+
+
 def format_markdown(report: GapReport) -> str:
     """Human/agent-readable summary for prompt injection or terminal."""
     if report.error:

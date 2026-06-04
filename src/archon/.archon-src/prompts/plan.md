@@ -409,7 +409,9 @@ If a previous experiment is being restarted, check compilation status of every t
 
 The dependency graph is already injected above under **`## Blueprint graph state (leandag)`** — the ready-to-prove frontier, the ∞-effort holes, and broken `\uses{}` refs are computed for you from leandag (the same graph the dashboard DAG page and `archon dag` use). You do NOT need to run a script to derive dispatch ordering.
 
-Scope objectives straight from it: dispatch the frontier first (upstream-before-downstream falls out of the `\uses` order), and **never send a prover at an ∞-effort node** — a statement with no informal proof is blind formalization; write the proof (or dispatch a blueprint subagent) first. To explore the live graph beyond the injected summary, drive the `leandag` CLI (`leandag stats`, `leandag focus`, `leandag show gaps`).
+Scope objectives straight from it: dispatch the frontier first (upstream-before-downstream falls out of the `\uses` order), and **never send a prover at an ∞-effort node** — a statement with no informal proof is blind formalization; write the proof (or dispatch a blueprint subagent) first.
+
+To explore the live graph beyond the injected summary, run **`archon dag-query <verb>`** (read-only, JSON with `--json`) — e.g. `archon dag-query frontier --sort impact`, `archon dag-query gaps` (the ∞ holes), or `archon dag-query ancestors --node <id>` to see a target's full dependency closure. Verbs: `frontier`, `leaves`, `roots`, `isolated`, `unproved`, `sorry`, `gaps`, `needs-leanok`, `needs-lean`, `ancestors`, `node`, `all`. (The raw `leandag` CLI — `leandag stats`/`focus` — also works.)
 
 ## Stage transitions
 

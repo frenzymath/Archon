@@ -96,12 +96,13 @@ from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.subagent import subagent_command  # noqa: E402
 from archon.commands.migrate import app as migrate_app  # noqa: E402
 from archon.commands.dag import dag  # noqa: E402
-from archon.commands.dag.gaps_entry import dag_gaps, dag_graph  # noqa: E402
+from archon.commands.dag.gaps_entry import dag_gaps, dag_graph, dag_query  # noqa: E402
 
 app.command()(init)
 app.command()(dag)
 app.command("dag-gaps")(dag_gaps)
 app.command("dag-graph")(dag_graph)
+app.command("dag-query")(dag_query)
 app.command()(loop)
 app.command()(doctor)
 app.command()(dashboard)
