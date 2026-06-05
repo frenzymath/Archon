@@ -515,6 +515,11 @@ passed to codex in the child env, never on the command line, and a half-set
 gateway fails loud. `mcp` and `prompt_variant` are optional. A non-claude lane
 harness, or an unimplemented engine (e.g. `gemini`), raises a clear error.
 
+Codex runs show in the dashboard with per-session token counts — its `exec
+--json` stream is normalized to Archon's shared log schema. A native `~/.codex`
+login bills no per-token USD cost, so the cost column stays 0 for codex while the
+token columns are populated.
+
 A fresh `archon init` now offers a harness menu — Claude Code + Opus (default),
 Codex + GPT-5.5 (native `~/.codex` login), or Mixed (an engine per
 `plan` / `prover` / `review`) — and writes the chosen `loop.harness` /

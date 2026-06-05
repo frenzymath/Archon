@@ -10,12 +10,17 @@ This is a **lean cut** (see ``docs/MIGRATION.md`` for the honest limits):
 
 * Headless only. :meth:`run_interactive` raises — interactive sites
   (``archon discuss`` / ``refactor draft``) stay on claude-code.
-* No dashboard cost/session parity. Codex's ``--json`` stream is a
-  different schema from claude's ``stream-json``; we write it to the log
-  **raw** and do not synthesize the dashboard's cost/session_end rows.
 * No true resume. Codex mints its own ``thread_id`` and resumes via a
   separate subcommand; v1 logs a warning and runs fresh when a
   ``resume_session_id`` is passed.
+
+Dashboard / token parity is *present*: codex's ``exec --json`` stream is
+piped through :data:`_CODEX_STREAM_PARSER`, a peer of claude-code's
+normaliser, so it lands in the same downstream JSONL schema (``text`` /
+``tool_call`` / ``tool_result`` / ``session_end``). The two harnesses are
+peers — neither is the "default" the other bolts onto. Codex carries no
+per-token USD cost on a native login, so ``session_end`` omits
+``total_cost_usd`` and records the per-session token breakdown instead.
 
 The ``archon-lean-lsp`` MCP server can be wired in per-invocation via
 ``-c mcp_servers.*`` overrides (opt in with ``harnesses.<name>.mcp:
@@ -36,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -102,6 +108,180 @@ class PartialGatewayConfigError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# ── codex stream parser ───────────────────────────────────────────────
+#
+# Peer of :data:`archon.agent._CLAUDE_STREAM_PARSER`. Consumes codex's
+# ``exec --json`` stream (a thread / turn / item schema) on stdin and
+# writes the *same* normalized JSONL the claude parser does, so the
+# dashboard and the cost/token aggregators stay harness-agnostic.
+#
+# Codex schema → Archon event mapping:
+#   thread.started {{thread_id}}                  → session_meta
+#   item.completed · agent_message                → text
+#   item.started/completed · command_execution    → tool_call / tool_result (Bash)
+#   …             · mcp_tool_call                  → tool_call / tool_result (<tool>)
+#   …             · file_change                    → tool_call / tool_result (Edit)
+#   …             · todo_list                      → tool_call (TodoWrite)
+#   turn.completed {{usage}}                       → accumulate; session_end at EOF
+#
+# Codex carries no per-token USD cost on a native login, so we
+# deliberately omit ``total_cost_usd`` (cost aggregators read the missing
+# key as 0) and record only the session's token breakdown. ``input_tokens``
+# is the *fresh* (non-cached) input — codex reports a cache-inclusive
+# total, so we subtract the cached portion to match claude's accounting,
+# where cache reads are tracked separately in ``cache_read_input_tokens``.
+_CODEX_STREAM_PARSER = r'''
+import sys, json, datetime
+
+VERBOSE = '{verbose}' == 'True'
+RAW = open('{raw_log}', 'a') if VERBOSE else None
+JSONL = open('{jsonl}', 'a')
+MODEL = '{model}'
+
+def emit(event_type, **fields):
+    row = {{'ts': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'), 'event': event_type, **fields}}
+    JSONL.write(json.dumps(row) + '\n')
+    JSONL.flush()
+
+def terminal(s):
+    print(s, flush=True)
+
+_TOOL_ITEMS = ('command_execution', 'mcp_tool_call', 'file_change', 'todo_list')
+_TOOL_LABEL = {{'command_execution': 'Bash', 'file_change': 'Edit', 'todo_list': 'TodoWrite'}}
+
+def tool_label(item):
+    if item.get('type') == 'mcp_tool_call':
+        return item.get('tool') or 'mcp'
+    return _TOOL_LABEL.get(item.get('type', ''), item.get('type', '') or 'tool')
+
+def tool_input(item):
+    t = item.get('type', '')
+    if t == 'command_execution':
+        return {{'command': item.get('command', '')}}
+    if t == 'mcp_tool_call':
+        return {{'server': item.get('server', ''), 'tool': item.get('tool', ''), 'arguments': item.get('arguments', {{}})}}
+    if t == 'file_change':
+        return {{'changes': item.get('changes', [])}}
+    if t == 'todo_list':
+        return {{'items': item.get('items', [])}}
+    return {{}}
+
+def tool_result_content(item):
+    t = item.get('type', '')
+    if t == 'command_execution':
+        out = item.get('aggregated_output', '') or ''
+        code = item.get('exit_code')
+        if code is not None:
+            out = (out + '\n' if out else '') + '[exit ' + str(code) + ']'
+        return out
+    if t == 'mcp_tool_call':
+        err = item.get('error')
+        if err:
+            return '[error] ' + (err if isinstance(err, str) else json.dumps(err, ensure_ascii=False))
+        res = item.get('result')
+        if res is None:
+            return ''
+        return res if isinstance(res, str) else json.dumps(res, ensure_ascii=False)
+    if t == 'file_change':
+        lines = []
+        for ch in item.get('changes', []) or []:
+            if isinstance(ch, dict):
+                lines.append(str(ch.get('kind', '?')) + ' ' + str(ch.get('path', '')))
+        return '\n'.join(lines)
+    return ''
+
+session_id_emitted = False
+started_ids = set()
+last_message = ''
+sum_input = sum_cached = sum_output = sum_reasoning = 0
+num_turns = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    if RAW:
+        RAW.write(line + '\n')
+        RAW.flush()
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+
+    t = obj.get('type', '')
+
+    if t == 'thread.started':
+        if not session_id_emitted:
+            sid = obj.get('thread_id', '') or ''
+            if sid:
+                emit('session_meta', session_id=sid)
+                session_id_emitted = True
+
+    elif t == 'item.started':
+        item = obj.get('item', {{}}) or {{}}
+        if item.get('type', '') in _TOOL_ITEMS:
+            started_ids.add(item.get('id', ''))
+            emit('tool_call', tool=tool_label(item), input=tool_input(item))
+
+    elif t == 'item.completed':
+        item = obj.get('item', {{}}) or {{}}
+        it = item.get('type', '')
+        if it == 'agent_message':
+            text = (item.get('text', '') or '').strip()
+            if text:
+                emit('text', content=text)
+                last_message = text
+        elif it in _TOOL_ITEMS:
+            # If we never saw item.started for this id, synthesize the
+            # call so the dashboard always shows a call before its result.
+            if item.get('id', '') not in started_ids:
+                emit('tool_call', tool=tool_label(item), input=tool_input(item))
+            if it != 'todo_list':
+                emit('tool_result', content=tool_result_content(item))
+
+    elif t == 'turn.completed':
+        usage = obj.get('usage', {{}}) or {{}}
+        sum_input += usage.get('input_tokens', 0) or 0
+        sum_cached += usage.get('cached_input_tokens', 0) or 0
+        sum_output += usage.get('output_tokens', 0) or 0
+        sum_reasoning += usage.get('reasoning_output_tokens', 0) or 0
+        num_turns += 1
+
+    elif t == 'turn.failed':
+        err = obj.get('error')
+        if err:
+            last_message = '[turn.failed] ' + (err if isinstance(err, str) else json.dumps(err, ensure_ascii=False))
+
+fresh_input = sum_input - sum_cached
+if fresh_input < 0:
+    fresh_input = 0
+emit('session_end',
+    num_turns=num_turns,
+    input_tokens=fresh_input,
+    output_tokens=sum_output,
+    cache_read_input_tokens=sum_cached,
+    cache_creation_input_tokens=0,
+    reasoning_output_tokens=sum_reasoning,
+    input_tokens_total=sum_input,
+    model_usage={{MODEL: {{'inputTokens': fresh_input, 'outputTokens': sum_output}}}},
+    summary=last_message,
+)
+
+if last_message:
+    terminal(last_message)
+parts = []
+if fresh_input or sum_output:
+    parts.append('in=' + str(fresh_input) + ' cached=' + str(sum_cached) + ' out=' + str(sum_output) + ' reasoning=' + str(sum_reasoning))
+if num_turns:
+    parts.append('turns=' + str(num_turns))
+if parts:
+    terminal('[TOKENS] ' + ' | '.join(parts))
+
+JSONL.close()
+if RAW: RAW.close()
+'''
 
 
 # Where prompt variants live, mirroring Archon's prompt resolution
@@ -600,10 +780,12 @@ class CodexAgent:
     def _emit_session_start(self, jsonl: str, *, attempt: int) -> None:
         """Stamp a minimal session_start so the log records the model/role.
 
-        Codex's own raw stream then follows, byte-for-byte. We keep this
-        header consistent with ClaudeAgent's so a log viewer can still
-        read the model — but we do NOT synthesize a codex session_end /
-        cost row (deferred; codex's schema differs).
+        The normalized event stream from :data:`_CODEX_STREAM_PARSER`
+        then follows. We keep this header consistent with ClaudeAgent's so
+        the dashboard reads the model the same way for both harnesses; the
+        parser closes the run with a synthesized ``session_end`` carrying
+        the token breakdown (no ``total_cost_usd`` — codex bills none on a
+        native login).
         """
         Path(jsonl).parent.mkdir(parents=True, exist_ok=True)
         row: dict[str, object] = {
@@ -648,14 +830,15 @@ class CodexAgent:
         idle_timeout_s: float | None,
         attempt: int,
     ) -> RunOutcome:
-        """Run codex once with raw-stream logging + the shared watchdog."""
+        """Run codex once with normalized-stream logging + the watchdog."""
         log_base.parent.mkdir(parents=True, exist_ok=True)
         jsonl = f"{log_base}.jsonl"
+        raw_log = f"{log_base}.raw.jsonl"
         jsonl_path = Path(jsonl)
         last_message = log_base.parent / f"{log_base.name}.last_message.txt"
 
-        # Header row first, then codex's raw --json stream is appended to
-        # the same file.
+        # Header row first, then the parser appends normalized events to
+        # the same file (the raw codex stream goes to raw_log when verbose).
         self._emit_session_start(jsonl, attempt=attempt)
 
         argv = self.build_argv(
@@ -666,15 +849,25 @@ class CodexAgent:
             lake_root=cwd,
         )
 
-        # stderr → raw log when verbose, else devnull (mirrors ClaudeAgent).
-        stderr_dest = f"{log_base}.raw.jsonl" if verbose_logs else os.devnull
+        # Pipe codex's `exec --json` through the peer normaliser so its
+        # thread/turn/item stream lands in the dashboard's shared schema —
+        # text / tool_call / tool_result / session_end (with the token
+        # breakdown) — exactly like the claude-code path. stderr → raw log
+        # when verbose, else devnull (mirrors ClaudeAgent).
+        parser_script = _CODEX_STREAM_PARSER.format(
+            verbose=str(verbose_logs),
+            raw_log=raw_log,
+            jsonl=jsonl,
+            model=self.model,
+        )
+        stderr_dest = raw_log if verbose_logs else os.devnull
 
         result = supervise_streamed_run(
             argv,
             cwd=cwd,
             env=env,
             jsonl_path=jsonl_path,
-            stdout_dest=jsonl,  # codex JSON written raw, no parser
+            parser_cmd=[sys.executable, "-u", "-c", parser_script],
             stderr_dest=stderr_dest,
             cancel_event=cancel_event,
             idle_timeout_s=idle_timeout_s,

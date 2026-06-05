@@ -18,6 +18,14 @@ All notable changes to Archon are documented here.
   an extracted `supervise_streamed_run`. Gateway creds in `.archon/.env` (API
   key only in the child env, never argv); optional lean-lsp MCP
   (`mcp: "lean-lsp"`) and codex prompt variant (`prompt_variant: "codex"`).
+- **Codex dashboard / token parity.** Codex's `exec --json` stream is normalized
+  by a peer `_CODEX_STREAM_PARSER` (the claude parser is renamed
+  `_CLAUDE_STREAM_PARSER`) into the same `session_meta` / `text` / `tool_call` /
+  `tool_result` / `session_end` schema claude-code emits, so the dashboard renders
+  codex runs and the cost/token aggregators count codex tokens. `session_end`
+  records the token breakdown (fresh `input_tokens` = input − cached, plus
+  cache-read / output / reasoning) and omits `total_cost_usd` — codex bills no
+  per-token price on a native login.
 - **Harness selection at `archon init`.** A fresh `archon init` now asks which
   engine runs the loop's roles — Claude Code + Opus (default), Codex + GPT-5.5
   (native `~/.codex` login), or Mixed (per `plan` / `prover` / `review`; the
@@ -33,7 +41,8 @@ All notable changes to Archon are documented here.
 
 ### Known limitations
 
-- Codex: no dashboard cost/session parity; `run_interactive` unsupported
+- Codex: no per-token USD cost on a native login (tokens are recorded; the cost
+  column stays 0); `run_interactive` unsupported
   (interactive / init / merge stay claude-code); multilane lane axis is
   claude-code-only (a non-claude lane harness is rejected). Codex is more
   adversarial — gate its proofs behind a kernel-level checker. `gemini` runner

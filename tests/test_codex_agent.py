@@ -24,6 +24,8 @@ import json
 import os
 import pickle
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +33,7 @@ from pathlib import Path
 import archon.commands.init.utils as init_utils
 from archon.agent import ClaudeAgent, build_runner
 from archon.agents.codex import (
+    _CODEX_STREAM_PARSER,
     CodexAgent,
     LeanLspMcpUnavailableError,
     PartialGatewayConfigError,
@@ -739,6 +742,162 @@ class CodexPromptVariantTest(unittest.TestCase):
             self.assertEqual(
                 resolve_prompt_variant("codex", project_path=Path(proj)), "LOCAL"
             )
+
+
+class CodexStreamParserTest(unittest.TestCase):
+    """The peer normaliser turns codex's ``exec --json`` thread/turn/item
+    stream into the same downstream schema claude-code produces, so the
+    dashboard + cost/token aggregators stay harness-agnostic. Runs the
+    embedded parser script as a subprocess (python, not codex) over a
+    synthetic stream — no network, no codex binary.
+    """
+
+    def _run_parser(self, events, *, model="gpt-5.5", verbose=False):
+        stream = "\n".join(json.dumps(o) for o in events)
+        with tempfile.TemporaryDirectory() as d:
+            jsonl = os.path.join(d, "out.jsonl")
+            raw = os.path.join(d, "out.raw.jsonl")
+            script = _CODEX_STREAM_PARSER.format(
+                verbose=str(verbose), raw_log=raw, jsonl=jsonl, model=model
+            )
+            proc = subprocess.run(
+                [sys.executable, "-u", "-c", script],
+                input=stream,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            rows = [json.loads(l) for l in open(jsonl) if l.strip()]
+            raw_exists = os.path.exists(raw)
+        return rows, proc.stdout, raw_exists
+
+    def _events(self, rows):
+        return [r["event"] for r in rows]
+
+    def _session_end(self, rows):
+        ends = [r for r in rows if r["event"] == "session_end"]
+        self.assertEqual(len(ends), 1, "exactly one session_end expected")
+        return ends[0]
+
+    def test_full_stream_normalizes_to_shared_schema(self):
+        rows, _stdout, _raw = self._run_parser([
+            {"type": "thread.started", "thread_id": "abc-123"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {
+                "id": "m0", "type": "agent_message", "text": "Planning."}},
+            {"type": "item.started", "item": {
+                "id": "c1", "type": "command_execution",
+                "command": "lake build", "aggregated_output": "",
+                "exit_code": None, "status": "in_progress"}},
+            {"type": "item.completed", "item": {
+                "id": "c1", "type": "command_execution",
+                "command": "lake build", "aggregated_output": "ok",
+                "exit_code": 0, "status": "completed"}},
+            {"type": "item.completed", "item": {
+                "id": "x2", "type": "mcp_tool_call",
+                "server": "archon-lean-lsp", "tool": "lean_diagnostic_messages",
+                "arguments": {"file": "X.lean"}, "result": {"errors": 0},
+                "error": None, "status": "completed"}},
+            {"type": "item.completed", "item": {
+                "id": "f3", "type": "file_change",
+                "changes": [{"path": "X.lean", "kind": "update"}],
+                "status": "completed"}},
+            {"type": "item.completed", "item": {
+                "id": "m9", "type": "agent_message", "text": "Done."}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 2607762, "cached_input_tokens": 2506880,
+                "output_tokens": 23344, "reasoning_output_tokens": 9148}},
+        ])
+        events = self._events(rows)
+        # session_meta from thread.started, both agent_messages as text,
+        # each tool item a call+result, a closing session_end.
+        self.assertEqual(events[0], "session_meta")
+        self.assertEqual(rows[0]["session_id"], "abc-123")
+        self.assertEqual(events.count("text"), 2)
+        self.assertEqual(events.count("tool_call"), 3)
+        self.assertEqual(events.count("tool_result"), 3)
+        self.assertEqual(events[-1], "session_end")
+        # Tool labels are claude-style so the dashboard renders them.
+        labels = [r["tool"] for r in rows if r["event"] == "tool_call"]
+        self.assertEqual(labels, ["Bash", "lean_diagnostic_messages", "Edit"])
+
+    def test_session_end_token_breakdown_no_cost(self):
+        rows, _stdout, _raw = self._run_parser([
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 2607762, "cached_input_tokens": 2506880,
+                "output_tokens": 23344, "reasoning_output_tokens": 9148}},
+        ])
+        se = self._session_end(rows)
+        # fresh input = total - cached; cached → cache_read; no USD cost.
+        self.assertEqual(se["input_tokens"], 2607762 - 2506880)
+        self.assertEqual(se["cache_read_input_tokens"], 2506880)
+        self.assertEqual(se["output_tokens"], 23344)
+        self.assertEqual(se["reasoning_output_tokens"], 9148)
+        self.assertEqual(se["input_tokens_total"], 2607762)
+        self.assertEqual(se["num_turns"], 1)
+        self.assertNotIn("total_cost_usd", se)
+        self.assertEqual(
+            se["model_usage"],
+            {"gpt-5.5": {"inputTokens": 100882, "outputTokens": 23344}},
+        )
+
+    def test_multiple_turns_accumulate(self):
+        rows, _stdout, _raw = self._run_parser([
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 100, "cached_input_tokens": 20,
+                "output_tokens": 5, "reasoning_output_tokens": 1}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 200, "cached_input_tokens": 30,
+                "output_tokens": 7, "reasoning_output_tokens": 2}},
+        ])
+        se = self._session_end(rows)
+        self.assertEqual(se["num_turns"], 2)
+        self.assertEqual(se["input_tokens"], (100 + 200) - (20 + 30))
+        self.assertEqual(se["cache_read_input_tokens"], 50)
+        self.assertEqual(se["output_tokens"], 12)
+        self.assertEqual(se["reasoning_output_tokens"], 3)
+
+    def test_completed_tool_without_started_still_emits_call(self):
+        # A tool item that only ever produced item.completed (no started)
+        # must still surface a tool_call before its tool_result.
+        rows, _stdout, _raw = self._run_parser([
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "item.completed", "item": {
+                "id": "c1", "type": "command_execution",
+                "command": "echo hi", "aggregated_output": "hi",
+                "exit_code": 0, "status": "completed"}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0,
+                "output_tokens": 1, "reasoning_output_tokens": 0}},
+        ])
+        events = self._events(rows)
+        self.assertEqual(events.count("tool_call"), 1)
+        self.assertEqual(events.count("tool_result"), 1)
+        self.assertLess(events.index("tool_call"), events.index("tool_result"))
+
+    def test_empty_stream_still_closes_with_session_end(self):
+        # A run that produces nothing (killed early) still gets a
+        # session_end with zeroed tokens so downstream readers don't choke.
+        rows, _stdout, _raw = self._run_parser([])
+        se = self._session_end(rows)
+        self.assertEqual(se["num_turns"], 0)
+        self.assertEqual(se["input_tokens"], 0)
+        self.assertEqual(se["output_tokens"], 0)
+        self.assertNotIn("total_cost_usd", se)
+
+    def test_verbose_writes_raw_log(self):
+        events = [
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0,
+                "output_tokens": 1, "reasoning_output_tokens": 0}},
+        ]
+        _rows, _stdout, raw_exists_verbose = self._run_parser(events, verbose=True)
+        self.assertTrue(raw_exists_verbose)
+        _rows, _stdout, raw_exists_quiet = self._run_parser(events, verbose=False)
+        self.assertFalse(raw_exists_quiet)
 
 
 if __name__ == "__main__":

@@ -179,15 +179,22 @@ def _emit_idle_timeout(jsonl_path: str, idle_s: float, attempt: int) -> None:
         pass
 
 
-# ── stream parser ─────────────────────────────────────────────────────
+# ── claude-code stream parser ─────────────────────────────────────────
 #
 # Embedded Python script that consumes claude's `--output-format
 # stream-json` lines on stdin and writes a normalized JSONL (and an
 # optional raw log) to disk. Kept here — instead of as a sibling .py
 # file — so the agent module is self-contained: spawning the parser is
 # `python -c <script>`.
+#
+# This is the claude-code harness's normaliser; the codex harness owns a
+# peer ``_CODEX_STREAM_PARSER`` in :mod:`archon.agents.codex`. Both emit
+# the *same* downstream schema (`session_meta` / `thinking` / `text` /
+# `tool_call` / `tool_result` / `session_end`) so the dashboard and
+# cost/token aggregators are harness-agnostic — neither engine is the
+# "default" the other bolts onto.
 
-_STREAM_PARSER = r'''
+_CLAUDE_STREAM_PARSER = r'''
 import sys, json, datetime
 
 VERBOSE = '{verbose}' == 'True'
@@ -667,7 +674,7 @@ class ClaudeAgent:
             )
 
         cmd = cmd + ["--verbose", "--output-format", "stream-json"]
-        parser_script = _STREAM_PARSER.format(
+        parser_script = _CLAUDE_STREAM_PARSER.format(
             verbose=str(verbose_logs),
             raw_log=raw_log,
             jsonl=jsonl,
