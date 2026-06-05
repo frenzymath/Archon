@@ -68,7 +68,12 @@ def default_config() -> dict[str, Any]:
                 "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode before "
                 "each claude subprocess, so the session is attributed to the "
                 "VS Code extension. "
-                "'desktop': same but with CLAUDE_CODE_ENTRYPOINT=claude-desktop."
+                "'desktop': same but with CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+                "'claude-p': drive the Claude Code TUI headlessly via the "
+                "claude-p wrapper (subscription auth). "
+                "'interactive': run claude in the foreground for you to drive "
+                "by hand — the stable subscription fallback; forces serial "
+                "execution (parallel off, max_parallel 1) and disables multilane."
             ),
             'claude_backend': 'default',
             '_axiom_sweep_help': (
@@ -340,6 +345,230 @@ def resolve_subagent_model(
     return loop_section.get('model') or fallback
 
 
+# ── harness resolution ────────────────────────────────────────────────
+#
+# A *harness* is the engine that runs a responsibility (plan / prover /
+# review / a subagent / a lane). The default harness — ``"claude-code"`` —
+# is what Archon has always run, and these resolvers always return it for
+# an unconfigured project, so the default single-agent path is unchanged.
+# The schema is additive and mirrors the per-subagent ``model`` override
+# above: when no ``harness`` / ``roles`` keys are present, everything
+# resolves to the built-in default.
+#
+# Two layers (see docs):
+#   * ``runner``  — the engine: ``"claude-code"`` or ``"codex"``.
+#   * ``backend`` — only meaningful for the ``"claude-code"`` runner: which
+#     claude launch strategy (``default`` / ``claude-p`` / ``vscode`` /
+#     ``desktop`` / ``interactive``). Resolved to a :class:`ClaudeBackend`
+#     by :func:`archon.agent.build_runner`. Ignored by non-claude runners.
+
+DEFAULT_HARNESS = 'claude-code'
+
+
+def resolve_role_harness(
+    cfg: ProjectConfig, role: str, *, fallback: str = DEFAULT_HARNESS,
+) -> str:
+    """Pick the harness name for a loop role (plan / prover / review).
+
+    Precedence (mirrors :func:`resolve_subagent_model`):
+    ``loop.roles.<role>`` (str → harness name; dict → ``.harness``)
+    > ``loop.harness`` > ``fallback``.
+
+    Returns ``fallback`` (``"claude-code"``) for an empty/unconfigured
+    project, so the default loop path is unaffected.
+    """
+    loop_section = cfg.loop_section()
+    roles = loop_section.get('roles')
+    if isinstance(roles, dict):
+        val = roles.get(role)
+        if isinstance(val, dict):
+            harness = val.get('harness')
+            if isinstance(harness, str) and harness:
+                return harness
+        elif isinstance(val, str) and val:
+            return val
+    loop_harness = loop_section.get('harness')
+    if isinstance(loop_harness, str) and loop_harness:
+        return loop_harness
+    return fallback
+
+
+def resolve_subagent_harness(
+    cfg: ProjectConfig,
+    subagent_name: str,
+    *,
+    descriptor_harness: str | None = None,
+    fallback: str = DEFAULT_HARNESS,
+) -> str:
+    """Pick the harness name for a subagent.
+
+    Precedence: ``subagents.<name>.harness`` (str → harness name; dict →
+    ``.harness``) > ``loop.harness`` > descriptor frontmatter ``harness``
+    > ``fallback``.
+
+    ``descriptor_harness`` is the subagent descriptor's optional
+    ``harness`` frontmatter field (passed by the caller, since the config
+    layer doesn't read descriptors itself). It sits below ``loop.harness``
+    in precedence so a project-wide override still wins, but above the
+    built-in default so a descriptor can declare its own engine.
+    """
+    sub_section = dict(cfg.raw.get('subagents') or {})
+    val = sub_section.get(subagent_name)
+    if isinstance(val, dict):
+        harness = val.get('harness')
+        if isinstance(harness, str) and harness:
+            return harness
+    elif isinstance(val, str) and val:
+        # A bare string is the *model* alias (backward compat with
+        # ``resolve_subagent_model``), not a harness — ignore it here.
+        pass
+    loop_harness = cfg.loop_section().get('harness')
+    if isinstance(loop_harness, str) and loop_harness:
+        return loop_harness
+    if isinstance(descriptor_harness, str) and descriptor_harness:
+        return descriptor_harness
+    return fallback
+
+
+@dataclass(frozen=True)
+class HarnessDescriptor:
+    """One harness entry from ``harnesses.<name>`` in ``config.json``.
+
+    The descriptor is a **frozen, picklable** dataclass: it is resolved
+    once at the dispatch site (where the project config is available) and
+    then threaded — as the descriptor itself, not a bare name string —
+    into the prover process pool, subagents, and lanes, so each worker
+    can build a fully-configured runner via :func:`archon.agent.build_runner`
+    without re-reading config. (The ``raw`` dict holds only JSON-derived
+    primitives, so the whole descriptor round-trips through ``pickle``.)
+
+    Fields common to all harnesses:
+
+    * ``name`` — the harness key (e.g. ``"claude-code"`` / ``"codex-gpt"``).
+    * ``runner`` — which engine implements it. Supported runners:
+      ``"claude-code"`` (the built-in) and ``"codex"``.
+    * ``model`` — optional model id for this harness. For claude-code it
+      overrides the role/loop model alias; for codex it is the concrete
+      ``codex exec -m <model>`` model id (e.g. ``"gpt-5.5"``).
+    * ``backend`` — claude-code launch strategy (``default`` / ``claude-p``
+      / ``vscode`` / ``desktop`` / ``interactive``). This is the *layer-2*
+      seam: :func:`archon.agent.build_runner` resolves it to a
+      :class:`ClaudeBackend` for the claude-code runner. Unset → the
+      loop-wide backend (``--claude-backend`` / ``loop.claude_backend``)
+      passed to ``build_runner``. Ignored by non-claude runners.
+    * ``raw`` — the untouched config dict, so future fields can be read
+      without a schema migration. Note: ``frozen=True`` only blocks
+      *rebinding* the fields; ``raw`` is a plain ``dict`` and its contents
+      remain mutable, so treat it as read-only by convention.
+
+    Codex-only fields (ignored by the claude-code path):
+
+    * ``effort`` — ``model_reasoning_effort`` value (e.g. ``"xhigh"``).
+    * ``sandbox`` — codex ``--sandbox`` mode; defaults to
+      ``"danger-full-access"`` (parity with the claude-code baseline,
+      where Bash subprocesses are unconstrained so ``lake``/``lean`` work).
+    * ``prompt_variant`` — optional name of an alternate prompt-tail file
+      to append for this harness. Unset → the default prompt.
+    * ``mcp`` — optional MCP bundle(s) to wire in (string or list of known
+      bundle names, e.g. ``"lean-lsp"``); normalized to a tuple so the
+      descriptor stays hashable / picklable. Unset → no MCP. For codex
+      this becomes per-invocation ``-c mcp_servers.*`` overrides; the
+      claude-code path ignores it (it registers MCP at init time).
+    * ``base_url_env`` / ``key_env`` — names of the env vars holding the
+      gateway base URL and API key (mirrors the claude-code runner reading
+      ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN``). Both set → codex
+      routes through a ``-c``-injected custom provider; else native login.
+    * ``wire_api`` — the custom provider's wire protocol; defaults to
+      ``"responses"``.
+    """
+    name: str
+    runner: str = DEFAULT_HARNESS
+    model: str | None = None
+    backend: str | None = None
+    effort: str | None = None
+    sandbox: str = 'danger-full-access'
+    prompt_variant: str | None = None
+    mcp: tuple[str, ...] = ()
+    base_url_env: str | None = None
+    key_env: str | None = None
+    wire_api: str = 'responses'
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+def _opt_str(value: Any) -> str | None:
+    """Coerce a config value to a non-empty string, else ``None``."""
+    return value if isinstance(value, str) and value else None
+
+
+def _mcp_tuple(value: Any) -> tuple[str, ...]:
+    """Normalize the ``mcp`` config value to a tuple of bundle names.
+
+    Accepts a bare string (one bundle) or a list of strings. Anything
+    else — including ``None`` / empty string / empty list — normalizes to
+    an empty tuple ("no MCP", the current behavior). A tuple (not a list)
+    keeps the frozen descriptor hashable and picklable.
+    """
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x) for x in value if isinstance(x, str) and x)
+    return ()
+
+
+def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
+    """Resolve a harness name to its :class:`HarnessDescriptor`.
+
+    Looks up ``harnesses.<name>`` in the config. When the section is
+    absent — or ``name`` has no explicit entry — returns a built-in
+    descriptor whose runner defaults to its own name (so the built-in
+    ``"claude-code"`` resolves to the claude-code engine). This keeps the
+    default path free of config plumbing.
+
+    A configured descriptor with no ``runner`` key defaults its runner to
+    its own name. Codex-specific fields are parsed when present and
+    otherwise left at their defaults. Validation of the runner happens in
+    :func:`archon.agent.build_runner`, not here, so this loader stays a
+    pure read.
+    """
+    harnesses = cfg.raw.get('harnesses')
+    entry = harnesses.get(name) if isinstance(harnesses, dict) else None
+    if not isinstance(entry, dict):
+        return HarnessDescriptor(name=name, runner=name)
+    runner = entry.get('runner')
+    if not isinstance(runner, str) or not runner:
+        runner = name
+    sandbox = _opt_str(entry.get('sandbox'))
+    wire_api = _opt_str(entry.get('wire_api'))
+    return HarnessDescriptor(
+        name=name,
+        runner=runner,
+        model=_opt_str(entry.get('model')),
+        backend=_opt_str(entry.get('backend')),
+        effort=_opt_str(entry.get('effort')),
+        sandbox=sandbox if sandbox is not None else 'danger-full-access',
+        prompt_variant=_opt_str(entry.get('prompt_variant')),
+        mcp=_mcp_tuple(entry.get('mcp')),
+        base_url_env=_opt_str(entry.get('base_url_env')),
+        key_env=_opt_str(entry.get('key_env')),
+        wire_api=wire_api if wire_api is not None else 'responses',
+        raw=dict(entry),
+    )
+
+
+def has_explicit_harness_override(cfg: ProjectConfig, name: str) -> bool:
+    """True iff ``harnesses.<name>`` is explicitly present in the config.
+
+    Used by :func:`archon.agent.build_runner` to decide whether the
+    zero-regression short-circuit applies: a ``"claude-code"`` role with
+    no explicit ``harnesses."claude-code"`` entry must build exactly the
+    legacy ``ClaudeAgent``.
+    """
+    harnesses = cfg.raw.get('harnesses')
+    return isinstance(harnesses, dict) and isinstance(
+        harnesses.get(name), dict
+    )
+
+
 # ── state resolution ──────────────────────────────────────────────────
 
 
@@ -363,7 +592,7 @@ _CLAUDE_BACKEND_ENTRYPOINTS: dict[str, str | None] = {
 }
 
 # Backends that need their own class rather than just an entrypoint env var.
-_CLAUDE_BACKEND_SPECIAL = {"claude-p"}
+_CLAUDE_BACKEND_SPECIAL = {"claude-p", "interactive"}
 
 
 def resolve_claude_backend(
@@ -382,7 +611,9 @@ def resolve_claude_backend(
     Precedence: CLI ``--claude-p-config-dir`` > ``loop.claude_p_config_dir``
     in ``config.json`` > ``CLAUDE_CONFIG_DIR`` already in the environment.
     """
-    from archon.agent import ClaudeBackend, ClaudePBackend, EntrypointBackend
+    from archon.agent import (
+        ClaudeBackend, ClaudePBackend, EntrypointBackend, InteractiveBackend,
+    )
     from archon import log as _log
 
     valid = set(_CLAUDE_BACKEND_ENTRYPOINTS) | _CLAUDE_BACKEND_SPECIAL
@@ -401,6 +632,8 @@ def resolve_claude_backend(
             or None
         )
         return ClaudePBackend(config_dir=config_dir)
+    if raw == "interactive":
+        return InteractiveBackend()
     entrypoint = _CLAUDE_BACKEND_ENTRYPOINTS[raw]
     if entrypoint is not None:
         return EntrypointBackend(entrypoint)

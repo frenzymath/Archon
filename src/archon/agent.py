@@ -23,6 +23,7 @@ Quick reference:
 from __future__ import annotations
 
 import enum
+import functools
 import json
 import os
 import signal
@@ -33,8 +34,21 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from archon import log
+
+if TYPE_CHECKING:
+    from archon.commands.tooling.project_config import (
+        HarnessDescriptor,
+        ProjectConfig,
+    )
+
+
+# The built-in harness name: the claude-code engine that has always been
+# the only thing Archon runs. Routing a responsibility to this harness is
+# byte-for-byte equivalent to constructing a ``ClaudeAgent`` directly.
+DEFAULT_HARNESS = "claude-code"
 
 
 # Default model alias. ``opus`` resolves to the latest Opus build at the
@@ -212,6 +226,33 @@ def _emit_prompt(
         pass
 
 
+def _emit_interactive_session_end(jsonl_path: str, *, ok: bool, summary: str) -> None:
+    """Stamp a minimal ``session_end`` for a foreground interactive run.
+
+    A human-driven ``claude`` session produces no stream-json to parse, so
+    the dashboard / meta would otherwise see only a ``session_start``. We
+    write a single synthetic ``session_end`` (no token/cost data is
+    available from a TUI session) so the log is well-formed and the run
+    reads as finished. Phase-level success is judged downstream by the
+    usual sorry-count / git-diff checks, not this row.
+    """
+    row = {
+        "ts": _now_iso(),
+        "event": "session_end",
+        "total_cost_usd": 0,
+        "duration_ms": 0,
+        "num_turns": 1,
+        "summary": summary,
+        "interactive": True,
+        "ok": ok,
+    }
+    try:
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        pass
+
+
 def _emit_idle_timeout(jsonl_path: str, idle_s: float, attempt: int) -> None:
     """Record an idle-timeout kill in the JSONL.
 
@@ -377,6 +418,50 @@ if RAW: RAW.close()
 '''
 
 
+# ── AgentRunner protocol ──────────────────────────────────────────────
+
+
+@runtime_checkable
+class AgentRunner(Protocol):
+    """The engine interface every call site programs against.
+
+    :class:`ClaudeAgent` is the built-in implementation;
+    :class:`~archon.agents.codex.CodexAgent` is the first sibling engine.
+    Callers obtain a runner from :func:`build_runner` instead of
+    constructing ``ClaudeAgent`` directly, so swapping the engine for a
+    role becomes a config change rather than an edit at every site.
+
+    The two methods mirror :class:`ClaudeAgent`'s existing signatures
+    exactly — headless ``run`` and foreground ``run_interactive`` — so a
+    runner is a drop-in for the legacy agent object.
+    """
+
+    def run(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        log_base: Path | None = None,
+        verbose_logs: bool = False,
+        extra_args: list[str] | None = None,
+        env_overrides: dict[str, str] | None = None,
+        cancel_event: "threading.Event | None" = None,
+        idle_timeout_s: float | None = 900,
+        max_attempts: int = 3,
+        resume_session_id: str | None = None,
+    ) -> bool:
+        ...
+
+    def run_interactive(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        extra_args: list[str] | None = None,
+    ) -> int:
+        ...
+
+
 # ── ClaudeBackend ─────────────────────────────────────────────────────
 
 
@@ -418,6 +503,30 @@ class ClaudeBackend:
             cmd.extend(["--resume", resume_session_id])
         cmd.extend(["-p", prompt, *flags])
         return cmd, base_env
+
+
+@functools.lru_cache(maxsize=1)
+def _claude_p_help() -> str:
+    """``claude-p --help`` text, cached once per process.
+
+    Used to feature-detect optional flags so we never pass one an
+    older / stock-upstream ``claude-p`` build doesn't recognise (argparse
+    would abort the whole run). Returns ``""`` when ``claude-p`` can't be
+    run (not installed / errored) — callers then simply skip the flag.
+    """
+    try:
+        out = subprocess.run(
+            ["claude-p", "--help"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return (out.stdout or "") + (out.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _claude_p_supports(flag: str) -> bool:
+    """True iff the installed ``claude-p`` advertises ``flag`` in --help."""
+    return flag in _claude_p_help()
 
 
 class ClaudePBackend(ClaudeBackend):
@@ -474,11 +583,24 @@ class ClaudePBackend(ClaudeBackend):
             prompt, *flags,
             "--timeout-sec", str(self.timeout_sec),
             "--quiet-after-sec", str(self.quiet_after_sec),
-            # Emit assistant text as it appears in the TUI instead of
-            # buffering until the session ends — gives the dashboard
-            # something to show mid-run.
-            "--live-tui-deltas",
         ])
+        # Trust the workspace non-interactively so the TUI's "Do you trust
+        # the files in this folder?" prompt can't stall a headless lane /
+        # fresh-worktree run. This flag is provided by the maintained
+        # claude-p fork (github.com/AxelDlv00/claude-p); feature-detected
+        # so a stock-upstream build without it still runs.
+        if _claude_p_supports("--trust-workspace"):
+            cmd.append("--trust-workspace")
+        # Full live logging: tail Claude Code's session JSONL and re-emit
+        # real assistant/user events (text + tool calls + results) in
+        # stream-json, which our parser already understands. Prefer it over
+        # the lower-fidelity terminal-scraped text deltas, falling back to
+        # those when an older claude-p lacks the richer flag. Both are
+        # feature-detected so a stock-upstream build still runs.
+        if _claude_p_supports("--stream-session-events"):
+            cmd.append("--stream-session-events")
+        elif _claude_p_supports("--live-tui-deltas"):
+            cmd.append("--live-tui-deltas")
         # Capture claude-p's raw PTY transcript next to the phase JSONL.
         # This is the single most useful artifact when a run stalls: it
         # shows the actual interactive screen (auth prompts, rate-limit
@@ -563,6 +685,29 @@ class EntrypointBackend(ClaudeBackend):
             cmd.extend(["--resume", resume_session_id])
         cmd.extend(["-p", prompt, *flags])
         return cmd, env
+
+
+class InteractiveBackend(ClaudeBackend):
+    """Run ``claude`` in the **foreground**, driven by a human at the terminal.
+
+    This is the stable subscription fallback: instead of a headless
+    ``claude -p`` (or the claude-p TUI automation), it launches the real
+    interactive ``claude`` session and hands the terminal to the user, who
+    drives the proof themselves. :meth:`ClaudeAgent.run` detects this
+    backend and routes to its foreground path instead of ``build_headless``.
+
+    Because a human can only attend one terminal at a time, the loop forces
+    ``parallel=False`` / ``max_parallel=1`` and disables multilane when this
+    backend is selected (see ``commands/loop/entry.py``). ``build_headless``
+    is never used for this backend; it raises to make a misuse obvious.
+    """
+
+    def build_headless(self, *args, **kwargs):  # noqa: D401 - see class doc
+        raise NotImplementedError(
+            "InteractiveBackend runs claude in the foreground; it has no "
+            "headless command. ClaudeAgent.run routes around build_headless "
+            "for this backend."
+        )
 
 
 # ── ClaudeAgent ───────────────────────────────────────────────────────
@@ -720,7 +865,16 @@ class ClaudeAgent:
         send a short "continue from where you left off" message). The
         caller is responsible for sourcing the id (e.g. from a prior
         iter's meta.json via ``state.read_meta``).
+
+        When the backend is :class:`InteractiveBackend`, this routes to the
+        foreground, human-driven path (:meth:`_run_interactive_phase`)
+        instead — there is no headless stream to parse.
         """
+        if isinstance(self.backend, InteractiveBackend):
+            return self._run_interactive_phase(
+                prompt, cwd=cwd, log_base=log_base, extra_args=extra_args,
+            )
+
         real_model, provider_env_vars, provider = self._resolve_provider()
 
         merged = dict(provider_env_vars)
@@ -856,6 +1010,48 @@ class ClaudeAgent:
         self._announce_model(real_model=real_model, provider=provider)
         return subprocess.run(cmd, cwd=cwd, env=env).returncode
 
+    def _run_interactive_phase(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        log_base: Path | None = None,
+        extra_args: list[str] | None = None,
+    ) -> bool:
+        """Foreground, human-driven phase run (the ``interactive`` backend).
+
+        Launches the real ``claude`` TUI (no ``-p``) and hands the terminal
+        to the user, who drives the session themselves — the stable
+        subscription fallback. There is no stream-json to parse, so we stamp
+        a minimal ``session_start`` / ``session_end`` into ``{log_base}.jsonl``
+        for the dashboard and iter meta, and report success on a clean exit.
+        Real phase progress is judged downstream by the usual sorry-count /
+        git-diff checks. The loop forces serial execution for this backend
+        (one human, one terminal) — see ``commands/loop/entry.py``.
+        """
+        log.info(
+            "Interactive backend: launching claude in the foreground. Drive "
+            "the session yourself, then exit claude to let the loop continue."
+        )
+        jsonl: str | None = None
+        if log_base is not None:
+            jsonl = f"{log_base}.jsonl"
+            _emit_session_start(jsonl, model=self.model, role=self.role)
+            _emit_prompt(jsonl, prompt=prompt)
+
+        code = self.run_interactive(prompt, cwd=cwd, extra_args=extra_args)
+        ok = code == 0
+        if jsonl is not None:
+            _emit_interactive_session_end(
+                jsonl,
+                ok=ok,
+                summary=(
+                    "[interactive session ended]"
+                    if ok else f"[interactive session exited with code {code}]"
+                ),
+            )
+        return ok
+
     # ── internals ────────────────────────────────────────────────────
 
     def _announce_model(
@@ -938,97 +1134,26 @@ class ClaudeAgent:
             jsonl=jsonl,
         )
 
-        cancelled = False
-        idle_timeout_hit = False
         stderr_dest = raw_log if verbose_logs else os.devnull
-        with open(stderr_dest, "a") as stderr_file:
-            claude_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-                cwd=cwd,
-                env=env,
-            )
-            parser_proc = subprocess.Popen(
-                [sys.executable, "-u", "-c", parser_script],
-                stdin=claude_proc.stdout,
-                cwd=cwd,
-            )
-            assert claude_proc.stdout is not None
-            claude_proc.stdout.close()
+        result = supervise_streamed_run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            jsonl_path=jsonl_path,
+            parser_cmd=[sys.executable, "-u", "-c", parser_script],
+            stderr_dest=stderr_dest,
+            cancel_event=cancel_event,
+            idle_timeout_s=idle_timeout_s,
+            attempt=attempt,
+            role=self.role,
+            on_idle_timeout=lambda idle_s, att: _emit_idle_timeout(
+                jsonl, idle_s, att
+            ),
+        )
 
-            # Idle-watchdog state. We use the JSONL file's mtime as the
-            # liveness signal because the parser flushes on every event
-            # — cheap, no extra IPC, and survives even if claude's
-            # stdout is buffered upstream.
-            last_activity = time.monotonic()
-            try:
-                last_mtime = jsonl_path.stat().st_mtime
-            except OSError:
-                last_mtime = 0.0
-
-            # Poll the parser instead of blocking on .wait() so we can
-            # honour cancel_event from another thread (multilane uses
-            # this to kill slow lanes after another lane wins) and the
-            # idle watchdog. Tick every 200 ms — fine-grained enough to
-            # feel responsive, coarse enough to be cheap.
-            while parser_proc.poll() is None:
-                if cancel_event is not None and cancel_event.is_set():
-                    cancelled = True
-                    _terminate_process(claude_proc, sig=signal.SIGTERM)
-                    break
-
-                if idle_timeout_s is not None:
-                    try:
-                        mtime = jsonl_path.stat().st_mtime
-                    except OSError:
-                        mtime = last_mtime
-                    if mtime > last_mtime:
-                        last_mtime = mtime
-                        last_activity = time.monotonic()
-                    elif time.monotonic() - last_activity > idle_timeout_s:
-                        idle_timeout_hit = True
-                        log.warn(
-                            f"No JSONL activity for {idle_timeout_s}s on "
-                            f"attempt {attempt}; terminating claude."
-                        )
-                        _emit_idle_timeout(jsonl, idle_timeout_s, attempt)
-                        _terminate_process(claude_proc, sig=signal.SIGTERM)
-                        break
-
-                time.sleep(0.2)
-
-            if cancelled or idle_timeout_hit:
-                # Give claude a moment to tear down on its own, then
-                # escalate to SIGKILL. The parser will exit on its own
-                # once claude's stdout closes.
-                try:
-                    claude_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(claude_proc, sig=signal.SIGKILL)
-                    claude_proc.wait()
-                try:
-                    parser_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(parser_proc, sig=signal.SIGKILL)
-                    parser_proc.wait()
-            else:
-                # Normal teardown: parser already exited (saw
-                # session_end). If claude lingers (slow MCP teardown,
-                # for example), signal it.
-                try:
-                    claude_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process(claude_proc, sig=signal.SIGTERM)
-                    try:
-                        claude_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        _terminate_process(claude_proc, sig=signal.SIGKILL)
-                        claude_proc.wait()
-
-        if cancelled:
+        if result.cancelled:
             return RunOutcome.CANCELLED
-        if idle_timeout_hit:
+        if result.idle_timeout_hit:
             return RunOutcome.IDLE_TIMEOUT
 
         # Some lanes legitimately end with a non-zero return even though
@@ -1040,7 +1165,7 @@ class ClaudeAgent:
             session_end_indicates_success,
         )
 
-        if claude_proc.returncode == 0:
+        if result.returncode == 0:
             return RunOutcome.SUCCESS
         session_end = read_last_session_end(jsonl)
         if session_end_indicates_success(session_end):
@@ -1066,8 +1191,364 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
+# ── streamed-run supervisor ───────────────────────────────────────────
+
+
+@dataclass
+class SupervisionResult:
+    """Outcome of a single :func:`supervise_streamed_run` invocation.
+
+    The CLI-agnostic supervisor reports only the mechanical facts of the
+    run; mapping them onto a :class:`RunOutcome` (success vs. failure vs.
+    rate-limit, etc.) is the calling agent's job, since that depends on
+    the engine's own exit-code / log semantics.
+
+    Attributes:
+        returncode: the agent process's exit code (``None`` only if it
+            could not be reaped, which the supervisor never lets happen).
+        cancelled: ``cancel_event`` fired and the process was torn down.
+        idle_timeout_hit: the watchdog killed the process after
+            ``idle_timeout_s`` of zero JSONL activity.
+    """
+
+    returncode: int | None
+    cancelled: bool
+    idle_timeout_hit: bool
+
+
+def supervise_streamed_run(
+    agent_cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None,
+    jsonl_path: Path,
+    activity_path: Path | None = None,
+    parser_cmd: list[str] | None = None,
+    stdout_dest: str | None = None,
+    stderr_dest: str,
+    cancel_event: "threading.Event | None" = None,
+    idle_timeout_s: float | None = 900,
+    attempt: int = 1,
+    role: str | None = None,
+    on_idle_timeout=None,
+) -> SupervisionResult:
+    """Spawn one streaming agent process and supervise it to completion.
+
+    This is the CLI-agnostic supervision core shared by
+    :class:`ClaudeAgent` and :class:`~archon.agents.codex.CodexAgent`.
+    Both engines stream JSONL events line-by-line; the only differences
+    are how the command is built and how success is judged, so everything
+    *between* (process spawn + cancel handling + idle watchdog + ordered
+    teardown) lives here exactly once.
+
+    The agent process is launched with ``stdout`` either piped into
+    ``parser_cmd`` (claude's ``stream-json`` normaliser) or redirected to
+    ``stdout_dest`` (codex writes its native JSONL straight to disk).
+    Exactly one of ``parser_cmd`` / ``stdout_dest`` must be given. The
+    process whose lifetime the watchdog loop polls is the parser when
+    present, else the agent itself.
+
+    The idle watchdog uses the mtime of ``activity_path`` (defaults to
+    ``jsonl_path``) as a cheap liveness signal: every emitted event
+    flushes the JSONL, so a stalled provider stops bumping the mtime and
+    is killed after ``idle_timeout_s`` seconds. ``on_idle_timeout`` is an
+    optional ``(idle_s, attempt) -> None`` callback fired just before the
+    kill (used to stamp an ``idle_timeout`` row into the log).
+
+    Returns a :class:`SupervisionResult`; the caller maps it to a
+    :class:`RunOutcome`.
+    """
+    if (parser_cmd is None) == (stdout_dest is None):
+        raise ValueError(
+            "supervise_streamed_run: pass exactly one of parser_cmd / stdout_dest"
+        )
+    watch_path = activity_path if activity_path is not None else jsonl_path
+
+    cancelled = False
+    idle_timeout_hit = False
+
+    with open(stderr_dest, "a") as stderr_file:
+        if parser_cmd is not None:
+            agent_proc = subprocess.Popen(
+                agent_cmd,
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                cwd=cwd,
+                env=env,
+            )
+            parser_proc: subprocess.Popen | None = subprocess.Popen(
+                parser_cmd,
+                stdin=agent_proc.stdout,
+                cwd=cwd,
+            )
+            assert agent_proc.stdout is not None
+            agent_proc.stdout.close()
+            watched = parser_proc
+        else:
+            stdout_file = open(stdout_dest, "a")  # type: ignore[arg-type]
+            agent_proc = subprocess.Popen(
+                agent_cmd,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                cwd=cwd,
+                env=env,
+            )
+            stdout_file.close()
+            parser_proc = None
+            watched = agent_proc
+
+        # Idle-watchdog state. We use the JSONL file's mtime as the
+        # liveness signal because each emitted event flushes the file —
+        # cheap, no extra IPC, and survives even if the agent's stdout is
+        # buffered upstream.
+        last_activity = time.monotonic()
+        try:
+            last_mtime = watch_path.stat().st_mtime
+        except OSError:
+            last_mtime = 0.0
+
+        # Poll instead of blocking on .wait() so we can honour
+        # cancel_event from another thread (multilane uses this to kill
+        # slow lanes after another lane wins) and the idle watchdog. Tick
+        # every 200 ms — fine-grained enough to feel responsive, coarse
+        # enough to be cheap.
+        while watched.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                _terminate_process(agent_proc, sig=signal.SIGTERM)
+                break
+
+            if idle_timeout_s is not None:
+                try:
+                    mtime = watch_path.stat().st_mtime
+                except OSError:
+                    mtime = last_mtime
+                if mtime > last_mtime:
+                    last_mtime = mtime
+                    last_activity = time.monotonic()
+                elif time.monotonic() - last_activity > idle_timeout_s:
+                    idle_timeout_hit = True
+                    log.warn(
+                        f"No JSONL activity for {idle_timeout_s}s on "
+                        f"attempt {attempt}; terminating agent."
+                    )
+                    if on_idle_timeout is not None:
+                        on_idle_timeout(idle_timeout_s, attempt)
+                    _terminate_process(agent_proc, sig=signal.SIGTERM)
+                    break
+
+            time.sleep(0.2)
+
+        if cancelled or idle_timeout_hit:
+            # Give the agent a moment to tear down on its own, then
+            # escalate to SIGKILL. A piped parser exits on its own once
+            # the agent's stdout closes.
+            try:
+                agent_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _terminate_process(agent_proc, sig=signal.SIGKILL)
+                agent_proc.wait()
+            if parser_proc is not None:
+                try:
+                    parser_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(parser_proc, sig=signal.SIGKILL)
+                    parser_proc.wait()
+        else:
+            # Normal teardown: the watched process already exited. If the
+            # agent lingers (slow MCP teardown, for example), signal it.
+            try:
+                agent_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _terminate_process(agent_proc, sig=signal.SIGTERM)
+                try:
+                    agent_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(agent_proc, sig=signal.SIGKILL)
+                    agent_proc.wait()
+
+    return SupervisionResult(
+        returncode=agent_proc.returncode,
+        cancelled=cancelled,
+        idle_timeout_hit=idle_timeout_hit,
+    )
+
+
+# ── runner factory ────────────────────────────────────────────────────
+
+
+class UnknownHarnessError(ValueError):
+    """Raised when a configured harness has no runner in this version."""
+
+
+def _claude_backend_from_name(name: str | None) -> ClaudeBackend:
+    """Map a harness ``backend`` name to a :class:`ClaudeBackend` (layer-2).
+
+    This is the per-harness override path: a ``harnesses.<name>.backend``
+    value names which claude launch strategy to use for *that* role. It is
+    intentionally cfg-free so it works inside the prover process-pool
+    worker (which has only the picklable descriptor, no ``ProjectConfig``).
+    The loop-wide default backend (``--claude-backend`` / a populated
+    ``ProjectConfig``) is resolved by
+    :func:`archon.commands.tooling.project_config.resolve_claude_backend`
+    and passed into :func:`build_runner` as ``backend``; this helper only
+    handles an explicit per-harness override.
+
+    ``claude-p`` here uses ``CLAUDE_CONFIG_DIR`` from the environment for
+    its config dir (the cfg-sourced ``loop.claude_p_config_dir`` only
+    applies to the loop-wide default). Unknown names warn and fall back to
+    the plain backend rather than failing a run over a launch-strategy
+    typo.
+    """
+    key = (name or "default").strip().lower()
+    if key in ("", "default"):
+        return ClaudeBackend()
+    if key == "claude-p":
+        return ClaudePBackend()
+    if key == "interactive":
+        return InteractiveBackend()
+    if key == "vscode":
+        return EntrypointBackend("claude-vscode")
+    if key == "desktop":
+        return EntrypointBackend("claude-desktop")
+    log.warn(
+        f"Unknown harness backend {name!r}; valid values: default, "
+        f"claude-p, interactive, vscode, desktop. Using 'default'."
+    )
+    return ClaudeBackend()
+
+
+def build_runner(
+    *,
+    role: str,
+    model: str = DEFAULT_MODEL,
+    cfg: "ProjectConfig | None" = None,
+    harness: str | None = None,
+    descriptor: "HarnessDescriptor | None" = None,
+    backend: "ClaudeBackend | None" = None,
+) -> AgentRunner:
+    """Build the :class:`AgentRunner` for a responsibility.
+
+    The single decision point for routing a role to an engine. Registered
+    runners: ``"claude-code"`` (the built-in :class:`ClaudeAgent`) and
+    ``"codex"`` (:class:`~archon.agents.codex.CodexAgent`). An unknown
+    runner raises :class:`UnknownHarnessError`.
+
+    Resolution of *which* harness:
+
+    * ``descriptor`` (if given) is used verbatim — callers that already
+      resolved the picklable :class:`HarnessDescriptor` at the dispatch
+      site (the prover pool / subagent / lane) pass it directly.
+    * else ``harness`` (if given) is the harness name — resolved to a
+      descriptor via ``cfg`` when present, else used as a bare name.
+    * else ``cfg`` + ``role`` are resolved with
+      :func:`resolve_role_harness` (``loop.roles.<role>`` >
+      ``loop.harness`` > ``"claude-code"``).
+    * with none of those, the harness is the built-in ``"claude-code"``.
+
+    ``backend`` is the loop-wide :class:`ClaudeBackend` (the resolved
+    ``--claude-backend`` / ``loop.claude_backend``), threaded through to
+    the claude-code engine so the billing-change backends (claude-p,
+    vscode, …) keep working under the router. A harness whose descriptor
+    names its own ``backend`` overrides it for that role (layer-2);
+    non-claude runners ignore ``backend`` entirely.
+
+    Zero-regression invariant: when the resolved harness is
+    ``"claude-code"`` AND no explicit ``harnesses."claude-code"`` entry is
+    configured, this returns exactly ``ClaudeAgent(model=model,
+    role=role, backend=backend or ClaudeBackend())`` — the same object the
+    call site built before the router.
+
+    Raises:
+        UnknownHarnessError: the resolved harness names a runner that has
+            no implementation in this version.
+    """
+    if descriptor is not None:
+        return _runner_from_descriptor(
+            descriptor, model=model, role=role, default_backend=backend,
+        )
+
+    # Resolve the harness name.
+    if harness is None:
+        if cfg is not None:
+            from archon.commands.tooling.project_config import resolve_role_harness
+
+            harness = resolve_role_harness(cfg, role, fallback=DEFAULT_HARNESS)
+        else:
+            harness = DEFAULT_HARNESS
+
+    # Fast path / zero-regression short-circuit: the built-in claude-code
+    # harness with no explicit descriptor override is the legacy agent,
+    # untouched (modulo the loop-wide backend, which it has always carried).
+    has_override = False
+    if cfg is not None:
+        from archon.commands.tooling.project_config import (
+            has_explicit_harness_override,
+        )
+
+        has_override = has_explicit_harness_override(cfg, harness)
+
+    if harness == DEFAULT_HARNESS and not has_override:
+        return ClaudeAgent(
+            model=model, role=role, backend=backend or ClaudeBackend(),
+        )
+
+    # A configured harness descriptor: load + dispatch on its runner.
+    from archon.commands.tooling.project_config import load_harness_descriptor
+
+    resolved = load_harness_descriptor(cfg, harness) if cfg is not None else None
+    if resolved is None:
+        # No cfg to load from, but a non-default harness name was passed
+        # directly. Synthesize a minimal descriptor whose runner is the
+        # name itself, so an unknown name still raises clearly.
+        from archon.commands.tooling.project_config import HarnessDescriptor
+
+        resolved = HarnessDescriptor(name=harness, runner=harness)
+    return _runner_from_descriptor(
+        resolved, model=model, role=role, default_backend=backend,
+    )
+
+
+def _runner_from_descriptor(
+    descriptor: "HarnessDescriptor",
+    *,
+    model: str,
+    role: str,
+    default_backend: "ClaudeBackend | None" = None,
+) -> AgentRunner:
+    """Construct the engine runner named by a resolved descriptor.
+
+    The single place that maps ``descriptor.runner`` → a concrete
+    :class:`AgentRunner`. ``claude-code`` honours the descriptor's model
+    override (else keeps ``model``) and its ``backend`` override (else the
+    loop-wide ``default_backend``); ``codex`` is built straight from the
+    descriptor (model / effort / sandbox / gateway all live there).
+    """
+    runner = descriptor.runner
+    if runner == DEFAULT_HARNESS:
+        if descriptor.model:
+            model = descriptor.model
+        if descriptor.backend:
+            chosen = _claude_backend_from_name(descriptor.backend)
+        else:
+            chosen = default_backend or ClaudeBackend()
+        return ClaudeAgent(model=model, role=role, backend=chosen)
+    if runner == "codex":
+        from archon.agents.codex import CodexAgent
+
+        return CodexAgent(descriptor=descriptor, role=role)
+    raise UnknownHarnessError(
+        f"Harness {descriptor.name!r} requests runner {runner!r}, but the "
+        f"runners available in this version of Archon are "
+        f"{DEFAULT_HARNESS!r} and 'codex'. Remove the harness override or "
+        f"set its runner to a supported value."
+    )
+
+
 __all__ = [
-    "ClaudeAgent", "ClaudeBackend", "ClaudePBackend", "EntrypointBackend",
-    "DEFAULT_MODEL", "DISALLOWED_NATIVE_TOOLS", "BASH_FOREGROUND_TIMEOUT_MS",
-    "RunOutcome", "QuotaExhaustedError",
+    "AgentRunner", "ClaudeAgent", "ClaudeBackend", "ClaudePBackend",
+    "EntrypointBackend", "InteractiveBackend", "DEFAULT_HARNESS", "DEFAULT_MODEL",
+    "DISALLOWED_NATIVE_TOOLS", "BASH_FOREGROUND_TIMEOUT_MS",
+    "RunOutcome", "QuotaExhaustedError", "SupervisionResult",
+    "UnknownHarnessError", "build_runner", "supervise_streamed_run",
 ]

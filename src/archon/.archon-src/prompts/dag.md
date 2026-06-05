@@ -273,6 +273,7 @@ You may write:
 - `.archon/STRATEGY.md` — the long-arc strategy (you establish it; the loop's planner continues it)
 - `.archon/PROGRESS.md` — the objectives/plan: keep `## Current Objectives` consistent with STRATEGY.md + the blueprint (the loop continues it). Do NOT fabricate prover-execution state (build status, `\leanok`, attempt history).
 - `.archon/DAG_STATUS.md` — completion status
+- `.archon/ARCHON_MEMORY.md` — condensed cross-iteration project knowledge (injected as "Archon memory" below). Seed durable facts the later plan agent should know — Mathlib gaps, dead ends, protected invariants — within the file's hard limits (≤10 bullets / ≤600 chars). Do NOT duplicate what STRATEGY.md/PROGRESS.md already say.
 - `.archon/iter/iter-NNN/dag.md` — iteration narrative
 - `TO_USER.md` — requests for the user (e.g. unreachable references to supply)
 - Directive files for subagents under `.archon/logs/iter-NNN/`

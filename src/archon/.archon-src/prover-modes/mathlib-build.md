@@ -141,6 +141,8 @@ One section per declaration attempted. For each: approach, result (RESOLVED / FA
 
 **Write a `## Summary` section** before the verdicts: declarations added (count + names), declarations blocked (count + why), sorry count before → after across your file.
 
+**Write a `## Needs blueprint entry` section.** This mode is the biggest source of blueprint debt: every non-private definition/lemma you add is, by construction, infrastructure with **no blueprint block yet** — a `lean_aux` node invisible to the dependency graph (`archon dag-query unmatched` will list it) until the planner/reviewer blueprints it. List each new non-private declaration (name, file, and the facts its proof relies on) so the 1-to-1 Lean ↔ blueprint correspondence the dag agent built is restored next iter. Closing 0 project sorries while adding 3 unreported helpers does not advance the project — it quietly re-introduces the isolation the DAG phase worked to eliminate. Reporting them is mandatory.
+
 **Write a `## Why I stopped` section** — be brutally honest. Only axiom-clean Lean declarations count as progress. Comments, sketches, and log prose do NOT. If you wrote down approaches you didn't attempt, say so:
 
 - `Real progress`: N axiom-clean declarations added — name each one with its line number.

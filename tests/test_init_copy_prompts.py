@@ -78,6 +78,38 @@ class CopyPromptsSymlinkRegressionTest(unittest.TestCase):
             )
 
 
+class CopyPromptsVariantsTest(unittest.TestCase):
+    """``CopyPromptsStep`` must also copy the harness ``variants/`` subdir
+    (e.g. the codex prover-prompt tail) into ``.archon/prompts/variants/``."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.addCleanup(_rmtree, self._tmp)
+        self.project = Path(self._tmp)
+        (self.project / ".archon").mkdir(parents=True)
+        self.prompts_src = data_path("prompts")
+
+    def _ctx(self) -> InitContext:
+        return InitContext(
+            project_path=self.project,
+            state_dir=self.project / ".archon",
+            fresh=True,
+            model="dummy",
+        )
+
+    def test_variants_subdir_copied(self):
+        variants_src = self.prompts_src / "variants"
+        # The bundled tree ships at least the codex variant.
+        self.assertTrue((variants_src / "codex.md").is_file())
+
+        CopyPromptsStep(self._ctx()).run()
+
+        for f in sorted(variants_src.glob("*.md")):
+            dst = self.project / ".archon" / "prompts" / "variants" / f.name
+            self.assertTrue(dst.is_file(), f"{dst} should be copied")
+            self.assertEqual(dst.read_bytes(), f.read_bytes())
+
+
 class InitCommandFreshFlagTest(unittest.TestCase):
     """``InitCommand`` must demote ``ctx.fresh`` to False for any reinit
     mode (overwrite / merge / keep). The bug was that overwrite kept

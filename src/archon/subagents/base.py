@@ -29,10 +29,12 @@ from pathlib import Path
 from textwrap import dedent
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 from archon.commands.tooling.project_config import (
+    load_harness_descriptor,
     load_project_config,
     resolve_claude_backend,
+    resolve_subagent_harness,
     resolve_subagent_model,
 )
 from archon.dispatch import SlotPool
@@ -91,6 +93,7 @@ class SubagentDescriptor:
     default_enabled: bool = True
     mandatory: tuple[str, ...] = ()
     dispatcher_notes: str = ""
+    harness: str = "claude-code"
     prompt_body: str = ""
     source_path: Path | None = None
 
@@ -274,6 +277,16 @@ class Subagent:
             self.backend = backend
         else:
             self.backend = resolve_claude_backend(cfg)
+        # Resolve the harness for this subagent: per-subagent / loop-wide
+        # config override > descriptor frontmatter > "claude-code". With no
+        # config keys this is "claude-code", so build_runner short-circuits
+        # to the legacy ClaudeAgent (carrying ``backend``) below. Resolved
+        # to the full (picklable) descriptor so a codex-routed subagent
+        # carries model / effort / gateway, not just a name.
+        harness_name = resolve_subagent_harness(
+            cfg, self.name, descriptor_harness=descriptor.harness,
+        )
+        self.harness = load_harness_descriptor(cfg, harness_name)
 
     # ── prompt envelope ─────────────────────────────────────────────
 
@@ -359,7 +372,10 @@ class Subagent:
         prompt = self.build_prompt(
             directive=directive, slug=slug, iter_num=iter_num,
         )
-        agent = ClaudeAgent(model=self.model, role=self.name, backend=self.backend)
+        agent = build_runner(
+            role=self.name, model=self.model, descriptor=self.harness,
+            backend=self.backend,
+        )
 
         start_ts = _now_iso()
         if dispatch_log is not None:

@@ -39,6 +39,16 @@ class LaneConfig:
     lane_id: str
     label: str
     provider: str
+    # The harness that drives this lane. Parsed from config and threaded
+    # through dispatch into ``build_runner`` — but the lane axis currently
+    # supports only the ``"claude-code"`` runner. A lane whose harness
+    # resolves to a non-claude runner (e.g. codex) is rejected at dispatch
+    # build with a clear error, because lane result-attribution
+    # (code_snapshot hook events / Edit-Write tool_calls) does not yet
+    # track non-claude-code edits. Real per-lane non-claude support is a
+    # follow-up. Defaults to "claude-code" so existing lane configs are
+    # unchanged.
+    harness: str = 'claude-code'
     claude_config_dir: str | None = None
     claude_settings_path: str | None = None
     env: dict[str, str] = field(default_factory=dict)

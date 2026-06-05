@@ -14,7 +14,8 @@ import traceback
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend
+from archon.agent import ClaudeBackend, DEFAULT_HARNESS, build_runner
+from archon.commands.tooling.project_config import HarnessDescriptor
 from archon.multilane.dispatch import build_assignment_prompt
 from archon.state import utcnow_iso
 
@@ -47,6 +48,7 @@ class LaneAssignmentRunner:
         lane_env: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
         backend: ClaudeBackend | None = None,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -61,6 +63,14 @@ class LaneAssignmentRunner:
         self.lane_env = lane_env
         self.cancel_event = cancel_event
         self.backend = backend or ClaudeBackend()
+        # The lane's resolved harness descriptor (from LaneConfig.harness,
+        # resolved at the dispatch site, guarded to the claude-code runner
+        # there). None → built-in claude-code, so an unconfigured lane
+        # builds exactly the legacy ClaudeAgent carrying ``backend``.
+        self.harness = (
+            harness if harness is not None
+            else HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
+        )
 
         self.lane_path = Path(assignment.worktree_path)
         self.slug = file_slug(assignment.assigned_file)
@@ -178,7 +188,10 @@ class LaneAssignmentRunner:
             run_env = {**run_env, **self.lane_env}
 
         try:
-            return ClaudeAgent(model=self.model, role=role_tag, backend=self.backend).run(
+            return build_runner(
+                role=role_tag, model=self.model, descriptor=self.harness,
+                backend=self.backend,
+            ).run(
                 prompt,
                 cwd=self.lane_path,
                 log_base=Path(self.assignment.log_path),

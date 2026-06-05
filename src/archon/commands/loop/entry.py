@@ -11,7 +11,8 @@ from typing import Optional
 
 import typer
 
-from archon.agent import DEFAULT_MODEL
+from archon import log
+from archon.agent import DEFAULT_MODEL, InteractiveBackend
 from archon.types import Stage
 
 from .command import LoopCommand, parse_from_phase
@@ -142,6 +143,8 @@ def loop(
             "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
             "'claude-p': use the claude-p TUI-backed wrapper instead of claude -p "
             "(useful when the headless API is rate-limited on a subscription account). "
+            "'interactive': run claude in the foreground for you to drive by hand "
+            "(stable subscription fallback; forces serial execution, no multilane). "
             "(default from .archon/config.json loop.claude_backend or 'default')"
         ),
     ),
@@ -211,6 +214,19 @@ def loop(
     # purely through .archon/config.json.
     multilane_lanes = multilane_cfg.get('lanes') or []
     multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
+
+    # The interactive backend hands the terminal to a human, who can only
+    # drive one session at a time — force serial provers (parallel=False,
+    # max_parallel=1) and disable multilane, overriding any config/flags.
+    if isinstance(backend, InteractiveBackend):
+        if parallel or max_parallel != 1 or multilane_execute:
+            log.info(
+                "Interactive backend: forcing serial execution "
+                "(parallel=False, max_parallel=1) and disabling multilane."
+            )
+        parallel = False
+        max_parallel = 1
+        multilane_execute = False
 
     # --resume without an explicit --from auto-detects which phase to
     # resume by inspecting the prior iter's meta.json — done inside

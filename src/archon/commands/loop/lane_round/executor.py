@@ -200,6 +200,7 @@ class LaneRoundExecutor:
         )
         iter_dir = self.state_dir / 'logs' / f'iter-{self.iteration:03d}'
         lane_providers = {lane.lane_id: lane.provider for lane in config.lanes}
+        lane_harnesses = self._build_lane_harnesses(config)
         lane_envs = self._build_lane_envs(config)
 
         # Per-(lane, file) cancel event. When one lane finishes a file
@@ -220,6 +221,7 @@ class LaneRoundExecutor:
                         assignment, iter_dir,
                         lane_providers.get(assignment.lane_id),
                         lane_envs.get(assignment.lane_id),
+                        lane_harnesses.get(assignment.lane_id),
                     ): assignment
                     for assignment in self._assignments
                 }
@@ -257,9 +259,59 @@ class LaneRoundExecutor:
                 lane_envs[lane.lane_id] = {}
         return lane_envs
 
+    def _build_lane_harnesses(self, config: MultiLaneConfig):
+        """Resolve each lane's ``harness`` name to a full descriptor.
+
+        ``LaneConfig.harness`` is just a name (default ``"claude-code"``).
+        Resolving it here — at the dispatch site, where the project config
+        is loadable — lets the descriptor (model / backend) travel with the
+        lane. Returns ``{lane_id: HarnessDescriptor}``.
+
+        Phase-1 guard (fail-closed): the lane axis only supports the
+        ``"claude-code"`` runner today. A lane whose resolved harness names
+        a non-claude runner (e.g. ``codex``) is rejected *here*, before any
+        lane subprocess spawns — because lane result-attribution
+        (``assignment_code_snapshot_files`` → ``assignment_success``) only
+        recognizes Claude Code's ``code_snapshot`` hook events and
+        ``Edit``/``Write`` tool_calls. Codex writes neither (it applies
+        edits via apply_patch / ``file_change`` items in its raw stream),
+        so a successful codex lane edit would silently fail to promote and
+        never trigger early-stop. Rather than downgrade silently, we raise.
+        To run codex as the prover, route it via ``loop.roles.prover``
+        (the single-lane prover path supports it).
+        """
+        from archon.agent import UnknownHarnessError
+        from archon.commands.tooling.project_config import (
+            DEFAULT_HARNESS,
+            load_harness_descriptor,
+            load_project_config,
+        )
+
+        cfg = load_project_config(self.project_path)
+        harnesses = {}
+        for lane in config.lanes:
+            descriptor = load_harness_descriptor(cfg, lane.harness)
+            if descriptor.runner != DEFAULT_HARNESS:
+                raise UnknownHarnessError(
+                    f"Lane {lane.lane_id!r} requests harness "
+                    f"{descriptor.name!r} (runner {descriptor.runner!r}), but "
+                    f"the multilane lane axis only supports the "
+                    f"{DEFAULT_HARNESS!r} runner today. Lane-level result "
+                    f"attribution tracks only Claude Code's code_snapshot "
+                    f"hook events and Edit/Write tool_calls, so a "
+                    f"{descriptor.runner!r} lane's edits would silently fail "
+                    f"to promote and never trigger early-stop. To run codex "
+                    f"as the prover, route it via loop.roles.prover instead "
+                    f"(the single-lane prover path supports it), or keep "
+                    f"this lane on {DEFAULT_HARNESS!r}."
+                )
+            harnesses[lane.lane_id] = descriptor
+        return harnesses
+
     def _run_one(
         self, assignment, iter_dir: Path,
         lane_provider: str | None, lane_env: dict[str, str] | None,
+        lane_harness=None,
     ) -> dict[str, object]:
         runner = LaneAssignmentRunner(
             project_name=self.project_name,
@@ -275,6 +327,7 @@ class LaneRoundExecutor:
             lane_env=lane_env,
             cancel_event=self._cancel_events[assignment.assignment_id],
             backend=self.backend,
+            harness=lane_harness,
         )
         return runner.run()
 

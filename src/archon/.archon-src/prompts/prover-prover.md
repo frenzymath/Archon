@@ -14,6 +14,17 @@ You fill `sorry` placeholders with complete proofs in your assigned `.lean` file
 
 **Write permissions**: only your assigned `.lean` file(s) and `task_results/<your_file>.md`. Do NOT edit `PROGRESS.md`, `task_pending.md`, `task_done.md`, blueprint chapters, or other agents' files.
 
+## Know your target in the dependency graph (leandag)
+
+The blueprint dependency graph is queryable **read-only** — `archon` is on PATH, `--json` is parseable (the banner goes to stderr). Use it to ground your work instead of guessing:
+
+- `archon dag-query node --node <label> --json` — your target's blueprint entry, its `\lean{}` pin, and status. **If the `\lean{}` pin is a `…TODO.…` placeholder, the Lean declaration does not exist yet** — you must *create* it (the typed `sorry`, or the proof if your mode builds it), not "fill" a name that isn't in the environment.
+- `archon dag-query ancestors --node <label> --json` — your target's full dependency closure. Build on deps that are actually done (`\leanok`); a dependency still marked ∞ / `sorry` is **not** a sound foundation — cite it only if it genuinely typechecks today.
+- `archon dag-query gaps --json` — the ∞ holes (statements with no informal proof). If your target's cone hits one, the blueprint sketch is incomplete: flag it in your task_result rather than inventing a proof to paper over it.
+- `archon dag-query unmatched --json` — Lean decls with no blueprint entry. After you add helpers, your new names surface here until they're blueprinted — that is the debt you must report (see Logging → "Needs blueprint entry").
+
+The label↔Lean mapping is the `\lean{}` annotation in the blueprint block; `leandag stats` / `leandag focus` also give a project-wide view. You never *write* the graph — that's the dag/plan/review agents' job — but reading it keeps you from proving against a hollow or unfinished foundation.
+
 ## Protected declarations
 
 `archon-protected.yaml` lists declarations with **frozen signatures**. You may fill their proof bodies but must not rename, re-type, reorder arguments, or weaken hypotheses. Only the mathematician edits protected signatures.
@@ -69,7 +80,7 @@ When stuck more generally: break into smaller subgoals, search Mathlib more thor
 - Keep edits minimal; don't delete comments or change labels; don't add unrelated declarations.
 - Helper lemmas you introduced may be modified if they turn out wrong.
 - Add a concise comment above each helper lemma so reuse is easy.
-- **List every helper declaration you introduce in your task_result** (name, file, and the facts its proof relies on). The project keeps a 1-to-1 Lean ↔ blueprint correspondence — the review agent and planner use your list to give each helper a blueprint entry, so unreported helpers become invisible dependencies in the graph.
+- **List every new declaration you introduce under a `## Needs blueprint entry` heading in your task_result** (name, file, and the facts its proof relies on) — see Logging below. The project keeps a 1-to-1 Lean ↔ blueprint correspondence: the review agent and planner consume this list (and `archon dag-query unmatched`) to give each new declaration a blueprint block. An unreported helper is an invisible, isolated dependency that silently corrupts the frontier — flagging it is mandatory, not optional. (You never write the blueprint yourself; you only name what needs one.)
 - **`change` vs `show`** — `change` reshapes the goal up to defeq; `show` is purely display-level annotation. Using `show` where `change` is needed produces a linter warning. Default to `change` when in doubt.
 
 ## Mathlib tags in PROGRESS.md
@@ -126,9 +137,12 @@ Write to `task_results/<your_file>.md` (mirror your `.lean` path: `Algebra/WLoca
 - **Result:** PARTIAL (branch closed) — injectivity closed; surjectivity remains
 - **Next step:** `PrimeSpectrum.range_comap_of_surjective` for the right branch
 - **Lemmas found:** `PrimeSpectrum.comap_surjective`
+
+## Needs blueprint entry
+- `Algebra.WLocal.helper_bijective` (line 78) — new helper, no blueprint block yet. Uses: `PrimeSpectrum.comap_injective`. Reviewer/planner: add a `\label` + `\lean` + `\uses` entry so the 1-to-1 correspondence holds.
 ```
 
-**Rules**: one section per theorem/lemma in your file. Each attempt records approach, result (RESOLVED / FAILED / PARTIAL / IN PROGRESS), dead-end warnings or next steps. Log negative search results ("Searched 'projective module infinite rank' — nothing in Mathlib"). The plan agent merges these into `task_pending.md` / `task_done.md` next iter.
+**Rules**: one section per theorem/lemma in your file. Each attempt records approach, result (RESOLVED / FAILED / PARTIAL / IN PROGRESS), dead-end warnings or next steps. Log negative search results ("Searched 'projective module infinite rank' — nothing in Mathlib"). The plan agent merges these into `task_pending.md` / `task_done.md` next iter. **Always include the `## Needs blueprint entry` section when you added any new declaration** (omit it only if you added none) — it is how the loop keeps Lean ↔ blueprint at 1-to-1.
 
 **Read-only context**: read `task_pending.md` (prior attempts on your file) and `task_done.md` (when the problem resembles a completed one). Do not write to either.
 

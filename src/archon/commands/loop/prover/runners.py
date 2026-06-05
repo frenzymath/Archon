@@ -16,7 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, QuotaExhaustedError
+from archon.agent import (
+    ClaudeBackend,
+    DEFAULT_HARNESS,
+    QuotaExhaustedError,
+    build_runner,
+)
+from archon.commands.tooling.project_config import HarnessDescriptor
 from archon.prompts import (
     build_parallel_prover_prompt,
     build_prover_prompt,
@@ -31,6 +37,17 @@ from archon.state import (
 from ..resume import PROVER_CONTINUE, persist_session_id, pick_resume_session
 from ..utils import file_slug, relpath
 from .environment import ProverEnvironment, snapshot_baseline
+
+
+def _default_harness() -> HarnessDescriptor:
+    """The built-in claude-code descriptor (zero-config default).
+
+    Used as the default for the prover runners so an unconfigured project
+    threads exactly the built-in claude-code runner — :func:`build_runner`
+    short-circuits a ``runner == "claude-code"`` descriptor to the legacy
+    :class:`~archon.agent.ClaudeAgent` (carrying the loop-wide backend).
+    """
+    return HarnessDescriptor(name=DEFAULT_HARNESS, runner=DEFAULT_HARNESS)
 
 
 def _load_mode_content(state_dir: Path, mode_name: str | None) -> str | None:
@@ -57,9 +74,21 @@ def _run_single_prover(
     project_path: Path | None = None,
     resume_session_id: str | None = None,
     backend: ClaudeBackend | None = None,
+    harness: HarnessDescriptor | None = None,
 ) -> bool:
-    """Top-level for `ProcessPoolExecutor` — must be importable by the worker."""
-    agent = ClaudeAgent(model=model, role="prover", backend=backend or ClaudeBackend())
+    """Top-level for `ProcessPoolExecutor` — must be importable by the worker.
+
+    ``harness`` is the resolved, **picklable** :class:`HarnessDescriptor`
+    (a frozen dataclass) — not a bare name string — so the worker can build
+    a fully-configured runner (codex model / effort / gateway, or the
+    claude-code engine carrying ``backend``) via :func:`build_runner`
+    without re-reading config. ``None`` → built-in claude-code.
+    """
+    descriptor = harness if harness is not None else _default_harness()
+    agent = build_runner(
+        role="prover", model=model, descriptor=descriptor,
+        backend=backend or ClaudeBackend(),
+    )
     if snap_dir is not None and project_path is not None:
         with ProverEnvironment(
             snap_dir=snap_dir,
@@ -99,6 +128,7 @@ class SerialProverRunner:
         iter_meta: Path | None = None,
         resume_enabled: bool = False,
         backend: ClaudeBackend | None = None,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -112,6 +142,7 @@ class SerialProverRunner:
         self.iter_meta = iter_meta
         self.resume_enabled = resume_enabled
         self.backend = backend or ClaudeBackend()
+        self.harness = harness if harness is not None else _default_harness()
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
         prompt = build_prover_prompt(
@@ -143,7 +174,10 @@ class SerialProverRunner:
             project_path=self.project_path,
             serial_mode=True,
         ):
-            ClaudeAgent(model=self.model, role="prover", backend=self.backend).run(
+            build_runner(
+                role="prover", model=self.model, descriptor=self.harness,
+                backend=self.backend,
+            ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
@@ -182,6 +216,7 @@ class ParallelProverRunner:
         debug_feedback: bool = False,
         resume_enabled: bool = False,
         backend: ClaudeBackend | None = None,
+        harness: HarnessDescriptor | None = None,
     ) -> None:
         self.project_name = project_name
         self.project_path = project_path
@@ -200,6 +235,7 @@ class ParallelProverRunner:
         self.debug_feedback = debug_feedback
         self.resume_enabled = resume_enabled
         self.backend = backend or ClaudeBackend()
+        self.harness = harness if harness is not None else _default_harness()
 
     def run(self, *, dry_run: bool) -> None:
         progress = self.state_dir / "PROGRESS.md"
@@ -343,7 +379,10 @@ class ParallelProverRunner:
             prover_jsonl=Path(str(prover_log) + ".jsonl"),
             project_path=self.project_path,
         ):
-            ok = ClaudeAgent(model=self.model, role="prover", backend=self.backend).run(
+            ok = build_runner(
+                role="prover", model=self.model, descriptor=self.harness,
+                backend=self.backend,
+            ).run(
                 PROVER_CONTINUE if resume_sid else prompt,
                 cwd=self.project_path,
                 log_base=prover_log, verbose_logs=self.verbose_logs,
@@ -433,7 +472,7 @@ class ParallelProverRunner:
                     submit_prompt, self.project_path, prover_log,
                     self.verbose_logs, self.model,
                     snap_dir, self.project_path, resume_sid,
-                    self.backend,
+                    self.backend, self.harness,
                 )
                 futures[future] = (rel, slug)
 

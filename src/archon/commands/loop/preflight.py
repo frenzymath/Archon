@@ -27,11 +27,29 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool, backend=None) 
     progress = state_dir / "PROGRESS.md"
 
     if not dry_run:
-        from archon.agent import ClaudePBackend
+        from archon.agent import ClaudePBackend, InteractiveBackend
 
-        if isinstance(backend, ClaudePBackend):
+        if isinstance(backend, InteractiveBackend):
+            # Human-driven foreground claude; auth is the user's interactive
+            # session. Like claude-p, the plain `claude -p` auth probe below
+            # is misleading for a subscription account, so skip it.
+            if not shutil.which("claude"):
+                log.error("Claude Code is not installed. Run: archon setup")
+                raise typer.Exit(1)
+            log.success(
+                "Using interactive backend (you will drive claude in the "
+                "foreground; provers run serially)."
+            )
+        elif isinstance(backend, ClaudePBackend):
             if not shutil.which("claude-p"):
-                log.error("claude-p is not installed. Run: pip install claude-p")
+                log.error(
+                    "claude-p is not installed. Install the maintained fork "
+                    "(adds --trust-workspace for headless TUI runs):\n"
+                    "  uv tool install --force "
+                    "git+https://github.com/AxelDlv00/claude-p\n"
+                    "  (or: pip install "
+                    "git+https://github.com/AxelDlv00/claude-p)"
+                )
                 raise typer.Exit(1)
             cfg = backend.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
             log.success(f"Using claude-p backend (auth via Claude Code session in {cfg})")

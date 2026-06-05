@@ -114,6 +114,48 @@ class LoopContext:
     def backend(self) -> ClaudeBackend:
         return self.options.backend
 
+    def harness_descriptor_for(self, role: str):
+        """Resolve the full :class:`HarnessDescriptor` for a loop role.
+
+        Loads the descriptor (not just the name) so codex's model / effort
+        / gateway env names travel with it — the descriptor is frozen and
+        picklable, so the prover phase can hand it straight to the process
+        pool worker and the worker rebuilds a fully-configured runner via
+        :func:`~archon.agent.build_runner`. Returns the built-in
+        ``"claude-code"`` descriptor for an unconfigured project, so the
+        default path is unchanged. Reads config fresh each call (cheap, and
+        matches the rest of the loop, which re-reads config per phase).
+        """
+        from archon.commands.tooling.project_config import (
+            load_harness_descriptor,
+            load_project_config,
+            resolve_role_harness,
+        )
+
+        cfg = load_project_config(self.project_path)
+        name = resolve_role_harness(cfg, role)
+        return load_harness_descriptor(cfg, name)
+
+    def make_agent(self, role: str, *, model: str | None = None):
+        """Build the :class:`~archon.agent.AgentRunner` for a role.
+
+        Routes through :func:`~archon.agent.build_runner` so plan/review
+        pick up any per-role harness override, while still threading the
+        loop-wide claude :attr:`backend` (claude-p / vscode / …). With no
+        harness override this is exactly the legacy
+        ``ClaudeAgent(model=ctx.model, role=role, backend=ctx.backend)``.
+        """
+        from archon.agent import build_runner
+        from archon.commands.tooling.project_config import load_project_config
+
+        cfg = load_project_config(self.project_path)
+        return build_runner(
+            role=role,
+            model=model if model is not None else self.model,
+            cfg=cfg,
+            backend=self.backend,
+        )
+
     @property
     def verbose_logs(self) -> bool:
         return self.options.verbose_logs

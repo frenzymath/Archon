@@ -1355,6 +1355,11 @@ def build_dag_prompt(
     sidecar_block = _dag_iter_sidecar_block(state_dir, iter_num)
     status_block = _dag_status_block(state_dir)
     catalog_block = _subagent_catalog_block(project_path, role="dag")
+    # Writable for the dag agent, same as the plan agent: it runs before
+    # the loop, establishes STRATEGY.md + the blueprint, and is the right
+    # place to seed durable cross-iteration knowledge (Mathlib gaps, dead
+    # ends, protected invariants) that the later plan agent reads.
+    memory_block = _archon_memory_block(state_dir, writable=True)
 
     return dedent(f"""\
         You are the DAG elaboration agent for project '{project_name}'.
@@ -1371,7 +1376,7 @@ def build_dag_prompt(
         - The blueprint-doctor findings from the prior iter are injected below (when present).
         - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
         - The current DAG_STATUS.md is injected below.
-        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + _protected_block(project_path) + sidecar_block + catalog_block
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + memory_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + _protected_block(project_path) + sidecar_block + catalog_block
 
 
 def build_prover_prompt(
