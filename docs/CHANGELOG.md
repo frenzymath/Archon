@@ -25,7 +25,10 @@ All notable changes to Archon are documented here.
   codex runs and the cost/token aggregators count codex tokens. `session_end`
   records the token breakdown (fresh `input_tokens` = input − cached, plus
   cache-read / output / reasoning) and omits `total_cost_usd` — codex bills no
-  per-token price on a native login.
+  per-token price on a native login. The dashboard's "turns" column reports
+  codex's **iteration count** (completed items / work steps), since one `codex
+  exec` is a single turn (always 1, meaningless) — this lines up with claude's
+  round-trip "turns".
 - **Harness selection at `archon init`.** A fresh `archon init` now asks which
   engine runs the loop's roles — Claude Code + Opus (default), Codex + GPT-5.5
   (native `~/.codex` login), or Mixed (per `plan` / `prover` / `review`; the

@@ -196,7 +196,7 @@ session_id_emitted = False
 started_ids = set()
 last_message = ''
 sum_input = sum_cached = sum_output = sum_reasoning = 0
-num_turns = 0
+num_iters = 0  # completed codex items = work steps (see session_end note)
 
 for line in sys.stdin:
     line = line.strip()
@@ -226,6 +226,7 @@ for line in sys.stdin:
             emit('tool_call', tool=tool_label(item), input=tool_input(item))
 
     elif t == 'item.completed':
+        num_iters += 1  # one finished item = one codex step/iteration
         item = obj.get('item', {{}}) or {{}}
         it = item.get('type', '')
         if it == 'agent_message':
@@ -247,7 +248,6 @@ for line in sys.stdin:
         sum_cached += usage.get('cached_input_tokens', 0) or 0
         sum_output += usage.get('output_tokens', 0) or 0
         sum_reasoning += usage.get('reasoning_output_tokens', 0) or 0
-        num_turns += 1
 
     elif t == 'turn.failed':
         err = obj.get('error')
@@ -258,7 +258,13 @@ fresh_input = sum_input - sum_cached
 if fresh_input < 0:
     fresh_input = 0
 emit('session_end',
-    num_turns=num_turns,
+    # Codex runs one `exec` = exactly one turn, so the literal turn count is
+    # always 1 and tells you nothing. Report the per-item iteration count in
+    # the dashboard's "turns" slot instead — it reflects the real work done
+    # and lines up with claude's round-trip "turns" (both: "model acted N
+    # times"). num_items keeps the honest name alongside.
+    num_turns=num_iters,
+    num_items=num_iters,
     input_tokens=fresh_input,
     output_tokens=sum_output,
     cache_read_input_tokens=sum_cached,
@@ -274,8 +280,8 @@ if last_message:
 parts = []
 if fresh_input or sum_output:
     parts.append('in=' + str(fresh_input) + ' cached=' + str(sum_cached) + ' out=' + str(sum_output) + ' reasoning=' + str(sum_reasoning))
-if num_turns:
-    parts.append('turns=' + str(num_turns))
+if num_iters:
+    parts.append('iters=' + str(num_iters))
 if parts:
     terminal('[TOKENS] ' + ' | '.join(parts))
 

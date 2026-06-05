@@ -820,10 +820,17 @@ class CodexStreamParserTest(unittest.TestCase):
         # Tool labels are claude-style so the dashboard renders them.
         labels = [r["tool"] for r in rows if r["event"] == "tool_call"]
         self.assertEqual(labels, ["Bash", "lean_diagnostic_messages", "Edit"])
+        # num_turns reports codex's iteration count (completed items), not the
+        # always-1 turn.completed count: m0, c1, x2, f3, m9 = 5 items.
+        se = self._session_end(rows)
+        self.assertEqual(se["num_turns"], 5)
+        self.assertEqual(se["num_items"], 5)
 
     def test_session_end_token_breakdown_no_cost(self):
         rows, _stdout, _raw = self._run_parser([
             {"type": "thread.started", "thread_id": "t"},
+            {"type": "item.completed", "item": {
+                "id": "m", "type": "agent_message", "text": "ok"}},
             {"type": "turn.completed", "usage": {
                 "input_tokens": 2607762, "cached_input_tokens": 2506880,
                 "output_tokens": 23344, "reasoning_output_tokens": 9148}},
@@ -835,7 +842,8 @@ class CodexStreamParserTest(unittest.TestCase):
         self.assertEqual(se["output_tokens"], 23344)
         self.assertEqual(se["reasoning_output_tokens"], 9148)
         self.assertEqual(se["input_tokens_total"], 2607762)
-        self.assertEqual(se["num_turns"], 1)
+        self.assertEqual(se["num_turns"], 1)  # 1 completed item = 1 iteration
+        self.assertEqual(se["num_items"], 1)
         self.assertNotIn("total_cost_usd", se)
         self.assertEqual(
             se["model_usage"],
@@ -843,6 +851,9 @@ class CodexStreamParserTest(unittest.TestCase):
         )
 
     def test_multiple_turns_accumulate(self):
+        # Usage sums across every turn.completed (codex normally emits one,
+        # but be robust to more). num_turns counts *items*, not turn.completed
+        # events, so this item-free stream reports 0.
         rows, _stdout, _raw = self._run_parser([
             {"type": "thread.started", "thread_id": "t"},
             {"type": "turn.completed", "usage": {
@@ -853,7 +864,8 @@ class CodexStreamParserTest(unittest.TestCase):
                 "output_tokens": 7, "reasoning_output_tokens": 2}},
         ])
         se = self._session_end(rows)
-        self.assertEqual(se["num_turns"], 2)
+        self.assertEqual(se["num_turns"], 0)
+        self.assertEqual(se["num_items"], 0)
         self.assertEqual(se["input_tokens"], (100 + 200) - (20 + 30))
         self.assertEqual(se["cache_read_input_tokens"], 50)
         self.assertEqual(se["output_tokens"], 12)
@@ -876,6 +888,7 @@ class CodexStreamParserTest(unittest.TestCase):
         self.assertEqual(events.count("tool_call"), 1)
         self.assertEqual(events.count("tool_result"), 1)
         self.assertLess(events.index("tool_call"), events.index("tool_result"))
+        self.assertEqual(self._session_end(rows)["num_turns"], 1)  # 1 item
 
     def test_empty_stream_still_closes_with_session_end(self):
         # A run that produces nothing (killed early) still gets a
