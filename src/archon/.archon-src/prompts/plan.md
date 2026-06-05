@@ -159,22 +159,35 @@ Read it early every iteration. Update it after processing prover/review results,
 motivation; just the destination. Cite by name, not by handwave.>
 
 ## Phases & estimations
-<one Markdown table, one row per remaining phase / route, rough order.
-Columns: Phase | Status | Iters left | LOC (remaining · realized/it) | Key Mathlib needs | Risks.
-The LOC cell carries TWO figures separated by `·`: the remaining-LOC
-estimate (as before) AND the currently-realized velocity in that
-direction — e.g. `≈250 · ~30/it`. Derive the velocity from the net
-Lean LOC that ACTUALLY landed toward this phase over the last ~3 iters
-(git diffstat / sorry-resolution deltas), not from hope. A phase
-advancing little or nothing reads `≈250 · ~0/it` — that is a churning
-signal, not a rounding artifact.
-**Consistency check:** `remaining ÷ realized-per-it` should roughly
-match the Iters-left cell. When it can't (e.g. 250 LOC remaining at
-~30/it but Iters-left says 2), the estimate is fantasy — re-estimate
-honestly (a mismatch this large is itself a >30% estimation change
-that licenses editing the table).
-Concise cells — one short line each. Drop rows for completed phases.
-Aim for 4–10 rows.>
+<one Markdown table, one row per REMAINING phase / route, rough order.
+Columns: Phase | Status | Iters left | LOC | Key Mathlib needs | Risks.
+- Status — a short inline tag, NOT prose: e.g. `ACTIVE`, `NEXT`,
+  `BLOCKED`, `PAUSED BY USER`. One or two words.
+- Iters left — a rough integer estimate of iterations to finish.
+- LOC — a rough remaining-LOC estimate, written as a range, e.g.
+  `~80–220`. No velocity, no `/it` figure.
+Concise cells — one short line each. This table holds ONLY remaining
+phases; the moment a phase finishes, MOVE its row to ## Completed (do
+not delete it, do not leave it here). Aim for 4–10 rows.>
+
+## Completed
+<one Markdown table, one row per FINISHED phase — the concise
+retrospective the active table sheds. This is the single place completed
+work persists: calibration for future estimates + techniques worth
+reusing. NOT a changelog and NOT per-iter narrative.
+Columns: Phase | Iters (done@ · used) | LOC | Files | Key results | Reusable techniques | Pitfalls.
+- Iters (done@ · used) — the iter it completed and how many it took,
+  e.g. `294 · 8`.
+- LOC — the net Lean LOC it actually landed (calibrates future ranges).
+- Files — the main file(s)/chapter(s) it produced; names or a count,
+  not a full listing.
+- Key results — the load-bearing declarations / outcomes delivered.
+- Reusable techniques — idioms, Mathlib routes, or proof patterns worth
+  reapplying downstream.
+- Pitfalls — what bit us / what a future phase should avoid repeating.
+One short line per cell. Bounded like the rest of the file: if it grows
+past ~12 rows, collapse the oldest fully-superseded rows into a single
+summary line. Omit this section entirely while nothing is done yet.>
 
 ## Routes
 <only if the strategy admits multiple routes. One short subsection per
@@ -197,13 +210,13 @@ definition.>
 
 - **No Lean code, no blueprint excerpts, no proof sketches.** Those live in chapters.
 - **No per-iter narrative.** No "this iter we tried X", no revision log. That history lives in `iter/iter-NNN/plan.md`.
-- **No accumulation.** When a phase completes, delete its row. When a route is excised, remove its subsection. STRATEGY.md shrinks toward "complete"; it does NOT grow.
-- **No long prose in table cells.** One short line per cell.
-- **No "appendix" sections** (Historical decisions, Considered alternatives, Past iterations summary). Iter sidecars hold the alternatives that were rejected.
+- **Bounded accumulation only.** When a phase completes, MOVE its row from `## Phases & estimations` to `## Completed` (one concise row) — don't leave it in the active table, don't expand it into prose. When a route is excised, remove its subsection. `## Completed` is the ONLY place finished work persists, and it stays a terse one-line-per-cell ledger; everything else in STRATEGY.md still shrinks toward "complete". The whole file stays under ~250 lines.
+- **No long prose in table cells.** One short line per cell, in both tables.
+- **No freeform history sections** (Historical decisions, Considered alternatives, Past iterations summary, Lessons learned) and **no per-iter narrative.** The concise `## Completed` table is the only retained retrospective; rejected alternatives live in iter sidecars (`iter/iter-NNN/plan.md`).
 
 ### When to edit
 
-Edit STRATEGY.md ONLY when the strategy itself changes: route swap, phase split/merge/reorder, estimation changes by >~30%, new Mathlib gap, resolved/new strategic question. Otherwise leave it alone. A drifting velocity figure alone is NOT a reason to edit every iter — refresh it when you're already editing the table for one of the above, or when it exposes an Iters-left mismatch big enough to re-estimate.
+Edit STRATEGY.md ONLY when the strategy itself changes: route swap, phase split/merge/reorder, a phase COMPLETING (move its row to `## Completed`), estimation changes by >~30%, new Mathlib gap, resolved/new strategic question. Otherwise leave it alone. A small estimate drift alone is NOT a reason to edit every iter — refresh the LOC/Iters-left cells when you're already editing the table for one of the above.
 
 ## Per-iteration sidecars
 

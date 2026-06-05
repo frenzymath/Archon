@@ -42,6 +42,14 @@ class DagElaborationPhase(DagPhase):
                 log_base=dag_log,
                 verbose_logs=ctx.verbose_logs,
                 env_overrides={"ARCHON_ITER_NUM": f"{ctx.iter_num:03d}"},
+                # The dag agent dispatches dag-walkers as BLOCKING Bash
+                # calls (archon-subagent.py), and a single cone walker can
+                # run 10-15+ min. During that call the dag agent's own
+                # JSONL is silent, so the default 15-min idle watchdog
+                # could kill it mid-dispatch. Give it headroom above the
+                # foreground-Bash ceiling (BASH_FOREGROUND_TIMEOUT_MS, 30
+                # min) so only a genuinely wedged run is reaped.
+                idle_timeout_s=35 * 60,
             )
 
         secs = int(time.monotonic() - start)

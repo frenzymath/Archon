@@ -44,6 +44,61 @@ from archon import log
 DEFAULT_MODEL = "opus"
 
 
+# Native Claude Code tools that every archon agent is forbidden to use,
+# passed to ``claude --disallowedTools``.
+#
+# Archon's whole orchestration model assumes each phase agent runs as a
+# one-shot headless ``claude -p`` whose turn does NOT end until all the
+# work it spawned is done: the orchestrator (e.g. DagElaborationPhase)
+# blocks on the subprocess and advances to the next iteration the moment
+# it exits. The only sanctioned way to dispatch a subagent is the
+# *blocking* ``python3 .claude/tools/archon-subagent.py`` Bash call (see
+# the dispatcher pattern in prompts/dag.md and prompts/plan.md) — it runs
+# the child synchronously inside the dispatching agent's turn, so the
+# headless process stays alive until every dispatch returns.
+#
+# The native ``Agent`` (sub-agent spawn) and ``ScheduleWakeup`` tools
+# break that contract: an agent that backgrounds its dispatches and
+# schedules a wakeup ends its turn immediately. In headless ``-p`` there
+# is no persistent runtime to honor the wakeup, so the process exits, the
+# orchestrator treats the clean exit as "phase done" and launches the
+# next iteration — while the just-spawned subagents are still in flight,
+# now orphaned and racing the next iteration's writes to the same files.
+# (The stream parser already *detects* this as ``[session ended
+# mid-dispatch]``; blocking the tools is what *prevents* it.)
+#
+# ``Task`` is included defensively to cover CLI builds that name the
+# spawner ``Task`` rather than ``Agent``; archon never relies on a native
+# task-checklist tool, so disallowing it is harmless. Bash/Read/Write/
+# Edit/Grep/Glob/WebSearch/WebFetch/TodoWrite are unaffected.
+DISALLOWED_NATIVE_TOOLS: tuple[str, ...] = ("Agent", "Task", "ScheduleWakeup")
+
+
+# Foreground-Bash timeout (ms) handed to every spawned ``claude`` via
+# BASH_DEFAULT_TIMEOUT_MS / BASH_MAX_TIMEOUT_MS.
+#
+# Claude Code defaults a Bash command to a 2-minute timeout with a
+# 10-minute hard ceiling, and AUTO-BACKGROUNDS a foreground command that
+# overruns it (``Command running in background with ID: …``). That is
+# fatal to archon's dispatch model: the sanctioned way to launch a
+# subagent is a *blocking* ``python3 .archon/.../archon-subagent.py`` Bash
+# call whose child ``claude`` session routinely runs 10-15+ minutes. Once
+# that call auto-backgrounds, the dispatching agent's turn ends, the
+# headless ``-p`` process exits, and the orchestrator advances to the
+# next iteration while the subagent is still running (the same race the
+# DISALLOWED_NATIVE_TOOLS guard addresses, reached by a different door).
+# The planner never trips this only because its subagents finish under
+# the 2-minute default; the dag-walkers reliably exceed it.
+#
+# 30 minutes comfortably covers a large dependency-cone walker. A
+# genuinely hung child is still bounded by the inner agent's own idle
+# watchdog (``idle_timeout_s`` in ``run``), which kills the child claude
+# and lets the Bash call return — so a high ceiling doesn't mean a
+# wedged dispatch runs forever. Set via setdefault so a shell/user
+# override still wins.
+BASH_FOREGROUND_TIMEOUT_MS = 30 * 60 * 1000
+
+
 # Model aliases that select a non-Anthropic provider. When the agent's
 # ``model`` matches one of these, ``_resolve_provider`` swaps in the
 # corresponding ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN`` env
@@ -549,6 +604,12 @@ class ClaudeAgent:
             flags.append("--dangerously-skip-permissions")
         flags.extend(["--permission-mode", self.permission_mode])
         flags.extend(["--model", model])
+        # Force the blocking-Bash dispatch path: an agent must never spawn
+        # subagents natively or schedule a wakeup, or it ends its turn
+        # mid-dispatch and the orchestrator advances over in-flight work.
+        # See DISALLOWED_NATIVE_TOOLS for the full rationale.
+        if DISALLOWED_NATIVE_TOOLS:
+            flags.extend(["--disallowedTools", *DISALLOWED_NATIVE_TOOLS])
         return flags
 
     def _resolve_provider(self) -> tuple[str, dict[str, str], str | None]:
@@ -817,6 +878,11 @@ class ClaudeAgent:
         # priority over the default below.
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             env.setdefault("IS_SANDBOX", "1")
+        # Stop long blocking subagent dispatches from being auto-backgrounded
+        # or killed at Claude Code's 2-min default / 10-min ceiling — see
+        # BASH_FOREGROUND_TIMEOUT_MS. setdefault so an explicit override wins.
+        env.setdefault("BASH_DEFAULT_TIMEOUT_MS", str(BASH_FOREGROUND_TIMEOUT_MS))
+        env.setdefault("BASH_MAX_TIMEOUT_MS", str(BASH_FOREGROUND_TIMEOUT_MS))
         return env
 
     def _run_with_logging(
@@ -1002,5 +1068,6 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
 
 __all__ = [
     "ClaudeAgent", "ClaudeBackend", "ClaudePBackend", "EntrypointBackend",
-    "DEFAULT_MODEL", "RunOutcome", "QuotaExhaustedError",
+    "DEFAULT_MODEL", "DISALLOWED_NATIVE_TOOLS", "BASH_FOREGROUND_TIMEOUT_MS",
+    "RunOutcome", "QuotaExhaustedError",
 ]

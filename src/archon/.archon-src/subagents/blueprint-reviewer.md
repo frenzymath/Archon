@@ -166,7 +166,7 @@ You audit the blueprint **against the context the plan agent gave you**, not aga
 
 This is a proactive function — you produce it in addition to the per-chapter audit, not instead of it.
 
-After completing the per-chapter checklist, cross-reference the strategy snapshot's `## Phases & estimations` table against the set of chapters you just read. For each phase row whose `Status` is not `complete` and whose content has **zero blueprint coverage** (no chapter exists, or the only existing chapter is a stub with fewer than ~3 meaningful declaration blocks), produce a **chapter outline proposal**.
+After completing the per-chapter checklist, cross-reference the strategy snapshot's `## Phases & estimations` table against the set of chapters you just read. (That table lists only *remaining* phases — finished ones live in `## Completed` and need no proposal.) For each remaining phase row whose content has **zero blueprint coverage** (no chapter exists, or the only existing chapter is a stub with fewer than ~3 meaningful declaration blocks), produce a **chapter outline proposal**.
 
 A chapter outline proposal is not a flag or a complaint — it is a concrete, actionable seed that the plan agent can hand directly to a blueprint-writing subagent. It must contain enough mathematical detail that a writer receiving it as a directive can produce a complete chapter without further research by the plan agent.
 

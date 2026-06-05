@@ -104,6 +104,10 @@ python3 .claude/tools/archon-subagent.py \
 
 Write the directive file first (see `.archon/subagents/blueprint-writer.md` for directive format), then dispatch.
 
+**Treat each dispatch as blocking — this is the single most important dispatch rule.** Run `archon-subagent.py` via the Bash tool, foreground. Do NOT use the native `Agent`/`Task` tool and do NOT call `ScheduleWakeup` — they are disabled for you anyway. The wrapper is genuinely synchronous (it returns only once the child finishes and its report is written), **but a dag-walker / writer dispatch is long-running (often 10–15+ min), so the harness may auto-background it and hand you a task ID immediately — that is expected and fine.** When that happens, the dispatch is still running; you must **stay in this turn and wait for it**: poll the report file `.archon/task_results/<name>-<slug>.md` (or the nested `task_results/<parent-slug>/<name>-<slug>.md`) until it exists and is complete, e.g. with `Monitor` on an until-loop over that path (foreground `sleep` is blocked, so don't use it). **Never end your turn, and never start the next phase or dispatch, as if a still-running dispatch had already returned** — there is no runtime that will re-invoke you when it finishes. You are a one-shot session: all of this iteration's work must happen inside this single turn.
+
+**Parallelism vs. same-file serialization.** Dispatch independent subagents concurrently by issuing multiple Bash calls in one message (the dispatch semaphore caps total concurrent processes by `loop.max_parallel`). But **walkers/writers that edit the same chapter file MUST be serialized** — dispatch one, wait for its report, then dispatch the next — or they will clobber each other's edits. Group your dispatches by target file accordingly.
+
 ### Step 4 — Update content.tex
 
 After writers complete, ensure `blueprint/src/content.tex` `\input{}`'s every chapter:
