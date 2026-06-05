@@ -473,7 +473,7 @@ export default function ProofGraph() {
 
   // Resizable panels
   const sideResize = useDragResize(350, 240, 600, 'x');
-  const botResize = useDragResize(120, 60, 280, 'y');
+  const botResize = useDragResize(56, 56, 280, 'y');
 
   // Selected git commit (derived from selSha)
   const selCommit = useMemo(

@@ -186,6 +186,13 @@ function parseInline(src: string): Inline[] {
     // \label{} — anchor only, drop here
     const lab = /^\\label\s*\{[^{}]*\}/.exec(src.slice(i));
     if (lab) { i += lab[0].length; continue; }
+    // blueprint metadata commands — surfaced elsewhere as badges/uses chips, so
+    // strip them here rather than leaking their text (e.g. a stray "ok" from
+    // \leanok, or the raw label list from \uses{}).
+    const metaArg = /^\\(lean|uses|discussion)\s*\{[^{}]*\}/.exec(src.slice(i));
+    if (metaArg) { i += metaArg[0].length; continue; }
+    const metaBare = /^\\(leanok|mathlibok|notready)\b/.exec(src.slice(i));
+    if (metaBare) { i += metaBare[0].length; continue; }
     // references
     const ref = /^\\(ref|cref|Cref|eqref)\s*\{([^{}]*)\}/.exec(src.slice(i));
     if (ref) { out.push({ t: 'ref', label: ref[2].trim(), cref: /cref/i.test(ref[1]) }); i += ref[0].length; continue; }
@@ -640,13 +647,24 @@ export function TitleInline({ nodes, tex, macros }: { nodes?: Inline[]; tex?: st
  *  through the same pipeline as the Blueprint page — math, \emph, comments,
  *  and \cref{} resolved against the full blueprint's label map. Used by the
  *  DAG node panel so the two pages read identically. */
+/** A theorem body extracted for the DAG panel can still carry the environment's
+ *  optional `[human name]` argument as a leading token. The panel already shows
+ *  that name as the node title, so drop a leading `[...]` (after any stray
+ *  metadata commands) rather than rendering raw brackets. */
+function stripStmtHead(tex: string): string {
+  const lead = tex.replace(/^\s+/, '');
+  if (lead[0] !== '[') return tex;
+  const close = matchBracket(lead, 0);
+  return close === -1 ? tex : lead.slice(close + 1);
+}
+
 export function TexFragment({ tex, macros, labels, onNavigate }: {
   tex: string | null | undefined;
   macros: Record<string, string>;
   labels?: LabelMap;
   onNavigate?: (slug: string, anchor: string) => void;
 }) {
-  const blocks = useMemo(() => parseBlocks(encodeComments(tex ?? '', true)), [tex]);
+  const blocks = useMemo(() => parseBlocks(encodeComments(stripStmtHead(tex ?? ''), true)), [tex]);
   const ctx: Ctx = useMemo(
     () => ({ macros, labels: labels ?? new Map(), lean: new Map(), onNavigate }),
     [macros, labels, onNavigate],

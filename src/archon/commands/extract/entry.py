@@ -7,6 +7,7 @@ from typing import Optional
 
 import typer
 
+from archon import log
 from archon.agent import DEFAULT_MODEL
 from archon.commands.tooling.project_config import (
     load_project_config,
@@ -26,9 +27,10 @@ def extract(
     ),
     merge: Optional[str] = typer.Option(
         None, "--merge",
-        help="Merge mode: a second archon project (read-only) whose cones the "
-             "session imports into the sandbox. Requires identical "
-             "lean-toolchain and mathlib pins.",
+        help="DEPRECATED — use `archon merge` instead. Kept as an alias: a "
+             "second archon project (read-only) whose cones are imported into "
+             "the sandbox.",
+        hidden=True,
     ),
     lake: str = typer.Option(
         "hardlink", "--lake",
@@ -54,7 +56,7 @@ def extract(
         help="How `claude` is invoked (default | vscode | desktop).",
     ),
 ) -> None:
-    """Extract a subproject from an archon project (or merge two) via the DAG.
+    """Extract a subproject (a dependency cone) from an archon project.
 
     Duplicates PARENT into --dest (hardlinked .lake, fresh git history,
     knowledge files carried over), then opens an interactive session that:
@@ -74,13 +76,19 @@ def extract(
     finalized with a fresh outer git history.
 
     \b
+    To COMBINE two projects, use `archon merge` instead.
+
+    \b
     Examples:
       archon extract ~/proj/Jacobian --dest ~/proj/Picard-Representability
-      archon extract ~/proj/A --dest ~/proj/AB --merge ~/proj/B
       archon extract ~/proj/Jacobian --dest ~/proj/Picard --resume --build
     """
     if lake not in ("hardlink", "copy", "none"):
         raise typer.BadParameter("--lake must be hardlink | copy | none")
+    if merge is not None:
+        log.warn("`archon extract --merge` is deprecated — use "
+                 "`archon merge <target> --from <source> --dest <dir>`. "
+                 "Running in merge mode for now.")
     project_config = load_project_config(Path(parent))
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
     ExtractCommand(

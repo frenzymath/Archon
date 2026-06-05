@@ -198,7 +198,7 @@ export default function DagView() {
 
   // Resizable sidebar (width) and bottom timeline (height).
   const sideResize = useDragResize(340, 240, 680, 'x');
-  const botResize = useDragResize(150, 80, 460, 'y');
+  const botResize = useDragResize(56, 56, 460, 'y');
 
   // Measure the git panel width for the timeline layout.
   const gitPanelRef = useRef<HTMLDivElement>(null);
@@ -824,17 +824,6 @@ function workVal(v: number | null | undefined) {
   if (v === 0) return <span className="m-val m-done">0 ✓</span>;
   return <span className="m-val m-work">{v.toLocaleString('en-US')}</span>;
 }
-function charsPair(rel: number | null | undefined, cum: number | null | undefined) {
-  const f = (v: number | null | undefined) => (v === null || v === undefined)
-    ? <span className="chars-inf">∞</span> : <span className="chars-val">{v}</span>;
-  return (
-    <span className="chars-pair dv-help"
-      title="ℓ_local = proof length (characters) of this declaration alone · ℓ_total = summed over the declaration and all its ancestors (its full dependency cone); ∞ when something in the cone has no proof yet">
-      ℓ<sub>local</sub>={f(rel)} &nbsp; ℓ<sub>total</sub>={f(cum)}
-    </span>
-  );
-}
-
 function ModChip({ label, mod, onOpenLogs, onOpenDiffs }: {
   label: string; mod: FileMod | undefined;
   onOpenLogs: (iter: string) => void; onOpenDiffs: (iter: string) => void;
@@ -848,6 +837,24 @@ function ModChip({ label, mod, onOpenLogs, onOpenDiffs }: {
       <button className="mod-diff" onClick={() => onOpenDiffs(mod.iteration!)}
         title={`Open ${mod.iteration} diffs`}>±</button>
     </span>
+  );
+}
+
+const DEP_PREVIEW = 2;
+function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onGoTo: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!items.length) return <div className="deps-list"><span className="no-deps">{empty}</span></div>;
+  const shown = expanded ? items : items.slice(0, DEP_PREVIEW);
+  const hidden = items.length - shown.length;
+  return (
+    <div className="deps-list">
+      {shown.map((u) => <span key={u} className="dep-chip" onClick={() => onGoTo(u)}>{u}</span>)}
+      {items.length > DEP_PREVIEW && (
+        <button className="dep-more" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? '− less' : `+${hidden} more`}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -868,7 +875,6 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
     : n.has_sorry ? <span className="badge badge-sorry">sorry</span> : <span className="badge badge-unproved">unproved</span>;
   const directSet = new Set(n.uses);
   const indirect = [...ancestors].filter((x) => !directSet.has(x)).sort();
-  const Chip = ({ u }: { u: string }) => <span className="dep-chip" onClick={() => onGoTo(u)}>{u}</span>;
   const inBlueprint = labels.has(n.id);
   // lean_file is project-relative (matches the inner-git paths); tex_file is
   // relative to blueprint/src/ — try both forms.
@@ -905,9 +911,9 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
           <div className="degree"><span className="degree-val">{n.rdep_count}</span><span className="degree-label">used by</span></div>
         </div>
         <div className="deps-sub">direct dependencies</div>
-        <div className="deps-list">{n.uses.length ? n.uses.map((u) => <Chip key={u} u={u} />) : <span className="no-deps">none — axiom</span>}</div>
+        <DepList key={`direct-${n.id}`} items={n.uses} empty="none — axiom" onGoTo={onGoTo} />
         <div className="deps-sub">indirect (transitive) dependencies</div>
-        <div className="deps-list">{indirect.length ? indirect.map((u) => <Chip key={u} u={u} />) : <span className="no-deps">none beyond the direct ones</span>}</div>
+        <DepList key={`indirect-${n.id}`} items={indirect} empty="none beyond the direct ones" onGoTo={onGoTo} />
       </div>
 
       <div className="card">
@@ -936,7 +942,6 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
         <div className="sec-hdr">
           <span className="card-title" style={{ margin: 0 }}>LaTeX proof</span>
           <ModChip label="tex" mod={texMod} onOpenLogs={onOpenLogs} onOpenDiffs={onOpenDiffs} />
-          {charsPair(n.proof_size_tex, n.proof_size_tex_total)}
         </div>
         <div className="latex-rendered">
           <TexFragment tex={n.proof_tex ? n.proof_tex.trim() : ''} macros={macros} labels={labels} onNavigate={onOpenBlueprintAt} />
@@ -947,7 +952,6 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
         <div className="sec-hdr">
           <span className="card-title" style={{ margin: 0 }}>Lean code</span>
           <ModChip label="lean" mod={leanMod} onOpenLogs={onOpenLogs} onOpenDiffs={onOpenDiffs} />
-          {charsPair(n.proof_size_lean, n.proof_size_lean_total)}
         </div>
         {n.lean_source
           ? <pre className="code-block" dangerouslySetInnerHTML={{ __html: highlightLean(n.lean_source) }} />
@@ -1027,7 +1031,7 @@ const DV_CSS = `
 .dv-graph { flex:1; min-height:0; background:var(--bg-secondary); }
 .dv-graph canvas { display:block; }
 .dv-hist { color:var(--blue); font-weight:600; }
-.dv-git-panel { flex-shrink:0; height:150px; border-top:1px solid var(--border); background:var(--bg-secondary); display:flex; flex-direction:column; overflow:hidden; }
+.dv-git-panel { flex-shrink:0; height:56px; border-top:1px solid var(--border); background:var(--bg-secondary); display:flex; flex-direction:column; overflow:hidden; }
 .dv-git-head { display:flex; align-items:center; gap:10px; padding:4px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
 .dv-git-title { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.3px; }
 .dv-git-live { margin-left:auto; padding:2px 8px; font-size:10px; font-weight:600; border:1px solid var(--blue); border-radius:4px; background:var(--accent-bg); color:var(--blue); cursor:pointer; }
@@ -1064,27 +1068,27 @@ const DV_CSS = `
 .dv-root .badge-mathlib { background:rgba(59,130,246,.12); color:#2563eb; border:1px solid rgba(59,130,246,.3); }
 .dv-root .badge-sorry { background:rgba(234,88,12,.10); color:var(--orange); border:1px solid rgba(234,88,12,.28); }
 .dv-root .badge-unproved { background:rgba(220,38,38,.08); color:var(--red); border:1px solid rgba(220,38,38,.25); }
-.dv-root .node-title { font-size:15px; font-weight:600; color:var(--text-primary); line-height:1.35; margin-bottom:5px; }
+.dv-root .node-title { font-size:15px; font-weight:600; color:var(--text-primary); line-height:1.35; margin-bottom:5px; overflow-wrap:anywhere; }
 .dv-root .node-id { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); word-break:break-all; }
 .dv-root .node-chapter { font-size:11px; color:var(--text-muted); margin-top:3px; }
-.dv-root .lean-ref { font-size:11px; color:var(--text-secondary); margin-top:6px; } .dv-root .lean-ref code { font-family:var(--font-mono); color:var(--blue); }
+.dv-root .lean-ref { font-size:11px; color:var(--text-secondary); margin-top:6px; overflow-wrap:anywhere; } .dv-root .lean-ref code { font-family:var(--font-mono); color:var(--blue); overflow-wrap:anywhere; }
 .dv-root .degrees { display:flex; gap:20px; margin-bottom:10px; }
 .dv-root .degree { display:flex; flex-direction:column; align-items:center; gap:2px; }
 .dv-root .degree-val { font-size:22px; font-weight:700; color:var(--text-primary); line-height:1; }
 .dv-root .degree-label { font-size:10px; color:var(--text-muted); text-align:center; }
 .dv-root .deps-list { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
 .dv-root .deps-sub { font-size:10px; color:var(--text-muted); margin:6px 0 4px; letter-spacing:.03em; }
-.dv-root .dep-chip { font-family:var(--font-mono); font-size:10px; padding:3px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:4px; color:var(--blue); cursor:pointer; }
+.dv-root .dep-chip { font-family:var(--font-mono); font-size:10px; padding:3px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:4px; color:var(--blue); cursor:pointer; max-width:100%; overflow-wrap:anywhere; word-break:break-word; text-align:left; }
 .dv-root .dep-chip:hover { background:var(--accent-bg); border-color:var(--accent-ring); }
+.dv-root .dep-more { font-family:var(--font-mono); font-size:10px; padding:3px 7px; background:transparent; border:1px dashed var(--border); border-radius:4px; color:var(--text-muted); cursor:pointer; }
+.dv-root .dep-more:hover { color:var(--text-secondary); border-color:var(--text-muted); }
 .dv-root .no-deps { font-size:12px; color:var(--text-muted); font-style:italic; }
 .dv-root .metrics-grid { display:grid; grid-template-columns:auto 1fr 1fr; gap:5px 10px; align-items:center; }
 .dv-root .col-head { font-size:10px; color:var(--text-muted); text-align:right; font-weight:600; }
 .dv-root .m-label { font-size:11px; color:var(--text-muted); }
 .dv-root .m-val { font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); text-align:right; }
 .dv-root .m-done { color:var(--green); font-weight:700; } .dv-root .m-inf { color:var(--red); font-weight:700; } .dv-root .m-work { color:var(--orange); }
-.dv-root .sec-hdr { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
-.dv-root .chars-pair { font-family:var(--font-mono); font-size:10px; color:var(--text-muted); }
-.dv-root .chars-inf { color:var(--red); } .dv-root .chars-val { color:var(--text-secondary); }
+.dv-root .sec-hdr { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:2px 8px; margin-bottom:6px; }
 .dv-root .latex-rendered { font-family:var(--font-sans); font-size:13px; line-height:1.7; color:var(--text-secondary); overflow-x:auto; min-height:1.5em; }
 .dv-root .latex-rendered .katex-display { margin:6px 0; overflow-x:auto; }
 .dv-root .latex-rendered em { font-style:italic; color:var(--text-primary); } .dv-root .latex-rendered strong { font-weight:600; color:var(--text-primary); }

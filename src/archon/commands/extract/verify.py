@@ -49,9 +49,15 @@ def read_manifest(dest: Path) -> dict | None:
         return None
 
 
-def verify_sandbox(dest: Path, *, build: bool = False,
+def verify_sandbox(dest: Path, *, build: bool = False, mode: str = "extract",
                    build_timeout: int = 3600) -> VerifyResult:
-    """Run the deterministic gate over the carved sandbox at ``dest``."""
+    """Run the deterministic gate over the sandbox at ``dest``.
+
+    Shared by ``extract`` (carve) and ``merge`` (import). The checks are the
+    same — DAG rebuilds, zero broken ``\\uses{}``, every recorded seed and
+    closure node present, optional ``lake build`` — only the phrasing of a
+    failure differs by ``mode``.
+    """
     res = VerifyResult()
     manifest = read_manifest(dest)
     if manifest is None:
@@ -80,9 +86,10 @@ def verify_sandbox(dest: Path, *, build: bool = False,
 
     if report.broken_uses:
         shown = ", ".join(f"{a}→{b}" for a, b in report.broken_uses[:10])
+        cause = ("imported material left \\uses{} edges unresolved"
+                 if mode == "merge" else "the carve cut INTO the cone")
         res.fail(
-            f"{len(report.broken_uses)} broken \\uses{{}} after the carve "
-            f"(the carve cut INTO the cone): {shown}"
+            f"{len(report.broken_uses)} broken \\uses{{}} ({cause}): {shown}"
         )
 
     # Presence of seeds + full agreed closure: the lost-no-dependency check.
@@ -102,8 +109,9 @@ def verify_sandbox(dest: Path, *, build: bool = False,
     if missing_closure:
         shown = ", ".join(missing_closure[:10])
         more = f", … and {len(missing_closure) - 10} more" if len(missing_closure) > 10 else ""
+        how = "missing after import" if mode == "merge" else "lost in the carve"
         res.fail(
-            f"{len(missing_closure)} closure node(s) lost in the carve: {shown}{more}"
+            f"{len(missing_closure)} closure node(s) {how}: {shown}{more}"
         )
 
     if build:

@@ -96,7 +96,7 @@ from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.subagent import subagent_command  # noqa: E402
 from archon.commands.migrate import app as migrate_app  # noqa: E402
 from archon.commands.dag import dag  # noqa: E402
-from archon.commands.extract import extract  # noqa: E402
+from archon.commands.extract import extract, merge  # noqa: E402
 from archon.commands.dag.gaps_entry import dag_carve_plan, dag_gaps, dag_graph, dag_query  # noqa: E402
 
 app.command()(init)
@@ -110,6 +110,7 @@ app.command("blueprint-doctor")(blueprint_doctor_cli)
 from archon.commands.tooling.protect import protect_check_cli  # noqa: E402
 app.command("protect-check")(protect_check_cli)
 app.command()(extract)
+app.command()(merge)
 app.command()(loop)
 app.command()(doctor)
 app.command()(dashboard)

@@ -167,6 +167,8 @@ def duplicate_project(
     lake_mode: str = "hardlink",
     mode: str = "extract",
     merge_source: Path | None = None,
+    union: bool = False,
+    prefer: str = "source",
 ) -> DuplicateReport:
     """Duplicate ``parent`` into ``dest`` (which must not exist yet).
 
@@ -226,9 +228,12 @@ def duplicate_project(
         ),
         "parent_outer_head": _outer_head(parent),
         "merge_source": str(merge_source) if merge_source else None,
+        "union": union,       # merge: full union vs enrich-target-only
+        "prefer": prefer,     # merge: which side's proof wins an overlap
         "lake_mode": lake_mode,
         "seeds": [],        # filled by the session once scope is agreed
         "closure": [],      # filled by the session from the carve plan
+        "overlaps": [],     # merge: filled by the session — per-decl winner
         "files": _manifest_files(dest),
     }
     report.manifest_path = state_dst / MANIFEST_NAME

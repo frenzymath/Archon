@@ -11,6 +11,7 @@ from archon.commands.dag.leandag_gaps import (
     compute_carve_plan,
     run_query,
 )
+from archon.commands.extract.command import ExtractCommand
 from archon.commands.extract.duplicate import MANIFEST_NAME, duplicate_project
 from archon.commands.extract.verify import verify_sandbox
 
@@ -233,3 +234,65 @@ def test_verify_gate_fails_when_closure_node_lost(fixture_project: Path, tmp_pat
     assert not res.ok
     joined = " ".join(res.problems)
     assert "def:a1" in joined
+
+
+# ── merge mode ───────────────────────────────────────────────────────────────
+
+def test_duplicate_merge_mode_records_fields(fixture_project: Path, tmp_path: Path):
+    # A second archon project to merge from (read-only; never copied).
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".archon").mkdir()
+    dest = tmp_path / "merged"
+
+    report = duplicate_project(
+        fixture_project, dest, lake_mode="none",
+        mode="merge", merge_source=source, union=True, prefer="target",
+    )
+    manifest = json.loads(report.manifest_path.read_text())
+    assert manifest["mode"] == "merge"
+    assert manifest["merge_source"] == str(source)
+    assert manifest["union"] is True
+    assert manifest["prefer"] == "target"
+    assert manifest["overlaps"] == []
+    # The source is mounted read-only — duplication must not copy it in.
+    assert not (dest / "source").exists()
+
+
+def test_extract_mode_manifest_has_merge_defaults(fixture_project: Path, tmp_path: Path):
+    dest = tmp_path / "sub"
+    report = duplicate_project(fixture_project, dest, lake_mode="none")
+    manifest = json.loads(report.manifest_path.read_text())
+    assert manifest["mode"] == "extract"
+    assert manifest["merge_source"] is None
+    assert manifest["union"] is False
+    assert manifest["prefer"] == "source"
+
+
+def test_verify_merge_mode_message_on_lost_closure(fixture_project: Path, tmp_path: Path):
+    dest = _carved_sandbox(fixture_project, tmp_path)
+    a_tex = dest / "blueprint" / "src" / "chapters" / "A.tex"
+    text = a_tex.read_text()
+    start = text.index("\\begin{definition}\\label{def:a1}")
+    end = text.index("\\end{definition}", start) + len("\\end{definition}")
+    a_tex.write_text(text[:start] + text[end:])
+
+    res = verify_sandbox(dest, mode="merge")
+    assert not res.ok
+    joined = " ".join(res.problems)
+    assert "missing after import" in joined
+    assert "lost in the carve" not in joined
+
+
+def test_command_mode_derived_from_merge_source(tmp_path: Path):
+    extract_cmd = ExtractCommand("a", "b")
+    assert extract_cmd.mode == "extract"
+    merge_cmd = ExtractCommand("a", "b", merge_source="c", union=True, prefer="target")
+    assert merge_cmd.mode == "merge"
+    assert merge_cmd.union is True
+    assert merge_cmd.prefer == "target"
+
+
+def test_merge_command_registered():
+    from archon.commands.extract import merge
+    assert callable(merge)
