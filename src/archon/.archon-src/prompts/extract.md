@@ -55,7 +55,11 @@ at the end tells you which paths are which.
   the sandbox graph after every carve batch.
 - `archon dag-query <verb> …` — navigate: `cone --node <seeds>` (closure),
   `cone --node <seeds> --complement` (what's out), `ancestors`, `node`,
-  `isolated`.
+  `isolated`; and for decomposition: `interface --node <seeds>` (depth-1 deps =
+  natural sub-seeds / cut points) and `overlap --node <seeds> --vs <other>`
+  (shared closure of two seed sets, e.g. vs a sibling extract). `--json`
+  returns the full set (no silent truncation); a truncated text result is
+  flagged loudly — never count off a truncated list.
 - `archon dag-carve-plan --node <seed>[,<seed>…] --json` — **the** plan:
   per-file/per-chapter rollup. Statuses: `keep` (untouched), `mixed` (surgery),
   `imported` (out of cone by `\uses{}` but kept code `import`s it — KEEP the
@@ -79,7 +83,14 @@ at the end tells you which paths are which.
 ## Phase A — Scope (conversational)
 
 1. Read the injected context (README, PROGRESS, STRATEGY). Run
-   `leandag build && leandag stats` for the graph picture.
+   `leandag build && leandag stats` for the graph picture. **Check for a
+   "Sibling extracts from this parent" block** in the injected context: if it
+   is present you are in **decomposition mode** — this parent is being split
+   into several sibling work packages, not extracted in a vacuum. Ask the user
+   whether this extraction is standalone or one piece of that decomposition,
+   and in decomposition mode aim for a cone that is *independent* of the
+   siblings: use `archon dag-query overlap --node <your seeds> --vs <sibling
+   seeds> --json` to measure shared closure and prefer a cut that minimises it.
 2. Discuss with the user what the subproject should be. When they name a
    topic rather than labels, find candidate seeds yourself (`archon dag-query
    all --json` + search, or grep the chapters) and propose them with their
@@ -107,7 +118,10 @@ at the end tells you which paths are which.
    gate reads these; an empty `seeds` fails the gate. If the plan keeps any
    `rider_decls` (out-of-cone Lean code a kept proof needs, whose blueprint
    block you drop), record those Lean names in the manifest `riders` array so
-   the parent-regression check treats their degradation as intentional.
+   the parent-regression check treats their degradation as intentional. In
+   decomposition mode, also record the `overlaps` array — one
+   `{sibling, shared: [labels]}` entry per sibling extract, from the
+   `archon dag-query overlap` results.
 
 ## Phase B — Carve
 

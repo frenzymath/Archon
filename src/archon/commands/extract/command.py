@@ -41,6 +41,73 @@ def _read_if_exists(path: Path, max_chars: int = 3000) -> str:
     return content
 
 
+def find_sibling_extracts(parent: Path, *, exclude: Path) -> list[dict]:
+    """Other extract sandboxes carved from the same parent.
+
+    Decomposition (splitting one parent into several sibling work-packages)
+    needs to know what siblings already exist so the session can present work
+    packages and compute overlaps instead of re-deriving scope blind. There is
+    no registry, so we scan one level under the directories siblings are
+    typically created in — the parent of this sandbox and the parent of the
+    source project — for ``.archon/extract-manifest.json`` files whose recorded
+    ``parent`` resolves to the same project. Returns a brief per sibling:
+    ``{name, path, seeds, closure_size}``. Best-effort; never raises.
+    """
+    import json
+
+    from .duplicate import MANIFEST_NAME
+
+    try:
+        parent_real = parent.resolve()
+        exclude_real = exclude.resolve()
+    except OSError:
+        return []
+
+    roots: list[Path] = []
+    for r in (exclude.parent, parent.parent):
+        try:
+            rr = r.resolve()
+        except OSError:
+            continue
+        if rr not in roots:
+            roots.append(rr)
+
+    out: list[dict] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_dir() or child in seen:
+                continue
+            try:
+                if child.resolve() == exclude_real or child.resolve() == parent_real:
+                    continue
+            except OSError:
+                continue
+            mf = child / ".archon" / MANIFEST_NAME
+            if not mf.is_file():
+                continue
+            try:
+                data = json.loads(mf.read_text(encoding="utf-8"))
+                if Path(data.get("parent", "")).resolve() != parent_real:
+                    continue
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+            seen.add(child)
+            out.append({
+                "name": child.name,
+                "path": str(child),
+                "seeds": data.get("seeds") or [],
+                "closure_size": len(data.get("closure") or []),
+            })
+    return out
+
+
 def _mathlib_rev(project: Path) -> str | None:
     """The pinned mathlib rev from lake-manifest.json (None if absent)."""
     import json
@@ -185,6 +252,40 @@ class ExtractCommand:
             packaged = data_path(prompt_name)
             body = packaged.read_text(encoding="utf-8") if packaged.is_file() else ""
 
+        # Sibling extracts carved from the same parent — so an extract session
+        # can recognise it is decomposing a project into work packages and
+        # compute overlaps, instead of re-deriving scope blind.
+        siblings_block = ""
+        if mode == "extract":
+            try:
+                sibs = find_sibling_extracts(self.parent, exclude=self.dest)
+            except Exception:
+                sibs = []
+            if sibs:
+                rows = "\n".join(
+                    f"- **{s['name']}** (`{s['path']}`): seeds "
+                    + (", ".join(s["seeds"]) if s["seeds"] else "(none recorded)")
+                    + f" · closure {s['closure_size']} node(s)"
+                    for s in sibs
+                )
+                siblings_block = textwrap.dedent(f"""\
+                ## Sibling extracts from this parent (decomposition context)
+
+                This parent has already been carved into other subprojects.
+                You are splitting it into work packages, not extracting in a
+                vacuum. Before proposing seeds, compute how your candidate cone
+                relates to each sibling's, and aim for an independent piece:
+
+                    archon dag-query overlap --node <your seeds> --vs <sibling seeds> --json
+
+                A large overlap means you are duplicating a sibling — prefer a
+                cut that minimises it, or tell the user. Record the result in
+                the manifest `overlaps` array (one `{{sibling, shared: [labels]}}`
+                entry per sibling).
+
+                {rows}
+                """)
+
         target_label = "Target project (READ-ONLY)" if mode == "merge" \
             else "Parent project (READ-ONLY)"
         merge_block = ""
@@ -222,6 +323,7 @@ class ExtractCommand:
         - {target_label}: `{self.parent}`
         - Manifest: `.archon/extract-manifest.json`
         {merge_block}
+        {siblings_block}
         ## README.md (head)
         {readme or "(none)"}
 

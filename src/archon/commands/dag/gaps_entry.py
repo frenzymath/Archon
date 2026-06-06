@@ -71,8 +71,13 @@ def dag_query(
     project_path: str = typer.Option(".", "--project-path", help="Path to Lean project"),
     node: str = typer.Option(
         "", "--node",
-        help="Target node id (required for `ancestors` / `node` / `cone`; "
-             "`cone` accepts a comma-separated seed list)."
+        help="Target node id (required for `ancestors`/`node`/`cone`/"
+             "`interface`/`overlap`; the closure verbs accept a comma-separated "
+             "seed list)."
+    ),
+    vs: str = typer.Option(
+        "", "--vs",
+        help="Second seed list for `overlap`: returns cone(--node) ∩ cone(--vs)."
     ),
     limit: int = typer.Option(
         -1, "--limit",
@@ -109,10 +114,11 @@ def dag_query(
     # (consumed programmatically, where a count must be exact) get the full
     # set; plain text keeps the terminal-friendly cap of 50.
     if limit < 0:
-        limit = 0 if (as_json or verb in ("cone", "ancestors", "all")) else 50
+        limit = 0 if (as_json or verb in ("cone", "ancestors", "all",
+                                          "interface", "overlap")) else 50
     res = run_query(
         Path(project_path).resolve(), verb,
-        node=node or None, limit=limit, sort=sort or None,
+        node=node or None, vs=vs or None, limit=limit, sort=sort or None,
         complement=complement,
     )
     if as_json:

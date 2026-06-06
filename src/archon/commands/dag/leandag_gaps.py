@@ -385,6 +385,8 @@ QUERY_VERBS: dict[str, str] = {
     "unmatched": "lean_aux — Lean decls with NO blueprint entry (1-to-1 coverage debt)",
     "ancestors": "the dependency closure of --node (everything it transitively uses)",
     "cone": "closure of --node seed(s) (comma-separated; seeds included); --complement inverts",
+    "interface": "direct \\uses deps of --node seed(s) (depth-1; natural sub-seeds / cut points)",
+    "overlap": "shared closure of two seed sets: cone(--node) ∩ cone(--vs) (e.g. vs a sibling extract)",
     "node": "a single node by --node id",
     "all": "every node",
 }
@@ -401,6 +403,7 @@ def run_query(
     verb: str,
     *,
     node: str | None = None,
+    vs: str | None = None,
     limit: int | None = 50,
     sort: str | None = None,
     complement: bool = False,
@@ -409,17 +412,24 @@ def run_query(
 
     Returns ``{verb, count, total, nodes: [brief...], error}`` where ``total``
     is the pre-limit match count and ``nodes`` is the (optionally sorted and)
-    limited briefs. ``ancestors``/``node``/``cone`` require ``node``; ``cone``
-    accepts a comma-separated seed list and, with ``complement``, returns every
-    node NOT in the seeds' dependency closure. Never raises — failures land in
-    ``error`` with an empty node list.
+    limited briefs. ``ancestors``/``node``/``cone``/``interface``/``overlap``
+    require ``node`` (a comma-separated seed list for the closure verbs);
+    ``cone`` with ``complement`` returns every node NOT in the closure;
+    ``overlap`` also requires ``vs`` (a second seed list) and returns
+    ``cone(node) ∩ cone(vs)``. Never raises — failures land in ``error``.
     """
     if verb not in QUERY_VERBS:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": f"unknown verb {verb!r}; valid: {', '.join(QUERY_VERBS)}"}
-    if verb in ("ancestors", "node", "cone") and not node:
+    if verb in ("ancestors", "node", "cone", "interface", "overlap") and not node:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": f"verb {verb!r} requires --node <id>"}
+    if verb == "overlap" and not vs:
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": "verb 'overlap' requires --vs <id>[,<id>…]"}
+    if vs and verb != "overlap":
+        return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                "error": "--vs is only valid with the `overlap` verb"}
     if complement and verb != "cone":
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                 "error": "--complement is only valid with the `cone` verb"}
@@ -440,12 +450,18 @@ def run_query(
         if verb in ("ancestors", "node") and node not in known:
             return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                     "error": f"node {node!r} not found in the graph"}
-        if verb == "cone":
+        if verb in ("cone", "interface", "overlap"):
             seeds = [s.strip() for s in node.split(",") if s.strip()]
             missing = [s for s in seeds if s not in known]
             if missing:
                 return {"verb": verb, "count": 0, "total": 0, "nodes": [],
                         "error": f"seed node(s) not found: {', '.join(missing)}"}
+        if verb == "overlap":
+            vs_seeds = [s.strip() for s in vs.split(",") if s.strip()]
+            vs_missing = [s for s in vs_seeds if s not in known]
+            if vs_missing:
+                return {"verb": verb, "count": 0, "total": 0, "nodes": [],
+                        "error": f"--vs node(s) not found: {', '.join(vs_missing)}"}
 
         if verb in ("frontier",):
             sel = q.ready_to_prove()
@@ -481,6 +497,23 @@ def run_query(
                 sel = [n for n in dag.nodes if n.id not in closure]
             else:
                 sel = [dag.node(i) for i in sorted(closure)]
+        elif verb == "interface":
+            # Depth-1 \uses predecessors of the seeds (the immediate
+            # dependencies), excluding the seeds — natural sub-seeds / cut
+            # points when splitting a project into work packages.
+            direct: set[str] = set()
+            for s in seeds:
+                direct.update(getattr(dag.node(s), "uses", []) or [])
+            direct -= set(seeds)
+            sel = [dag.node(i) for i in sorted(direct) if i in known]
+        elif verb == "overlap":
+            def _closure(ss: list[str]) -> set[str]:
+                c: set[str] = set(ss)
+                for s in ss:
+                    c.update(i for i in dag.ancestors(s) if i in known)
+                return c
+            shared = _closure(seeds) & _closure(vs_seeds)
+            sel = [dag.node(i) for i in sorted(shared)]
         else:  # all
             sel = list(dag.nodes)
 

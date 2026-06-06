@@ -110,6 +110,43 @@ def test_complement_requires_cone_verb(fixture_project: Path):
     assert res["error"]
 
 
+# ── interface / overlap verbs (decomposition) ────────────────────────────────
+
+def test_interface_returns_direct_deps(fixture_project: Path):
+    # thm:goal directly \uses def:a1 (and nothing else); def:a1 is the interface.
+    res = run_query(fixture_project, "interface", node="thm:goal", limit=0)
+    assert res["error"] is None
+    assert {n["id"] for n in res["nodes"]} == {"def:a1"}
+
+
+def test_interface_requires_node(fixture_project: Path):
+    assert run_query(fixture_project, "interface")["error"]
+
+
+def test_overlap_shared_closure(fixture_project: Path):
+    res = run_query(fixture_project, "overlap", node="thm:goal",
+                    vs="def:a1", limit=0)
+    assert res["error"] is None
+    assert {n["id"] for n in res["nodes"]} == {"def:a1"}
+
+
+def test_overlap_disjoint_is_empty(fixture_project: Path):
+    res = run_query(fixture_project, "overlap", node="thm:goal",
+                    vs="def:d1", limit=0)
+    assert res["error"] is None
+    assert res["nodes"] == []
+
+
+def test_overlap_requires_vs(fixture_project: Path):
+    res = run_query(fixture_project, "overlap", node="thm:goal")
+    assert res["error"] and "vs" in res["error"]
+
+
+def test_vs_rejected_outside_overlap(fixture_project: Path):
+    res = run_query(fixture_project, "cone", node="thm:goal", vs="def:a1")
+    assert res["error"]
+
+
 # ── carve plan ───────────────────────────────────────────────────────────────
 
 def test_carve_plan_statuses(fixture_project: Path):
@@ -296,6 +333,45 @@ def test_command_mode_derived_from_merge_source(tmp_path: Path):
 def test_merge_command_registered():
     from archon.commands.extract import merge
     assert callable(merge)
+
+
+# ── sibling-extract discovery (decomposition) ────────────────────────────────
+
+def _make_extract_dir(root: Path, name: str, parent: Path, seeds, closure):
+    d = root / name
+    (d / ".archon").mkdir(parents=True)
+    (d / ".archon" / MANIFEST_NAME).write_text(json.dumps({
+        "mode": "extract", "parent": str(parent),
+        "seeds": seeds, "closure": closure,
+    }))
+    return d
+
+
+def test_find_sibling_extracts(tmp_path: Path):
+    from archon.commands.extract.command import find_sibling_extracts
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    me = _make_extract_dir(work, "mine", parent, ["thm:a"], ["thm:a", "def:b"])
+    _make_extract_dir(work, "cech", parent, ["thm:cech"], ["thm:cech"])
+    # An extract of a DIFFERENT parent must not be picked up.
+    _make_extract_dir(work, "other", tmp_path / "elsewhere", ["thm:z"], ["thm:z"])
+
+    sibs = find_sibling_extracts(parent, exclude=me)
+    names = {s["name"] for s in sibs}
+    assert names == {"cech"}                       # excludes self + foreign parent
+    cech = next(s for s in sibs if s["name"] == "cech")
+    assert cech["seeds"] == ["thm:cech"] and cech["closure_size"] == 1
+
+
+def test_find_sibling_extracts_none(tmp_path: Path):
+    from archon.commands.extract.command import find_sibling_extracts
+    parent = tmp_path / "p"
+    parent.mkdir()
+    dest = tmp_path / "d"
+    dest.mkdir()
+    assert find_sibling_extracts(parent, exclude=dest) == []
 
 
 # ── declaration-level carve (rider-decls, dead riders, other files) ──────────
