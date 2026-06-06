@@ -74,7 +74,13 @@ def dag_query(
         help="Target node id (required for `ancestors` / `node` / `cone`; "
              "`cone` accepts a comma-separated seed list)."
     ),
-    limit: int = typer.Option(50, "--limit", help="Max nodes to return (0 = all)."),
+    limit: int = typer.Option(
+        -1, "--limit",
+        help="Max nodes to return (0 = all). Unset defaults to 50 for text "
+             "output, but UNLIMITED for --json and for the closure verbs "
+             "(cone/ancestors/all) so programmatic callers never silently "
+             "undercount a truncated set.",
+    ),
     sort: str = typer.Option(
         "", "--sort", help="Rank results: effort | deps | impact."
     ),
@@ -97,6 +103,13 @@ def dag_query(
         archon dag-query cone --node thm:a,thm:b --complement --json
     """
     import json
+    # Resolve the `--limit` sentinel (-1 = unset). Truncation silently
+    # undercounting a cone once made a carve session report a wrong sorry
+    # count, so the safe defaults differ by use: JSON and the closure verbs
+    # (consumed programmatically, where a count must be exact) get the full
+    # set; plain text keeps the terminal-friendly cap of 50.
+    if limit < 0:
+        limit = 0 if (as_json or verb in ("cone", "ancestors", "all")) else 50
     res = run_query(
         Path(project_path).resolve(), verb,
         node=node or None, limit=limit, sort=sort or None,

@@ -239,6 +239,10 @@ class ExtractCommand:
 
         if res.stats:
             log.key_value({k: str(v) for k, v in res.stats.items()})
+        if res.stats.get("parent_compared") is False:
+            log.warn("parent-regression check skipped (parent commit/inner git "
+                     "unavailable) — closure is verified, but degradation vs the "
+                     "parent could not be diffed.")
         if not res.ok:
             log.error("Verify gate FAILED — sandbox left as-is (inner git has "
                       "the session's commits):")

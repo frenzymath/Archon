@@ -23,7 +23,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from archon.commands.dag.leandag_gaps import compute_gaps
+from archon.commands.dag.leandag_gaps import build_graph_at_commit, compute_gaps
 
 from .duplicate import MANIFEST_NAME
 
@@ -37,6 +37,76 @@ class VerifyResult:
     def fail(self, msg: str) -> None:
         self.ok = False
         self.problems.append(msg)
+
+
+def _name_index(nodes, *, is_dict: bool) -> dict:
+    """Map each Lean declaration name → its node (parent dicts or child objs).
+
+    Keys on every component of a (possibly ``", "``-joined) ``\\lean{}`` name so
+    a node can be matched across the blueprint→``lean_aux`` degradation that
+    dropping a chapter causes (the id changes ``thm:foo`` → ``lean:Mod.foo`` but
+    the Lean name is stable).
+    """
+    idx: dict = {}
+    for n in nodes:
+        ln = n.get("lean_name") if is_dict else getattr(n, "lean_name", None)
+        if not ln:
+            continue
+        for part in (p.strip() for p in ln.split(",")):
+            if part:
+                idx.setdefault(part, n)
+    return idx
+
+
+def _parent_regressions(dest: Path, manifest: dict, child_nodes) -> tuple[list[str], bool]:
+    """Flag nodes that were healthy in the parent but degraded in the sandbox.
+
+    Re-derives the parent DAG at the commit the manifest recorded and compares,
+    by Lean name, every node that survived into the sandbox. A node that was a
+    real, finite-effort blueprint node upstream but now ① degraded to a bare
+    ``lean_aux`` (its chapter was dropped while its sorried Lean stayed), ②
+    regressed to ∞ effort, or ③ gained a sorry, is a quality regression the
+    closure check cannot see. Names listed in the manifest ``riders`` array are
+    intentional and skipped. Best-effort: returns ``([], False)`` (no parent
+    available) rather than raising. The second value reports whether a real
+    comparison ran.
+    """
+    parent = manifest.get("parent")
+    sha = manifest.get("parent_inner_head")
+    if not parent or not sha:
+        return [], False
+    data = build_graph_at_commit(Path(parent), sha)
+    if data.get("error"):
+        return [], False
+
+    riders = set(manifest.get("riders") or [])
+    p_idx = _name_index(data.get("nodes", []), is_dict=True)
+    c_idx = _name_index(child_nodes, is_dict=False)
+
+    problems: list[str] = []
+    for name, pn in p_idx.items():
+        if name in riders:
+            continue
+        # Only judge nodes that were healthy upstream: a real blueprint node
+        # (not lean_aux) carrying a finite local effort.
+        if pn.get("type") == "lean_aux" or pn.get("effort_local") is None:
+            continue
+        cn = c_idx.get(name)
+        if cn is None:
+            continue  # gone entirely — the closure check governs deletions
+        c_type = getattr(cn, "type", None)
+        c_eff = getattr(cn, "effort_local", None)
+        c_sorry = getattr(cn, "has_sorry", False)
+        if c_type == "lean_aux":
+            problems.append(f"{name}: blueprint node lost its chapter "
+                            f"(degraded to a bare lean_aux — kept the sorried "
+                            f"Lean, dropped the LaTeX)")
+        elif c_eff is None:
+            problems.append(f"{name}: effort regressed to ∞ "
+                            f"(its informal proof / closure was cut)")
+        elif c_sorry and not pn.get("has_sorry"):
+            problems.append(f"{name}: gained a sorry it did not have upstream")
+    return problems, True
 
 
 def read_manifest(dest: Path) -> dict | None:
@@ -112,6 +182,24 @@ def verify_sandbox(dest: Path, *, build: bool = False, mode: str = "extract",
         how = "missing after import" if mode == "merge" else "lost in the carve"
         res.fail(
             f"{len(missing_closure)} closure node(s) {how}: {shown}{more}"
+        )
+
+    # Quality regression vs the parent: a node the closure check still finds
+    # "present" can nonetheless have degraded (chapter dropped → sorried
+    # lean_aux → ∞ effort). Best-effort — needs the parent's inner git.
+    try:
+        regressions, compared = _parent_regressions(dest, manifest, dag.nodes)
+    except Exception:
+        regressions, compared = [], False
+    res.stats["parent_compared"] = compared
+    res.stats["regressions"] = len(regressions)
+    if regressions:
+        shown = "; ".join(regressions[:8])
+        more = f"; … and {len(regressions) - 8} more" if len(regressions) > 8 else ""
+        res.fail(
+            "quality regression(s) vs parent — a kept node degraded "
+            "(orphaned / ∞-effort / newly sorried). If intentional, whitelist "
+            f"its Lean name in the manifest 'riders' array: {shown}{more}"
         )
 
     if build:

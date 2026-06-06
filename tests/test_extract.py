@@ -296,3 +296,175 @@ def test_command_mode_derived_from_merge_source(tmp_path: Path):
 def test_merge_command_registered():
     from archon.commands.extract import merge
     assert callable(merge)
+
+
+# ── declaration-level carve (rider-decls, dead riders, other files) ──────────
+# A second fixture that exercises Lean symbol dependencies the blueprint graph
+# cannot see:
+#   thm:goal ──uses──▶ def:a1            (cone)
+#   def:a1's Lean body calls MyLib.a2 (out of cone) and MyLib.helper (lean_aux)
+#   C.lean has helper (referenced ⇒ live) and junk (referenced by nobody ⇒ dead)
+# So a2 is a *rider-decl* (keep code, drop blueprint block), helper rides along,
+# junk is a *dead rider*, and MyLib.lean (root, no decls) is an *aggregator*.
+
+@pytest.fixture()
+def decl_fixture(tmp_path: Path) -> Path:
+    proj = tmp_path / "decl"
+    _write(proj / "MyLib.lean", "import MyLib.A\nimport MyLib.B\nimport MyLib.C\n")
+    _write(proj / "MyLib" / "A.lean",
+           "import MyLib.C\n\nnamespace MyLib\n\n"
+           "def a1 : Nat := MyLib.a2 + MyLib.helper\n\n"
+           "def a2 : Nat := 2\n\nend MyLib\n")
+    _write(proj / "MyLib" / "B.lean",
+           "import MyLib.A\n\nnamespace MyLib\n\n"
+           "theorem goal : True := trivial\n\nend MyLib\n")
+    _write(proj / "MyLib" / "C.lean",
+           "namespace MyLib\n\ndef helper : Nat := 7\n\n"
+           "def junk : Nat := 99\n\nend MyLib\n")
+
+    _write(proj / "blueprint" / "src" / "content.tex",
+           "\\input{chapters/A}\n\\input{chapters/B}\n")
+    _write(proj / "blueprint" / "src" / "chapters" / "A.tex",
+           "\\chapter{A}\n"
+           "\\begin{definition}\\label{def:a1}\\lean{MyLib.a1}\\leanok\n"
+           "One.\\end{definition}\n"
+           "\\begin{definition}\\label{def:a2}\\lean{MyLib.a2}\\leanok\n"
+           "Two.\\end{definition}\n")
+    _write(proj / "blueprint" / "src" / "chapters" / "B.tex",
+           "\\chapter{B}\n"
+           "\\begin{theorem}\\label{thm:goal}\\lean{MyLib.goal}\\uses{def:a1}\n"
+           "Goal.\\end{theorem}\n"
+           "\\begin{proof}Trivial.\\end{proof}\n")
+    _write(proj / "lakefile.toml", 'name = "MyLib"\n')
+    _write(proj / "lean-toolchain", "leanprover/lean4:v4.x\n")
+    return proj
+
+
+def test_rider_decl_kept_not_carved(decl_fixture: Path):
+    plan = compute_carve_plan(decl_fixture, ["thm:goal"])
+    assert plan["error"] is None
+    a = {d["file"]: d for d in plan["lean_files"]}["MyLib/A.lean"]
+    assert a["status"] == "mixed"
+    # def:a2 is out of cone but def:a1 (kept) calls it in Lean → keep the code,
+    # so it must NOT be in the true-carve list, it must be a rider-decl.
+    assert a["out_blueprint"] == []
+    assert a["rider_decls"] == ["def:a2"]
+
+
+def test_dead_rider_flagged_live_aux_spared(decl_fixture: Path):
+    plan = compute_carve_plan(decl_fixture, ["thm:goal"])
+    c = {d["file"]: d for d in plan["lean_files"]}["MyLib/C.lean"]
+    assert c["status"] == "imported"           # A.lean imports it
+    assert c["dead_riders"] == ["lean:MyLib.junk"]   # referenced by nobody
+    # helper IS referenced by a1, so it must not be flagged dead.
+    assert "lean:MyLib.helper" not in c["dead_riders"]
+
+
+def test_lean_closure_size_reported(decl_fixture: Path):
+    plan = compute_carve_plan(decl_fixture, ["thm:goal"])
+    # thm:goal, def:a1, def:a2 (rider), lean:MyLib.helper (aux) = 4.
+    assert plan["lean_closure_size"] == 4
+
+
+def test_other_lean_files_root_is_aggregator(decl_fixture: Path):
+    plan = compute_carve_plan(decl_fixture, ["thm:goal"])
+    other = {d["file"]: d for d in plan["other_lean_files"]}
+    assert "MyLib.lean" in other  # root file leandag makes no node for
+    assert other["MyLib.lean"]["status"] == "aggregator"
+
+
+def test_other_lean_files_dead_barrel_dropped(decl_fixture: Path):
+    # A shim importing only a dropped/unknown module is a drop, not freehanded.
+    _write(decl_fixture / "MyLib" / "Orphan.lean",
+           "import MyLib.Nonexistent\n")
+    plan = compute_carve_plan(decl_fixture, ["thm:goal"])
+    other = {d["file"]: d for d in plan["other_lean_files"]}
+    assert other["MyLib/Orphan.lean"]["status"] == "drop"
+
+
+def test_carve_plan_text_renders_riders_and_others(decl_fixture: Path):
+    from archon.commands.dag.leandag_gaps import format_carve_plan_text
+    txt = format_carve_plan_text(compute_carve_plan(decl_fixture, ["thm:goal"]))
+    assert "rider" in txt.lower()
+    assert "Other Lean files" in txt
+    assert "lean-needed" in txt
+
+
+# ── query truncation must be loud, not silent ────────────────────────────────
+
+def test_run_query_marks_truncation(fixture_project: Path):
+    res = run_query(fixture_project, "cone", node="thm:goal", limit=1)
+    assert res["total"] == 2 and res["count"] == 1
+    assert res["truncated"] is True
+
+
+def test_run_query_untruncated_when_unlimited(fixture_project: Path):
+    res = run_query(fixture_project, "cone", node="thm:goal", limit=0)
+    assert res["truncated"] is False
+
+
+def test_query_text_shouts_truncation(fixture_project: Path):
+    from archon.commands.dag.leandag_gaps import format_query_text
+    txt = format_query_text(run_query(fixture_project, "cone",
+                                      node="thm:goal", limit=1))
+    assert "TRUNCATED" in txt
+
+
+# ── parent-vs-child quality regression gate ──────────────────────────────────
+
+def _parent_graph():
+    # thm:x finite-effort & sorry-free upstream; thm:y likewise (the control).
+    return {"nodes": [
+        {"id": "thm:x", "type": "theorem", "lean_name": "Lib.x",
+         "effort_local": 12, "has_sorry": False},
+        {"id": "thm:y", "type": "theorem", "lean_name": "Lib.y",
+         "effort_local": 5, "has_sorry": False},
+    ], "edges": [], "meta": {}, "error": None}
+
+
+def _child(type_, eff, sorry, *, lean_name, id_):
+    from types import SimpleNamespace
+    return SimpleNamespace(id=id_, type=type_, lean_name=lean_name,
+                           effort_local=eff, has_sorry=sorry)
+
+
+def test_parent_regression_detects_degradation(tmp_path: Path, monkeypatch):
+    from archon.commands.extract import verify as V
+    monkeypatch.setattr(V, "build_graph_at_commit", lambda p, s: _parent_graph())
+    # x degraded to a sorried lean_aux (chapter dropped); y is healthy.
+    child = [
+        _child("lean_aux", None, True, lean_name="Lib.x", id_="lean:Lib.x"),
+        _child("theorem", 5, False, lean_name="Lib.y", id_="thm:y"),
+    ]
+    manifest = {"parent": str(tmp_path), "parent_inner_head": "deadbeef"}
+    probs, compared = V._parent_regressions(tmp_path, manifest, child)
+    assert compared is True
+    assert any("Lib.x" in p for p in probs)
+    assert not any("Lib.y" in p for p in probs)
+
+
+def test_parent_regression_respects_rider_whitelist(tmp_path: Path, monkeypatch):
+    from archon.commands.extract import verify as V
+    monkeypatch.setattr(V, "build_graph_at_commit", lambda p, s: _parent_graph())
+    child = [_child("lean_aux", None, True, lean_name="Lib.x", id_="lean:Lib.x")]
+    manifest = {"parent": str(tmp_path), "parent_inner_head": "d",
+                "riders": ["Lib.x"]}
+    probs, compared = V._parent_regressions(tmp_path, manifest, child)
+    assert compared is True and probs == []
+
+
+def test_parent_regression_skips_when_no_parent_commit(tmp_path: Path):
+    from archon.commands.extract import verify as V
+    probs, compared = V._parent_regressions(tmp_path, {"parent": str(tmp_path)}, [])
+    assert compared is False and probs == []
+
+
+def test_verify_gate_degrades_gracefully_without_real_parent_git(
+    fixture_project: Path, tmp_path: Path,
+):
+    # The fixture's inner git is a stub, so the regression compare can't run —
+    # the gate must still pass and record that no comparison happened.
+    dest = _carved_sandbox(fixture_project, tmp_path)
+    res = verify_sandbox(dest)
+    assert res.ok, res.problems
+    assert res.stats.get("parent_compared") is False

@@ -494,7 +494,12 @@ def run_query(
         total = len(sel)
         if limit and limit > 0:
             sel = sel[:limit]
+        # `truncated` is an explicit signal so callers never mistake a capped
+        # result for the whole set. A truncated `cone`/`ancestors` once made a
+        # carve session report the wrong sorry count (17 of a 24-node cone)
+        # because the cap was silent; surface it loudly instead.
         return {"verb": verb, "count": len(sel), "total": total,
+                "truncated": total > len(sel),
                 "nodes": [_node_brief(n) for n in sel], "error": None}
     except Exception as e:
         return {"verb": verb, "count": 0, "total": 0, "nodes": [],
@@ -525,8 +530,12 @@ def format_query_text(res: dict) -> str:
             f"- {n['id']}{lean}  (effort {eff_s}, "
             f"deps {n.get('dep_count')}, used-by {n.get('rdep_count')}){tag_s}"
         )
-    if res["total"] > res["count"]:
-        lines.append(f"- … and {res['total'] - res['count']} more (raise --limit)")
+    if res.get("truncated") or res["total"] > res["count"]:
+        lines.append(
+            f"⚠️  TRUNCATED: showing {res['count']} of {res['total']} — "
+            f"{res['total'] - res['count']} hidden. Raise --limit (or use "
+            f"--limit 0 / --json for the full set) before counting anything."
+        )
     return "\n".join(lines)
 
 
@@ -552,28 +561,123 @@ def _module_of(rel_path: str) -> str:
     return rel_path[:-len(".lean")].replace("/", ".") if rel_path.endswith(".lean") else rel_path
 
 
+def _all_lean_files(project_path: Path) -> list[str]:
+    """Every tracked ``.lean`` source under ``project_path`` (posix-relative).
+
+    Includes files leandag never made a node for — re-export barrels, import
+    shims, the root library file — which the blueprint-derived rollup is blind
+    to. Skips build/vcs/state dirs (anything dotted, e.g. ``.lake`` ``.git``
+    ``.archon``).
+    """
+    out: list[str] = []
+    for p in project_path.rglob("*.lean"):
+        rel = p.relative_to(project_path)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        out.append(rel.as_posix())
+    return out
+
+
+def _build_lean_ref_graph(nodes) -> dict[str, set[str]]:
+    """Approximate Lean symbol dependencies: ``id → {ids it references}``.
+
+    leandag stores no symbol-level edges (only blueprint ``\\uses{}``), but it
+    keeps each decl's ``lean_source``. We name-match: for every node, scan its
+    body for word-bounded mentions of any other decl's ``\\lean{}`` name — both
+    the fully-qualified name and its final component, since references inside a
+    ``namespace`` are usually unqualified. Shared short names over-approximate
+    (a match maps to *all* decls with that name), which keeps more code — the
+    build-safe direction. Good enough to (a) never carve a decl a kept proof
+    calls and (b) flag obviously-dead riders; ``lake build`` is the backstop.
+    """
+    import re
+    name_to_ids: dict[str, set[str]] = {}
+    for n in nodes:
+        ln = getattr(n, "lean_name", None)
+        if not ln:
+            continue
+        for full in (p.strip() for p in ln.split(",")):
+            if not full:
+                continue
+            name_to_ids.setdefault(full, set()).add(n.id)
+            short = full.rsplit(".", 1)[-1]
+            if short and short != full:
+                name_to_ids.setdefault(short, set()).add(n.id)
+    if not name_to_ids:
+        return {}
+    # Longest-first alternation so `MyLib.a1` wins over a bare `a1`; both map
+    # to the same id set anyway, but it keeps the scan honest.
+    names = sorted(name_to_ids, key=len, reverse=True)
+    pat = re.compile(r"\b(?:" + "|".join(re.escape(x) for x in names) + r")\b")
+    refs: dict[str, set[str]] = {}
+    for n in nodes:
+        src = getattr(n, "lean_source", "") or ""
+        if not src:
+            continue
+        hit: set[str] = set()
+        for m in pat.findall(src):
+            hit.update(name_to_ids.get(m, ()))
+        hit.discard(n.id)  # self-mention is not a dependency
+        if hit:
+            refs[n.id] = hit
+    return refs
+
+
+def _lean_reachable(seeds: set[str], refs: dict[str, set[str]]) -> set[str]:
+    """Transitive closure of ``seeds`` over the Lean symbol-reference graph."""
+    seen = set(seeds)
+    stack = list(seeds)
+    while stack:
+        x = stack.pop()
+        for y in refs.get(x, ()):
+            if y not in seen:
+                seen.add(y)
+                stack.append(y)
+    return seen
+
+
 def compute_carve_plan(project_path: Path, seeds: list[str]) -> dict:
     """Compute the deterministic carve plan for extracting ``seeds``' cone.
 
     Returns::
 
         {seeds, closure, closure_size, complement_size,
+         lean_closure_size,
          lean_files: [{file, status, total, in_cone, out_blueprint: [...],
+                       rider_decls: [...], dead_riders: [...],
                        out_aux: N, imported_by: [...]}],
          tex_files:  [{file, status, total, in_cone, out_blueprint: [...]}],
+         other_lean_files: [{file, status, imported_by: [...]}],
          error}
 
     File status semantics:
 
     - ``keep``     — every blueprint node in the file is in the closure
                      (out-of-cone ``lean_aux`` helpers ride along).
-    - ``mixed``    — some blueprint nodes in, some out: the file needs surgery
-                     (the ``out_blueprint`` list is what to carve).
+    - ``mixed``    — some blueprint nodes in, some out: the file needs surgery.
+                     ``out_blueprint`` is the true carve list (block + Lean decl
+                     both removed); ``rider_decls`` are out-of-cone blueprint
+                     decls whose *Lean code* a kept proof still calls — drop
+                     their blueprint block but KEEP the Lean declaration.
     - ``imported`` — no node in the closure, but a keep/mixed file transitively
                      ``import``s it, so deleting it breaks compilation. Lean
                      import edges are NOT ``\\uses{}`` edges — this catches
                      dependencies the blueprint graph cannot see.
     - ``drop``     — no node in the closure and nothing kept imports it.
+
+    Declaration granularity (the ``rider_decls`` / ``dead_riders`` split) comes
+    from a name-level Lean reference graph (:func:`_build_lean_ref_graph`): the
+    file-level ``imported`` policy keeps a file *whole* even when only some of
+    its decls are reachable from the kept cone. ``dead_riders`` are the unused
+    ones — surgery candidates to trim, not whole-file drops (the file stays so
+    the ``import`` still resolves).
+
+    ``other_lean_files`` lists every on-disk ``.lean`` leandag made no node for
+    (barrels, shims, the root library file) so the plan classifies *all* files,
+    never leaving silent freehand judgment: ``imported`` (kept code imports it),
+    ``aggregator`` (imports kept files but nothing kept imports it — likely the
+    root/barrel; regenerate, don't blind-drop), ``drop`` (imports only dropped
+    or external modules).
 
     Never raises — failures land in ``error``.
     """
@@ -596,6 +700,15 @@ def compute_carve_plan(project_path: Path, seeds: list[str]) -> dict:
         for s in seeds:
             closure.update(i for i in dag.ancestors(s) if i in known)
 
+        # ── Declaration-level Lean closure ──────────────────────────────
+        # The blueprint closure tells us which *blueprint* decls to keep; the
+        # Lean reference graph tells us which *Lean code* the kept decls call.
+        # A file-level "keep this import whole" policy drags along decls no kept
+        # proof uses (dead riders) and — worse — can mark a decl "carve" that a
+        # kept proof actually calls. lean_closure separates the two.
+        refs = _build_lean_ref_graph(dag.nodes)
+        lean_closure = _lean_reachable(closure, refs)
+
         # ── Roll nodes up by source file ────────────────────────────────
         by_lean: dict[str, list] = {}
         by_tex: dict[str, list] = {}
@@ -605,65 +718,109 @@ def compute_carve_plan(project_path: Path, seeds: list[str]) -> dict:
             if n.tex_file:
                 by_tex.setdefault(n.tex_file, []).append(n)
 
-        def _rollup(groups: dict[str, list]) -> dict[str, dict]:
+        def _rollup(groups: dict[str, list], *, is_lean: bool) -> dict[str, dict]:
             out: dict[str, dict] = {}
             for f, ns in groups.items():
                 in_cone = [n for n in ns if n.id in closure]
-                out_bp = [n.id for n in ns
-                          if n.id not in closure and n.type != "lean_aux"]
+                out_bp_nodes = [n for n in ns
+                                if n.id not in closure and n.type != "lean_aux"]
                 out_aux = sum(1 for n in ns
                               if n.id not in closure and n.type == "lean_aux")
                 if not in_cone:
                     status = "drop"
-                elif not out_bp:
+                elif not out_bp_nodes:
                     status = "keep"
                 else:
                     status = "mixed"
-                out[f] = {"file": f, "status": status, "total": len(ns),
-                          "in_cone": len(in_cone), "out_blueprint": sorted(out_bp),
-                          "out_aux": out_aux}
+                rec = {"file": f, "status": status, "total": len(ns),
+                       "in_cone": len(in_cone), "out_aux": out_aux}
+                if is_lean:
+                    # Split out-of-cone blueprint decls: a `rider-decl` is one
+                    # whose Lean code a kept proof calls (keep the code, drop
+                    # only its blueprint block); the rest are true carves.
+                    carve = [n.id for n in out_bp_nodes if n.id not in lean_closure]
+                    rider = [n.id for n in out_bp_nodes if n.id in lean_closure]
+                    # Dead riders: lean_aux helpers in this file no kept decl
+                    # references — safe to trim out (surgery), file stays.
+                    dead = [n.id for n in ns
+                            if n.type == "lean_aux" and n.id not in lean_closure]
+                    rec.update(out_blueprint=sorted(carve),
+                               rider_decls=sorted(rider),
+                               dead_riders=sorted(dead))
+                else:
+                    rec["out_blueprint"] = sorted(n.id for n in out_bp_nodes)
+                out[f] = rec
             return out
 
-        lean_files = _rollup(by_lean)
-        tex_files = _rollup(by_tex)
+        lean_files = _rollup(by_lean, is_lean=True)
+        tex_files = _rollup(by_tex, is_lean=False)
 
-        # ── Lean import closure: promote dropped files kept code imports ──
-        # \uses{} edges don't model Lean imports; a "drop" file imported by a
-        # kept file would break `lake build`. Walk imports from keep/mixed
-        # files and mark reached drop-files as "imported".
-        module_to_file = {_module_of(f): f for f in by_lean}
+        # ── Lean import closure over ALL on-disk files ──────────────────
+        # \uses{} edges don't model Lean imports; a file a kept file imports
+        # would break `lake build` if dropped. Walk imports from keep/mixed
+        # files. The universe is every .lean on disk (not just node-bearing
+        # ones) so the walk reaches no-node barrels/shims and stays transitive
+        # through them.
+        all_lean = set(_all_lean_files(project_path)) | set(by_lean)
+        module_to_file = {_module_of(f): f for f in all_lean}
+        _imports_cache: dict[str, list[str]] = {}
+
+        def _in_project_imports(f: str) -> list[str]:
+            if f not in _imports_cache:
+                try:
+                    text = (project_path / f).read_text(encoding="utf-8")
+                except OSError:
+                    text = ""
+                _imports_cache[f] = [module_to_file[m] for m in _lean_imports(text)
+                                     if m in module_to_file]
+            return _imports_cache[f]
+
         importers: dict[str, list[str]] = {}
         frontier = [f for f, d in lean_files.items() if d["status"] in ("keep", "mixed")]
-        seen = set(frontier)
+        reached: set[str] = set(frontier)
         while frontier:
             f = frontier.pop()
-            try:
-                text = (project_path / f).read_text(encoding="utf-8")
-            except OSError:
-                continue
-            for mod in _lean_imports(text):
-                tgt = module_to_file.get(mod)
-                if tgt is None:
-                    continue  # external (Mathlib etc.) or no scanned decls
+            for tgt in _in_project_imports(f):
                 importers.setdefault(tgt, []).append(f)
-                if tgt not in seen:
-                    seen.add(tgt)
-                    if lean_files[tgt]["status"] == "drop":
+                if tgt not in reached:
+                    reached.add(tgt)
+                    if tgt in lean_files and lean_files[tgt]["status"] == "drop":
                         lean_files[tgt]["status"] = "imported"
                     frontier.append(tgt)
         for f, d in lean_files.items():
             d["imported_by"] = sorted(set(importers.get(f, [])))
 
+        # ── Files leandag made no node for (barrels, shims, root lib) ────
+        kept_files = {f for f, d in lean_files.items()
+                      if d["status"] in ("keep", "mixed", "imported")}
+        other: list[dict] = []
+        for f in sorted(all_lean - set(by_lean)):
+            if f in reached:
+                status = "imported"
+            elif any(t in kept_files or t in reached
+                     for t in _in_project_imports(f)):
+                # Pulls in kept material but nothing kept pulls it in — the
+                # root library file or a barrel. Don't blind-drop; regenerate.
+                status = "aggregator"
+            else:
+                status = "drop"
+            other.append({"file": f, "status": status,
+                          "imported_by": sorted(set(importers.get(f, [])))})
+
         order = {"keep": 0, "mixed": 1, "imported": 2, "drop": 3}
+        other_order = {"imported": 0, "aggregator": 1, "drop": 2}
         return {
             "seeds": seeds,
             "closure": sorted(closure),
             "closure_size": len(closure),
+            "lean_closure_size": len(lean_closure),
             "complement_size": len(known) - len(closure),
             "lean_files": sorted(lean_files.values(),
                                  key=lambda d: (order[d["status"]], d["file"])),
             "tex_files": sorted(tex_files.values(),
                                 key=lambda d: (order[d["status"]], d["file"])),
+            "other_lean_files": sorted(
+                other, key=lambda d: (other_order[d["status"]], d["file"])),
             "error": None,
         }
     except Exception as e:
@@ -676,9 +833,11 @@ def format_carve_plan_text(plan: dict) -> str:
     """Compact human/agent-readable rendering of a carve plan."""
     if plan.get("error"):
         return f"_carve-plan error: {plan['error']}_"
+    lc = plan.get("lean_closure_size")
+    lc_s = f" · lean-needed: {lc} decl(s)" if lc is not None else ""
     lines = [
         f"carve plan — seeds: {', '.join(plan['seeds'])}",
-        f"closure: {plan['closure_size']} node(s) kept · "
+        f"closure: {plan['closure_size']} node(s) kept{lc_s} · "
         f"complement: {plan['complement_size']} node(s) out of cone",
     ]
     for key, label in (("lean_files", "Lean files"), ("tex_files", "Blueprint chapters")):
@@ -688,15 +847,34 @@ def format_carve_plan_text(plan: dict) -> str:
             extra = ""
             if d["status"] == "mixed":
                 shown, dropped = _trunc(d["out_blueprint"], 10)
-                extra = " — carve out: " + ", ".join(shown)
+                extra = " — carve out: " + (", ".join(shown) if shown else "(none)")
                 if dropped:
                     extra += f", … and {dropped} more"
+                riders = d.get("rider_decls") or []
+                if riders:
+                    rshown, rmore = _trunc(riders, 6)
+                    extra += (" · KEEP code, drop block (kept proof calls): "
+                              + ", ".join(rshown)
+                              + (f", … +{rmore}" if rmore else ""))
             elif d["status"] == "imported":
                 extra = " — imported by: " + ", ".join(d.get("imported_by", [])[:5])
+            dead = d.get("dead_riders") or []
+            if dead:
+                dshown, dmore = _trunc(dead, 6)
+                extra += (" · dead riders (trim, unused): " + ", ".join(dshown)
+                          + (f", … +{dmore}" if dmore else ""))
             lines.append(
                 f"- [{d['status']:8s}] {d['file']}  "
                 f"({d['in_cone']}/{d['total']} in cone){extra}"
             )
+    others = plan.get("other_lean_files") or []
+    if others:
+        lines.append("")
+        lines.append("## Other Lean files (no blueprint node)")
+        for d in others:
+            imp = d.get("imported_by") or []
+            tail = (" — imported by: " + ", ".join(imp[:5])) if imp else ""
+            lines.append(f"- [{d['status']:10s}] {d['file']}{tail}")
     return "\n".join(lines)
 
 

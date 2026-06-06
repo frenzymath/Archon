@@ -34,9 +34,20 @@ at the end tells you which paths are which.
    edit Lean proof code — you delete whole files, or delete whole declarations
    from mixed files, but you do not rewrite proofs.
 7. A **deterministic verify gate** runs after you exit: the DAG must rebuild
-   with zero broken `\uses{}`, every seed present, and **no closure node
-   lost**. Work so that gate passes; run the same checks yourself before
-   ending (see Phase D).
+   with zero broken `\uses{}`, every seed present, **no closure node lost**,
+   and **no quality regression vs the parent** — a kept node that was wired and
+   finite-effort upstream must not end up orphaned, ∞-effort, or newly sorried
+   downstream (it diffs the sandbox against the parent's recorded commit). Work
+   so that gate passes; run the same checks yourself before ending (Phase D).
+8. **Never wave away a metric that regressed against the parent.** A node that
+   gained ∞ effort or a sorry, or lost its wiring, is a real symptom — usually a
+   chapter dropped while its sorried Lean stayed (orphaning it). Explain and fix
+   it, or, if the degradation is intentional (a rider whose blueprint block you
+   deliberately dropped), record its Lean name in the manifest `riders` array so
+   the gate knows it is on purpose. Do not rationalize it as an accounting quirk.
+9. **Verify against the actual source files, not derived node metadata.** When a
+   node field looks off, diff the real `.lean`/`.tex` before drawing a
+   conclusion — derived fields can carry tool quirks.
 
 ## Your instruments
 
@@ -46,10 +57,24 @@ at the end tells you which paths are which.
   `cone --node <seeds> --complement` (what's out), `ancestors`, `node`,
   `isolated`.
 - `archon dag-carve-plan --node <seed>[,<seed>…] --json` — **the** plan:
-  per-file/per-chapter rollup. Statuses: `keep` (untouched), `mixed` (surgery:
-  the listed `out_blueprint` nodes get carved out of it), `imported` (out of
-  cone by `\uses{}` but kept code `import`s it — KEEP IT; Lean import edges
-  are invisible to the blueprint graph), `drop` (delete).
+  per-file/per-chapter rollup. Statuses: `keep` (untouched), `mixed` (surgery),
+  `imported` (out of cone by `\uses{}` but kept code `import`s it — KEEP the
+  file; Lean import edges are invisible to the blueprint graph), `drop`
+  (delete). The plan reasons at **declaration** granularity, not just file —
+  read these fields and act on them, do not eyeball the file:
+  - `out_blueprint` (on `mixed`) — the decls to **truly carve** (remove both the
+    blueprint block AND the Lean declaration).
+  - `rider_decls` (on `mixed`) — out-of-cone blueprint decls whose **Lean code a
+    kept proof still calls**. Drop their blueprint block but **KEEP the Lean
+    declaration** — deleting it breaks a kept proof. Never carve a rider-decl.
+  - `dead_riders` (on `keep`/`mixed`/`imported`) — Lean helpers in a kept file
+    that **no kept decl uses**. Trim them out (surgery on the file; the file
+    stays so its `import` still resolves) rather than dragging dead weight in.
+  - `other_lean_files` — every `.lean` with no blueprint node (barrels, shims,
+    the root lib file). `imported` = keep; `drop` = delete (it imports only
+    dropped/external modules); `aggregator` = regenerate, don't blind-delete.
+  - `lean_closure_size` — how many Lean decls the cone actually needs. If it is
+    far below the file rollup's kept total, you are carrying dead riders.
 
 ## Phase A — Scope (conversational)
 
@@ -60,29 +85,51 @@ at the end tells you which paths are which.
    all --json` + search, or grep the chapters) and propose them with their
    `rdep`/ancestor counts — like a discuss session, you may suggest natural
    cut points (e.g. "the representability theorem plus its two corollaries").
-3. Run `archon dag-carve-plan` on the candidate seeds and present the
-   summary: closure size, complement size, keep/mixed/imported/drop counts,
-   plus anything that looks suspicious (a `drop` chapter that sounds related;
-   a tiny closure that suggests under-wiring — if the parent's graph has many
-   isolated nodes, SAY SO: extraction quality is bounded by wiring quality).
-4. Iterate seeds with the user until they approve the plan.
-5. **Record the agreed scope in the manifest** (`.archon/extract-manifest.json`):
+3. Run `archon dag-carve-plan` on the candidate seeds. Present the result in
+   **plain language first**, before any table — fill this template:
+
+   > This subproject will be about **\<topic\>**. It keeps **N** unproven
+   > target(s): \<list them by what they are, not just labels\>. We delete
+   > everything else: **M** Lean file(s) and **K** chapter(s).
+
+   Phrase `AskUserQuestion` options in the user's vocabulary (what the
+   subproject is *about*), never in carve-plan jargon
+   (`closure`/`mixed`/`imported`). The keep/mixed/imported/drop table and the
+   counts come *after* the plain-language summary, for the user who wants them.
+4. Then flag anything suspicious: a `drop` chapter that sounds related; a tiny
+   `closure`/`lean_closure_size` that suggests under-wiring (if the parent's
+   graph has many isolated nodes, SAY SO — extraction quality is bounded by
+   wiring quality); `imported` files heavy with `dead_riders`; any
+   `aggregator`/`drop` entry in `other_lean_files` the user should confirm.
+5. Iterate seeds with the user until they approve the plan.
+6. **Record the agreed scope in the manifest** (`.archon/extract-manifest.json`):
    fill the `seeds` and `closure` arrays from the approved plan. The verify
-   gate reads these; an empty `seeds` fails the gate.
+   gate reads these; an empty `seeds` fails the gate. If the plan keeps any
+   `rider_decls` (out-of-cone Lean code a kept proof needs, whose blueprint
+   block you drop), record those Lean names in the manifest `riders` array so
+   the parent-regression check treats their degradation as intentional.
 
 ## Phase B — Carve
 
 Execute the approved plan, walking the DAG, in this order:
 
 1. **Delete `drop` .lean files** and their chapters' tex when the whole
-   chapter is `drop`. Batch + commit.
-2. **Surgery on `mixed` files**: remove exactly the `out_blueprint`
-   declarations (the whole `\begin{...}…\end{...}` block in tex; the whole
-   declaration in Lean). Adapt surrounding comments/prose so the file still
-   reads coherently — chapter intros that referenced removed material get
-   trimmed, not left dangling. Keep the file structure otherwise identical.
-3. **Keep `imported` files whole** (they are compile-time dependencies), and
-   keep their chapters if they have any; note them in the manifest as riders.
+   chapter is `drop`. Delete `other_lean_files` marked `drop` too. Batch +
+   commit.
+2. **Surgery on `mixed` files**:
+   - Remove exactly the `out_blueprint` declarations (the whole
+     `\begin{...}…\end{...}` block in tex AND the whole declaration in Lean).
+   - For `rider_decls`: remove only the blueprint block — **keep the Lean
+     declaration**, a kept proof calls it. (Record it under manifest `riders`.)
+   - Adapt surrounding comments/prose so the file still reads coherently —
+     chapter intros that referenced removed material get trimmed, not left
+     dangling. Keep the file structure otherwise identical.
+3. **`imported` files are compile-time dependencies — keep the file**, but
+   **trim their `dead_riders`** (helpers no kept decl uses) by deleting just
+   those declarations; the file (and the `import` that needs it) stays. Do the
+   same for `dead_riders` listed on `keep`/`mixed` files. Keep any chapters
+   these files have. `aggregator` entries in `other_lean_files` (the root lib
+   file / barrels) are regenerated in step 4, not deleted here.
 4. **Regenerate the root import file** (`<Lib>.lean`) to import exactly the
    kept files, and **regenerate `blueprint/src/content.tex`** to `\input{}`
    exactly the kept chapters.
