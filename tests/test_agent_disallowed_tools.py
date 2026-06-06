@@ -94,5 +94,33 @@ class DisallowedToolsTest(unittest.TestCase):
         )
 
 
+class InteractivePromptNotSwallowedTest(unittest.TestCase):
+    """--disallowedTools is variadic; run_interactive appends the prompt as
+    the last argv token. If the flag were present in the interactive flags it
+    would swallow the prompt and the TUI would open with no initial message
+    (the bare-welcome-screen bug). These lock the fix in.
+    """
+
+    def test_interactive_flags_omit_disallowed(self) -> None:
+        flags = ClaudeAgent()._build_flags("opus", include_disallowed=False)
+        self.assertNotIn("--disallowedTools", flags)
+
+    def test_interactive_argv_keeps_prompt_as_last_token(self) -> None:
+        # Mirror run_interactive's argv assembly exactly.
+        agent = ClaudeAgent(model="opus")
+        cmd = ["claude", *agent._build_flags("opus", include_disallowed=False)]
+        cmd.append("PROMPT_SENTINEL")
+        self.assertEqual(cmd[-1], "PROMPT_SENTINEL")
+        # No variadic flag precedes the prompt to consume it.
+        self.assertNotIn("--disallowedTools", cmd)
+
+    def test_headless_still_includes_disallowed_by_default(self) -> None:
+        # Headless passes the prompt via -p before the flags, so the guard
+        # stays on there.
+        self.assertIn(
+            "--disallowedTools", ClaudeAgent()._build_flags("opus"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

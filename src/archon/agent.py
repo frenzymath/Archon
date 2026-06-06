@@ -743,17 +743,25 @@ class ClaudeAgent:
 
     # ── command assembly ─────────────────────────────────────────────
 
-    def _build_flags(self, model: str) -> list[str]:
+    def _build_flags(self, model: str, *, include_disallowed: bool = True) -> list[str]:
         flags: list[str] = []
         if self.skip_permissions:
             flags.append("--dangerously-skip-permissions")
         flags.extend(["--permission-mode", self.permission_mode])
         flags.extend(["--model", model])
-        # Force the blocking-Bash dispatch path: an agent must never spawn
-        # subagents natively or schedule a wakeup, or it ends its turn
+        # Force the blocking-Bash dispatch path: a HEADLESS agent must never
+        # spawn subagents natively or schedule a wakeup, or it ends its turn
         # mid-dispatch and the orchestrator advances over in-flight work.
         # See DISALLOWED_NATIVE_TOOLS for the full rationale.
-        if DISALLOWED_NATIVE_TOOLS:
+        #
+        # NOT added for interactive sessions (``include_disallowed=False``):
+        # a human is driving — there is no orchestrator to outrun — AND
+        # ``--disallowedTools`` is variadic, so since ``run_interactive``
+        # appends the prompt as the LAST argv token, the trailing flag would
+        # swallow the prompt as a bogus tool name and the TUI would open with
+        # no initial message (the bare-welcome-screen bug). Headless backends
+        # pass the prompt via ``-p`` BEFORE the flags, so they are unaffected.
+        if include_disallowed and DISALLOWED_NATIVE_TOOLS:
             flags.extend(["--disallowedTools", *DISALLOWED_NATIVE_TOOLS])
         return flags
 
@@ -1001,7 +1009,10 @@ class ClaudeAgent:
         long pauses are normal (they're reading, thinking, typing).
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
-        cmd = ["claude", *self._build_flags(real_model)]
+        # include_disallowed=False: --disallowedTools is variadic and would
+        # swallow the trailing positional prompt below — and interactive
+        # sessions don't need the guard (a human drives, no orchestrator).
+        cmd = ["claude", *self._build_flags(real_model, include_disallowed=False)]
         if extra_args:
             cmd.extend(extra_args)
         cmd.append(prompt)
