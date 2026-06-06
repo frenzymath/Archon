@@ -94,6 +94,24 @@ class SyncLeanokPhase(Phase):
     name = "Sync \\leanok markers"
     skip_token = "marker-sync"
 
+    # Outer wall-clock budget for the whole sync (the script parallelises
+    # its compile-check sweep internally). Generous default so large
+    # blueprints don't trip it; override via loop.sync_leanok_timeout_sec.
+    _DEFAULT_TIMEOUT_SEC = 1800
+
+    def _resolve_timeout_sec(self, ctx) -> int:
+        """Resolve the sync timeout: ``loop.sync_leanok_timeout_sec`` > default."""
+        try:
+            from archon.commands.tooling.project_config import load_project_config
+
+            cfg = load_project_config(ctx.project_path)
+            val = cfg.loop_section().get('sync_leanok_timeout_sec')
+            if val is not None:
+                return max(60, int(val))
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        return self._DEFAULT_TIMEOUT_SEC
+
     def run(self) -> PhaseResult:
         ctx = self.ctx
         if self.skip_token in ctx.skip_now:
@@ -116,16 +134,24 @@ class SyncLeanokPhase(Phase):
 
         # Run the script once in JSON mode so we can summarize and
         # decide whether a commit is warranted without re-parsing the
-        # human-readable output.
+        # human-readable output. The script parallelises its per-file
+        # compile-check sweep internally; the cap below is the outer
+        # wall-clock budget (configurable for very large blueprints via
+        # ``loop.sync_leanok_timeout_sec``).
+        timeout_sec = self._resolve_timeout_sec(ctx)
         start = time.monotonic()
         try:
             r = subprocess.run(
                 [sys.executable, str(script), str(ctx.project_path),
                  "--format=json"],
-                capture_output=True, text=True, timeout=600,
+                capture_output=True, text=True, timeout=timeout_sec,
             )
         except (OSError, subprocess.SubprocessError) as e:
-            log.warn(f"sync_leanok failed to run: {e}")
+            log.warn(
+                f"sync_leanok failed to run: {e} "
+                f"(timeout was {timeout_sec}s — raise it with "
+                f"loop.sync_leanok_timeout_sec if this is a very large project)"
+            )
             return PhaseResult()
         secs = int(time.monotonic() - start)
 

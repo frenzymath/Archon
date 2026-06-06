@@ -43,9 +43,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -568,6 +570,79 @@ def _sync_chapter(
     return changes
 
 
+# ── parallel compile-check warm-up ────────────────────────────────────
+
+
+def _default_jobs() -> int:
+    """Worker count for the per-file compile-check sweep.
+
+    Each worker runs one ``lake env lean <file>`` (a memory-heavy Lean
+    process), so cap the default modestly rather than at all cores. Override
+    with ``ARCHON_SYNC_LEANOK_JOBS``.
+    """
+    env = os.environ.get('ARCHON_SYNC_LEANOK_JOBS')
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return max(1, min(8, os.cpu_count() or 4))
+
+
+def _collect_compile_targets(
+    chapters: list[Path], decl_index: dict[str, Path],
+) -> set[Path]:
+    """The set of Lean files the chapters will compile-check.
+
+    Mirrors :func:`_sync_chapter`'s in-scope filter (skip ``\\mathlibok`` /
+    ``\\notready`` blocks and blocks with no resolvable ``\\lean{...}``) so
+    we warm exactly the files the sequential pass would otherwise compile
+    lazily — no more, no less.
+    """
+    targets: set[Path] = set()
+    for tex in chapters:
+        try:
+            text = tex.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for blk in _parse_chapter_blocks(text):
+            if blk.has_mathlibok or blk.has_notready or blk.lean_name is None:
+                continue
+            lean_file = decl_index.get(blk.lean_name)
+            if lean_file is not None:
+                targets.add(lean_file)
+    return targets
+
+
+def _populate_compile_cache(
+    files: set[Path], project_path: Path, *, jobs: int,
+) -> dict[Path, bool | None]:
+    """Compile-check ``files`` (optionally in parallel) into a cache dict.
+
+    The checks are independent and ``_file_compiles`` holds no shared
+    state, so they parallelise cleanly across a bounded thread pool (each
+    just waits on a ``lake env lean`` subprocess). The returned dict is the
+    same ``{file: bool|None}`` shape ``_sync_chapter`` reads — and it keeps
+    its own lazy single-file fallback for any file not pre-warmed here.
+    """
+    cache: dict[Path, bool | None] = {}
+    if not files:
+        return cache
+    if jobs <= 1 or len(files) == 1:
+        for f in files:
+            cache[f] = _file_compiles(f, project_path)
+        return cache
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futs = {pool.submit(_file_compiles, f, project_path): f for f in files}
+        for fut in as_completed(futs):
+            f = futs[fut]
+            try:
+                cache[f] = fut.result()
+            except Exception:
+                cache[f] = None
+    return cache
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
@@ -579,6 +654,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--verbose', action='store_true',
                         help='Include no-op decisions in the output.')
     parser.add_argument('--format', choices=['text', 'json'], default='text')
+    parser.add_argument(
+        '--jobs', type=int, default=None,
+        help='Parallel workers for the per-file compile-check sweep '
+             '(default: min(8, cpu count), or $ARCHON_SYNC_LEANOK_JOBS). '
+             'Use 1 to force serial.',
+    )
     args = parser.parse_args(argv)
 
     project_path = Path(args.project_path).resolve()
@@ -588,9 +669,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # not a failure — just nothing to do
 
     decl_index = _scan_lean_decls(project_path)
-    compile_cache: dict[Path, bool | None] = {}
+
+    # Warm the per-file compile-check cache in parallel before the
+    # sequential marker pass. On a large blueprint (dozens of chapters,
+    # hundreds of referenced files) the serial `lake env lean` sweep is the
+    # dominant cost and used to blow the phase timeout; doing the
+    # independent checks concurrently cuts wall-clock by ~#workers.
+    chapters = sorted(chapters_dir.glob('*.tex'))
+    jobs = args.jobs if args.jobs is not None else _default_jobs()
+    targets = _collect_compile_targets(chapters, decl_index)
+    compile_cache: dict[Path, bool | None] = _populate_compile_cache(
+        targets, project_path, jobs=jobs,
+    )
     all_changes: list[Change] = []
-    for tex in sorted(chapters_dir.glob('*.tex')):
+    for tex in chapters:
         all_changes.extend(_sync_chapter(
             tex, project_path, decl_index,
             dry_run=args.dry_run, verbose=args.verbose,

@@ -90,6 +90,15 @@ def default_config() -> dict[str, Any]:
                 "Turn it on for soundness-critical projects."
             ),
             'axiom_sweep': False,
+            '_sync_leanok_timeout_sec_help': (
+                "Wall-clock budget (seconds) for the deterministic Phase-0 "
+                "\\leanok marker sync. The sync compile-checks each "
+                "blueprint-referenced Lean file (parallelised internally); a "
+                "very large blueprint (dozens of chapters / hundreds of "
+                "files) can exceed the default. Raise this if you see "
+                "'sync_leanok ... timed out'. Default 1800 (30 min)."
+            ),
+            'sync_leanok_timeout_sec': 1800,
         },
         'subagents': {
             '_help': (
