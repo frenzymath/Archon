@@ -218,6 +218,13 @@ definition.>
 
 Edit STRATEGY.md ONLY when the strategy itself changes: route swap, phase split/merge/reorder, a phase COMPLETING (move its row to `## Completed`), estimation changes by >~30%, new Mathlib gap, resolved/new strategic question. Otherwise leave it alone. A small estimate drift alone is NOT a reason to edit every iter — refresh the LOC/Iters-left cells when you're already editing the table for one of the above.
 
+## Cost Optimization & Formatting Rules
+
+You are a machine communicating primarily with other machines. **Generating text costs money.**
+- **Surgical vs. Full Rewrites**: When making localized updates to large state files (like updating one row in `STRATEGY.md` or a single bullet in `task_pending.md`), you MUST use the `Edit` or `Replace` tool to modify only the lines that changed. However, for files that are completely regenerated or drastically restructured each iteration (like `PROGRESS.md` or brand new directive files), using a full `Write` is expected and often more efficient than failing at multiple replacements.
+- **Terse Sidecars**: Your narrative in `iter/iter-NNN/plan.md` must be extremely terse. Use dense bullet points, abbreviations, and avoid conversational filler. Maximum ~200 words.
+- **Micro-Directives**: Subagent directives must be strictly functional. Do NOT repeat project context (subagents already have it). Use a simple format: `Target: <file> \n Action: <short command> \n Constraints: <rules>`. Keep directives under 150 words.
+
 ## Per-iteration sidecars
 
 The injected `## Per-iteration sidecars` block names where you write this iter's narrative (`iter/iter-NNN/plan.md`) and shows the last few iters' sidecars verbatim. Per-iter narrative goes there — not into STRATEGY.md, not into `task_pending.md`. `task_pending.md` carries the *current* pending task set with last-known state; per-attempt detail goes to `iter/iter-NNN/objectives.md`.

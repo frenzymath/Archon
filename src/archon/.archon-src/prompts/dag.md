@@ -26,7 +26,7 @@ The mathematics in the blueprint need to be grounded in **external sources**, av
 
 ### When a reference cannot be obtained
 
-Some sources are genuinely unreachable: paywalled, offline, behind an API key you don't have, or simply not available online. When a `reference-retriever` fails to obtain something you can write in `TO_USER.md` to ask the user to supply it, but it might not be able to retrieve it either. If no alternative source is available, you still need to write the blueprint, but you should mention `\textit{Source: [no reference available]}` to keep the provenance clear. If statements are based on existing source, while it is much better to use the original statement, if you modified it, you should mention it in `\textit{Source: ...}` as well, for transparency.
+Some sources are genuinely unreachable: paywalled, offline, behind an API key you don't have, or simply not available online. When a `reference-retriever` fails to obtain something you can write in `TO_USER.md` to ask the user to supply it, but they might not be able to retrieve it either. If no alternative source is available, you still need to write the blueprint, but you should mention `\textit{Source: [no reference available]}` to keep the provenance clear. If statements are based on existing source, while it is much better to use the original statement, if you modified it, you should mention it in `\textit{Source: ...}` as well, for transparency.
 
 ## What you DO NOT do
 
@@ -43,11 +43,10 @@ Before writing any blueprint content, read:
 
 1. **Your invocation prompt** — it contains injected blocks: the Lean file list, existing chapters, goal description (if present), references summary, blueprint-doctor findings, and prior iter sidecars.
 2. **`.lean` files** (if lean_aware) — read them to extract declaration signatures. Look for `sorry` stubs and docstrings that describe what each declaration should say mathematically.
-3. **`PROJECT_GOAL.md` / `ARCHON_GOAL.md`** (if present) — high-level description of what the project is formalizing.
-4. **`.archon/STRATEGY.md`** (if present) — the long-arc strategy. Read it early; you maintain it (see "Long-arc strategy"). The blueprint you build must serve this strategy, and the strategy must reflect the routes the blueprint takes — keep the two consistent.
-5. **`.archon/PROGRESS.md`** (if present) — the current prover objectives and per-file state. Read it for alignment (don't re-blueprint what's already done), and **keep its objectives consistent with the strategy and blueprint you produce** — if your work yields a better plan, update the objectives here too (see "Long-arc strategy"). Don't overwrite or fabricate prover-execution state you can't know.
-6. **`references/`** — the project's source material. Read `references/summary.md` first, then the relevant source files for declarations you're about to blueprint.
-7. **Existing blueprint chapters** — understand what is already there before writing more.
+3. **`.archon/STRATEGY.md`** — the long-arc strategy. Read it early; you maintain it (see "Long-arc strategy"). The blueprint you build must serve this strategy, and the strategy must reflect the routes the blueprint takes — keep the two consistent.
+4. **`.archon/PROGRESS.md`** — the current prover objectives and per-file state. Read it for alignment (don't re-blueprint what's already done), and **keep its objectives consistent with the strategy and blueprint you produce** — if your work yields a better plan, update the objectives here too (see "Long-arc strategy"). Don't overwrite or fabricate prover-execution state you can't know.
+5. **`references/`** — the project's source material. Read `references/summary.md` first, then the relevant source files for declarations you're about to blueprint.
+6. **Existing blueprint chapters** — understand what is already there before writing more.
 
 ## Planning the chapter structure
 

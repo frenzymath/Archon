@@ -213,7 +213,7 @@ When running inside an Archon-initialized project (`.archon/` exists), verify th
 **State files** — check all required files exist in `.archon/`:
 ```
 .archon/PROGRESS.md
-.archon/CLAUDE.md
+.archon/AGENTS.md
 .archon/task_pending.md
 .archon/task_done.md
 .archon/USER_HINTS.md

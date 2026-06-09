@@ -8,7 +8,7 @@ native tools, not Claude tool names:
   verification — with `exec_command` / the shell.
 - **Read files** with `read_file`.
 
-Any path the prompt tells you to read (e.g. `.archon/CLAUDE.md` for your
+Any path the prompt tells you to read (e.g. `.archon/AGENTS.md` for your
 role, `.archon/PROGRESS.md`, the per-stage prompt) is a normal file —
 open it with `read_file`. It is the project's role/context document
 regardless of its name.
