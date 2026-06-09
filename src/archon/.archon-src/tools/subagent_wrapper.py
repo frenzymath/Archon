@@ -34,6 +34,7 @@ effectively lost.
 """
 
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -43,6 +44,24 @@ from pathlib import Path
 
 _PARENT_SLUG_ENV_VAR = "ARCHON_SUBAGENT_SLUG"
 _ROOT_PARENT_SLUG = "_root"
+
+
+def _resolve_archon_cmd() -> list[str] | None:
+    """Return the command prefix that invokes the archon CLI, or None.
+
+    Prefers the ``archon`` console script on PATH. Falls back to
+    ``<python> -m archon`` when the script isn't on PATH but the ``archon``
+    module is importable by the interpreter running this wrapper — the common
+    case inside the Codex sandbox, whose shell PATH omits the venv ``bin/``
+    even though the venv's site-packages are reachable. Returns None only when
+    neither is available, so the caller can emit one clear error.
+    """
+    exe = shutil.which("archon")
+    if exe:
+        return [exe]
+    if importlib.util.find_spec("archon") is not None:
+        return [sys.executable, "-m", "archon"]
+    return None
 
 
 def _derive_iter_num_from_logs(project_path: Path) -> str | None:
@@ -97,10 +116,12 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    if not shutil.which("archon"):
+    archon_cmd = _resolve_archon_cmd()
+    if archon_cmd is None:
         print(
-            "archon CLI not found on PATH. Install Archon or activate "
-            "its venv before running the loop.",
+            "archon CLI not found: neither an `archon` executable on PATH "
+            f"nor an importable `archon` module for {sys.executable}. Install "
+            "Archon or activate its venv before running the loop.",
             file=sys.stderr,
         )
         return 1
@@ -137,7 +158,7 @@ def main() -> int:
     )
 
     cmd = [
-        "archon", "subagent", args.name,
+        *archon_cmd, "subagent", args.name,
         "--project-path", os.getcwd(),
         "--slug", args.slug,
         "--directive-file", args.directive_file,
