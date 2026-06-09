@@ -49,16 +49,34 @@ _ROOT_PARENT_SLUG = "_root"
 def _resolve_archon_cmd() -> list[str] | None:
     """Return the command prefix that invokes the archon CLI, or None.
 
-    Prefers the ``archon`` console script on PATH. Falls back to
-    ``<python> -m archon`` when the script isn't on PATH but the ``archon``
-    module is importable by the interpreter running this wrapper — the common
-    case inside the Codex sandbox, whose shell PATH omits the venv ``bin/``
-    even though the venv's site-packages are reachable. Returns None only when
-    neither is available, so the caller can emit one clear error.
+    Resolution order, most-to-least authoritative:
+
+    1. ``ARCHON_CLI_BIN`` — an absolute ``archon`` console-script path
+       stamped into the env by a parent ``codex`` run (see
+       ``CodexAgent.build_env`` → ``_stamp_archon_cli``). This is the path
+       that actually matters inside the Codex sandbox: codex runs each tool
+       command in a login shell (``bash -lc``) that re-derives ``PATH`` from
+       the user profile, dropping the venv ``bin/`` — so ``shutil.which`` and
+       a bare ``python3`` both miss archon. Non-``PATH`` env vars survive
+       that shell, so this stamped absolute path is the reliable handle.
+    2. ``archon`` console script on ``PATH`` — the normal, non-sandboxed case.
+    3. ``ARCHON_PYTHON`` — an absolute interpreter path stamped alongside
+       ``ARCHON_CLI_BIN`` that can import ``archon``; invoked as
+       ``<python> -m archon``.
+    4. ``<this python> -m archon`` when ``archon`` is importable by the
+       interpreter running this wrapper.
+
+    Returns None only when all four miss, so the caller emits one clear error.
     """
+    cli_bin = os.environ.get("ARCHON_CLI_BIN")
+    if cli_bin and os.path.isfile(cli_bin):
+        return [cli_bin]
     exe = shutil.which("archon")
     if exe:
         return [exe]
+    stamped_py = os.environ.get("ARCHON_PYTHON")
+    if stamped_py and os.path.isfile(stamped_py):
+        return [stamped_py, "-m", "archon"]
     if importlib.util.find_spec("archon") is not None:
         return [sys.executable, "-m", "archon"]
     return None

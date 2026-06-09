@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -108,6 +109,36 @@ def _ensure_archon_on_path(env: dict[str, str]) -> None:
     parts = path.split(os.pathsep) if path else []
     if bin_dir not in parts:
         env["PATH"] = os.pathsep.join([bin_dir, *parts]) if parts else bin_dir
+
+
+def _stamp_archon_cli(env: dict[str, str]) -> None:
+    """Stamp PATH-independent archon-CLI handles into the codex child env.
+
+    :func:`_ensure_archon_on_path` prepends the venv ``bin/`` to ``PATH``,
+    but that is not enough inside the codex sandbox: codex runs each tool
+    command in a **login shell** (``bash -lc``), which re-derives ``PATH``
+    from the user profile and discards whatever we prepended — so by the
+    time ``python3 .claude/tools/archon-subagent.py`` runs, neither
+    ``archon`` (console script) nor the venv ``python`` is on ``PATH`` and
+    the wrapper aborts with "archon CLI not found". Non-``PATH`` env vars,
+    by contrast, *do* survive into that login shell (same mechanism the
+    ``ARCHON_CODEX_BIN`` / ``ARCHON_UV_BIN`` stamps already rely on).
+
+    So we hand the wrapper absolute handles it can use without ``PATH``:
+
+    * ``ARCHON_PYTHON`` — this process's interpreter (``sys.executable``),
+      which by construction can import ``archon`` (we are running under it).
+      The wrapper invokes ``<ARCHON_PYTHON> -m archon``.
+    * ``ARCHON_CLI_BIN`` — the ``archon`` console script's absolute path,
+      when locatable. Preferred by the wrapper as a single executable.
+
+    ``setdefault`` so a nested dispatch inherits the value a parent codex
+    run already stamped rather than re-resolving it.
+    """
+    env.setdefault("ARCHON_PYTHON", os.path.abspath(sys.executable))
+    exe = shutil.which("archon")
+    if exe:
+        env.setdefault("ARCHON_CLI_BIN", os.path.abspath(exe))
 
 
 def _resolve_external_bin(
@@ -706,6 +737,7 @@ class CodexAgent:
         if env_overrides:
             env.update(env_overrides)
         _ensure_archon_on_path(env)
+        _stamp_archon_cli(env)
         # Propagate the resolved codex/uv paths so a nested subagent dispatch
         # (archon subagent → codex exec → its uv-launched MCP) can spawn them
         # even though codex's exec_command sanitizes PATH. See

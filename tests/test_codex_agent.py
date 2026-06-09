@@ -25,6 +25,7 @@ from archon.agents.codex import (
     _CODEX_STREAM_PARSER,
     _ensure_archon_on_path,
     _resolve_codex_bin,
+    _stamp_archon_cli,
     resolve_prompt_variant,
 )
 from archon.commands.tooling.project_config import HarnessDescriptor
@@ -358,6 +359,48 @@ class CodexParserTest(unittest.TestCase):
         self.assertEqual(events.count("tool_result"), 1)
         self.assertLess(events.index("tool_call"), events.index("tool_result"))
         self.assertEqual([r for r in rows if r["event"] == "session_end"][0]["num_turns"], 1)
+
+
+class StampArchonCliTest(unittest.TestCase):
+    """The codex login shell (`bash -lc`) resets PATH, so the subagent
+    wrapper cannot rely on it to find archon. build_env must stamp
+    PATH-independent handles the wrapper can read instead.
+    """
+
+    def test_stamps_python_and_cli_bin(self):
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/venv/bin/archon"), \
+             patch("archon.agents.codex.sys.executable", "/venv/bin/python"):
+            env: dict[str, str] = {}
+            _stamp_archon_cli(env)
+        self.assertEqual(env["ARCHON_PYTHON"], "/venv/bin/python")
+        self.assertEqual(env["ARCHON_CLI_BIN"], "/venv/bin/archon")
+
+    def test_omits_cli_bin_when_console_script_unresolvable(self):
+        with patch("archon.agents.codex.shutil.which", return_value=None), \
+             patch("archon.agents.codex.sys.executable", "/venv/bin/python"):
+            env: dict[str, str] = {}
+            _stamp_archon_cli(env)
+        self.assertEqual(env["ARCHON_PYTHON"], "/venv/bin/python")
+        self.assertNotIn("ARCHON_CLI_BIN", env)
+
+    def test_does_not_clobber_inherited_stamps(self):
+        # A nested dispatch must keep the grandparent's stamp.
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/venv/bin/archon"), \
+             patch("archon.agents.codex.sys.executable", "/venv/bin/python"):
+            env = {"ARCHON_PYTHON": "/orig/python", "ARCHON_CLI_BIN": "/orig/archon"}
+            _stamp_archon_cli(env)
+        self.assertEqual(env["ARCHON_PYTHON"], "/orig/python")
+        self.assertEqual(env["ARCHON_CLI_BIN"], "/orig/archon")
+
+    def test_build_env_stamps_cli_handles(self):
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/venv/bin/archon"), \
+             patch("archon.agents.codex.sys.executable", "/venv/bin/python"):
+            env = _agent(model="m").build_env()
+        self.assertEqual(env["ARCHON_CLI_BIN"], "/venv/bin/archon")
+        self.assertEqual(env["ARCHON_PYTHON"], "/venv/bin/python")
 
 
 class EnsureArchonOnPathTest(unittest.TestCase):
