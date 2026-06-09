@@ -40,6 +40,22 @@ function parseArgs(): { projectPath: string; port: number } {
   return { projectPath, port };
 }
 
+/**
+ * True when running under WSL (WSL2). Detected via the env vars WSL sets in
+ * its shells, with a `/proc/version` kernel-string fallback. Used to pick the
+ * listen host: WSL2's Windows→Linux localhost relay forwards to an IPv4
+ * loopback target, so a dual-stack `::` socket is unreachable from the
+ * Windows browser (gh issue #26).
+ */
+function isWsl(): boolean {
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return /microsoft/i.test(fs.readFileSync('/proc/version', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 export async function createServer(options: { projectPath: string; port: number }) {
   const { projectPath, port } = options;
 
@@ -82,13 +98,21 @@ export async function createServer(options: { projectPath: string; port: number 
   registerDag(fastify, paths);
   registerBlueprint(fastify, paths);
 
-  // Bind dual-stack (IPv6 `::` with IPV6_V6ONLY=0 accepts IPv4 too on Linux/macOS).
-  // Binding to `0.0.0.0` alone causes "waiting for host…" when the browser
-  // resolves localhost to ::1 first. Fall back to IPv4-only if IPv6 is disabled.
+  // Host selection.
+  //   Native Linux/macOS → dual-stack `::` (IPV6_V6ONLY=0 accepts IPv4 too).
+  //     Binding `0.0.0.0` alone there can stall with "waiting for host…" when
+  //     the browser resolves localhost to ::1 first.
+  //   WSL2 → IPv4 `0.0.0.0`. The Windows→WSL localhost relay forwards to an
+  //     IPv4 loopback target, so a `::` socket is unreachable from the Windows
+  //     browser (ERR_CONNECTION_REFUSED) — a 0.2 regression, gh issue #26.
+  //   Override either default with ARCHON_DASHBOARD_HOST (e.g. `::`, `0.0.0.0`,
+  //   `127.0.0.1`).
+  const host = process.env.ARCHON_DASHBOARD_HOST || (isWsl() ? '0.0.0.0' : '::');
   try {
-    await fastify.listen({ port, host: '::' });
+    await fastify.listen({ port, host });
   } catch (e: any) {
-    if (e?.code === 'EAFNOSUPPORT' || e?.code === 'EADDRNOTAVAIL') {
+    if ((e?.code === 'EAFNOSUPPORT' || e?.code === 'EADDRNOTAVAIL') && host !== '0.0.0.0') {
+      // IPv6 unavailable (or the chosen host can't bind) → IPv4 wildcard.
       await fastify.listen({ port, host: '0.0.0.0' });
     } else {
       throw e;
