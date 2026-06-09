@@ -2,8 +2,8 @@
 
 Handles the case where `archon init` is run on an already-initialized
 project: detect the layout, prompt the user (keep / merge / overwrite /
-abort), and on `merge` invoke Claude to walk through bundled-vs-local
-file diffs.
+abort), and on `merge` invoke the configured harness to walk through
+bundled-vs-local file diffs.
 """
 
 from __future__ import annotations
@@ -15,7 +15,12 @@ from pathlib import Path
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
+from archon.commands.tooling.project_config import (
+    load_harness_descriptor,
+    load_project_config,
+    resolve_role_harness,
+)
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 
 from .utils import _files_equal, data_path, has, parse_stage
 
@@ -74,10 +79,10 @@ class ReinitController:
                     if f.name not in bundled_names:
                         extras.append(f".archon/prompts/{f.name}")
         template_dir = data_path("archon-template")
-        claude_src = template_dir / "CLAUDE.md"
-        claude_dst = self.state_dir / "CLAUDE.md"
+        claude_src = template_dir / "AGENTS.md"
+        claude_dst = self.state_dir / "AGENTS.md"
         if claude_src.exists() and claude_dst.exists() and not _files_equal(claude_src, claude_dst):
-            changed.append(".archon/CLAUDE.md")
+            changed.append(".archon/AGENTS.md")
         return changed, extras
 
     def prompt_mode(self, info: dict) -> str:
@@ -111,7 +116,7 @@ class ReinitController:
 
         typer.echo("")
         typer.echo("How would you like to proceed?")
-        typer.echo("  [k] keep       — preserve prompts/CLAUDE.md; refresh MCP, skills, hooks, version stamp")
+        typer.echo("  [k] keep       — preserve prompts/AGENTS.md; refresh MCP, skills, hooks, version stamp")
         typer.echo("  [m] merge      — compare each file and let Claude help reconcile (recommended)")
         typer.echo("  [o] overwrite  — replace all Archon files with the bundled versions")
         typer.echo("  [a] abort      — cancel")
@@ -126,7 +131,7 @@ class ReinitController:
             if choice in ("o", "overwrite"):
                 if typer.confirm(
                     "This will overwrite local changes to .archon/prompts/ and "
-                    ".archon/CLAUDE.md. Continue?",
+                    ".archon/AGENTS.md. Continue?",
                 ):
                     return "overwrite"
             if choice in ("a", "abort"):
@@ -134,7 +139,7 @@ class ReinitController:
 
 
 class PromptMerger:
-    """Stages bundled prompts and asks Claude to reconcile them with local edits."""
+    """Stages bundled prompts and asks the harness to reconcile local edits."""
 
     def __init__(
         self,
@@ -172,7 +177,7 @@ class PromptMerger:
 
         template_dir = data_path("archon-template")
         if template_dir.exists():
-            for name in ("CLAUDE.md",):
+            for name in ("AGENTS.md",):
                 src = template_dir / name
                 if src.exists():
                     shutil.copy2(src, staging / name)
@@ -180,10 +185,16 @@ class PromptMerger:
 
     def _merge_with_claude(self, staging: Path) -> None:
         log.phase(0, "Reconciling local vs. bundled Archon files")
-        log.step("Launching Claude Code to walk you through the differences file by file.")
+        log.step("Launching the configured harness to walk you through the differences file by file.")
 
-        if not has("claude"):
-            log.warn("Claude Code is not installed — falling back to a text-only diff summary.")
+        cfg = load_project_config(project_path)
+        harness = resolve_role_harness(cfg, "init-merge")
+        descriptor = load_harness_descriptor(cfg, harness)
+        if descriptor.runner == "claude-code" and not has("claude"):
+            log.warn(
+                "Claude Code is not installed and init-merge is Claude-backed "
+                "- falling back to a text-only diff summary."
+            )
             self._print_diff_summary(staging)
             return
 
@@ -212,12 +223,12 @@ class PromptMerger:
 
             Paths:
             - Existing local prompts (user may have edited): {self.state_dir}/prompts/
-            - Existing local CLAUDE.md:                     {self.state_dir}/CLAUDE.md
+            - Existing local AGENTS.md:                     {self.state_dir}/AGENTS.md
             - Incoming (bundled, new version):              {staging}/
 
             Path mapping for incoming files:
             - {staging}/prompts/<f>.md  ↔  {self.state_dir}/prompts/<f>.md
-            - {staging}/CLAUDE.md       ↔  {self.state_dir}/CLAUDE.md
+            - {staging}/AGENTS.md       ↔  {self.state_dir}/AGENTS.md
 
             For every file under {staging}, compare against the corresponding existing local file
             per the mapping above. For each file that differs, show a concise summary of what
@@ -232,9 +243,12 @@ class PromptMerger:
             - When done, delete {staging} and report: "Merged N files, kept M files."
             """) + legacy_block
 
-        ClaudeAgent(model=self.model, role="init-merge", backend=self.backend or ClaudeBackend()).run_interactive(
-            prompt, cwd=project_path,                                    
-        )
+        build_runner(
+            role="init-merge",
+            model=self.model,
+            descriptor=descriptor,
+            backend=self.backend or ClaudeBackend(),
+        ).run_interactive(prompt, cwd=project_path)
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
 

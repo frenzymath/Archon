@@ -9,7 +9,11 @@ import typer
 from archon.agent import DEFAULT_MODEL
 
 from .command import InitCommand
-from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
+from archon.commands.tooling.project_config import (
+    ProjectConfig,
+    load_project_config,
+    resolve_claude_backend,
+)
 
 
 def init(
@@ -38,18 +42,31 @@ def init(
             "(default from .archon/config.json loop.claude_backend or 'default')"
         ),
     ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help=(
+            "Engine for loop roles: 'claude-code' (default), 'codex-gpt' "
+            "(Codex CLI + GPT-5.5), or 'mixed' (pick per role)."
+        ),
+    ),
 ) -> None:
     """Initialize a new Archon project.
 
     Runs the deterministic bootstrap (lake init, Mathlib, blueprint, workspace
-    skeletons) in Python, then hands off to Claude Code for the semantic pass
-    only: reorganizing reference files, writing README/summary.md prose, and
-    proposing initial objectives.
+    skeletons) in Python, then hands off to the configured harness for the
+    semantic pass only: reorganizing reference files, writing README/summary.md
+    prose, and proposing initial objectives.
 
     [bold]Examples:[/bold]
       [cyan]archon init .[/cyan]
       [cyan]archon init /path/to/lean-project[/cyan]
     """
-    project_config = load_project_config(Path(project_path))
+    project_config = (
+        load_project_config(Path(project_path))
+        if project_path is not None
+        else ProjectConfig()
+    )
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
-    InitCommand(project_path, force=force, model=model, backend=backend).run()
+    InitCommand(
+        project_path, force=force, model=model, backend=backend, harness=harness,
+    ).run()

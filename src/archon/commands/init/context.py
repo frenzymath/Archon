@@ -34,4 +34,6 @@ class InitContext:
     model: str
     overwrite: bool = False
     backend: ClaudeBackend = field(default_factory=ClaudeBackend)
+    # Raw --harness flag, consumed only when writing a fresh config.json.
+    harness: str | None = None
     bootstrap_report: "BootstrapReport | None" = None

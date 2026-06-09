@@ -1,4 +1,4 @@
-"""`archon init` command — deterministic bootstrap + Claude semantic pass.
+"""`archon init` command - deterministic bootstrap + semantic pass.
 
 The Typer entry point is :func:`init`. The orchestrator is
 :class:`~archon.commands.init.command.InitCommand`; individual phases
