@@ -594,6 +594,13 @@ class HarnessDescriptor:
       routes through a ``-c``-injected custom provider; else native login.
     * ``wire_api`` — the custom provider's wire protocol; defaults to
       ``"responses"``.
+    * ``bin`` / ``uv_bin`` (read from ``raw``) — explicit paths to the
+      ``codex`` executable and the ``uv`` launcher used for the lean-lsp
+      MCP server. Normally unset: the runner resolves each on PATH and
+      propagates the absolute path to nested subagent dispatches via
+      ``ARCHON_CODEX_BIN`` / ``ARCHON_UV_BIN``. Set these only when codex's
+      sandboxed ``exec_command`` shell can't see the binary on PATH and the
+      env var doesn't survive either — then pin the absolute path here.
     """
     name: str
     runner: str = DEFAULT_HARNESS

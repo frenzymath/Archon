@@ -9,6 +9,7 @@ against synthetic streams that mirror the real codex 0.136 event schema.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from archon.agents.codex import (
     UnknownMcpBundleError,
     _CODEX_STREAM_PARSER,
     _ensure_archon_on_path,
+    _resolve_codex_bin,
     resolve_prompt_variant,
 )
 from archon.commands.tooling.project_config import HarnessDescriptor
@@ -41,8 +43,11 @@ class BuildArgvTest(unittest.TestCase):
         argv = _agent(model="gpt-5.1-codex").build_argv(
             "PROMPT", env_source={}, lake_root="/proj"
         )
-        self.assertEqual(argv[:7], [
-            "codex", "exec", "--json", "--skip-git-repo-check",
+        # argv[0] resolves to the codex executable (absolute path when codex
+        # is on PATH, else the bare name) — see _resolve_codex_bin.
+        self.assertEqual(os.path.basename(argv[0]), "codex")
+        self.assertEqual(argv[1:7], [
+            "exec", "--json", "--skip-git-repo-check",
             "--ignore-user-config", "-m", "gpt-5.1-codex",
         ])
         self.assertIn("--ephemeral", argv)
@@ -76,13 +81,50 @@ class BuildArgvTest(unittest.TestCase):
         argv = _agent(model="m", effort="xhigh").build_interactive_argv(
             "PROMPT", env_source={}, lake_root="/proj",
         )
-        self.assertEqual(argv[0], "codex")
+        self.assertEqual(os.path.basename(argv[0]), "codex")
         self.assertNotIn("exec", argv)
         self.assertNotIn("--json", argv)
         self.assertIn("-m", argv)
         self.assertIn("m", argv)
         self.assertIn('model_reasoning_effort="xhigh"', argv)
         self.assertEqual(argv[-1], "PROMPT")
+
+
+# ── codex binary resolution ──────────────────────────────────────────
+
+
+class ResolveCodexBinTest(unittest.TestCase):
+    def _desc(self, **raw):
+        return HarnessDescriptor(name="codex", runner="codex", raw=raw)
+
+    def test_descriptor_bin_override_wins(self):
+        got = _resolve_codex_bin(
+            self._desc(bin="/opt/codex/bin/codex"),
+            {"ARCHON_CODEX_BIN": "/env/codex"},
+        )
+        self.assertEqual(got, "/opt/codex/bin/codex")
+
+    def test_env_var_used_when_no_descriptor_override(self):
+        got = _resolve_codex_bin(self._desc(), {"ARCHON_CODEX_BIN": "/env/codex"})
+        self.assertEqual(got, "/env/codex")
+
+    def test_falls_back_to_which_then_bare_name(self):
+        with patch("archon.agents.codex.shutil.which", return_value="/usr/bin/codex"):
+            self.assertEqual(_resolve_codex_bin(self._desc(), {}), "/usr/bin/codex")
+        with patch("archon.agents.codex.shutil.which", return_value=None):
+            self.assertEqual(_resolve_codex_bin(self._desc(), {}), "codex")
+
+    def test_build_env_stamps_resolved_path_for_nested_dispatch(self):
+        # The resolved path must be propagated so a nested `archon subagent` →
+        # `codex exec` can spawn codex despite a sanitized child PATH.
+        with patch("archon.agents.codex.shutil.which", return_value="/usr/bin/codex"):
+            env = _agent(model="m").build_env()
+        self.assertEqual(env["ARCHON_CODEX_BIN"], "/usr/bin/codex")
+
+    def test_build_env_omits_stamp_when_codex_unresolvable(self):
+        with patch("archon.agents.codex.shutil.which", return_value=None):
+            env = _agent(model="m").build_env()
+        self.assertNotIn("ARCHON_CODEX_BIN", env)
 
 
 # ── gateway credentials ──────────────────────────────────────────────
@@ -140,6 +182,26 @@ class McpTest(unittest.TestCase):
         with self.assertRaises(UnknownMcpBundleError):
             a.build_argv("P", env_source={}, lake_root="/proj")
 
+    def test_lean_lsp_command_resolves_uv_from_env(self):
+        # The MCP launcher must be PATH-independent for nested subagents.
+        a = _agent(model="m", mcp=("lean-lsp",))
+        argv = a.build_argv(
+            "P", env_source={"ARCHON_UV_BIN": "/opt/uv/bin/uv"}, lake_root="/proj",
+        )
+        self.assertTrue(any(
+            "archon-lean-lsp.command" in a and "/opt/uv/bin/uv" in a for a in argv
+        ))
+
+    def test_lean_lsp_forwards_path_to_server_env(self):
+        # The Lean toolchain (lake/lean) the server spawns must be findable.
+        a = _agent(model="m", mcp=("lean-lsp",))
+        argv = a.build_argv(
+            "P", env_source={"PATH": "/x/bin:/y/bin"}, lake_root="/proj",
+        )
+        self.assertTrue(any(
+            "archon-lean-lsp.env.PATH" in a and "/x/bin:/y/bin" in a for a in argv
+        ))
+
 
 # ── prompt variant ────────────────────────────────────────────────────
 
@@ -185,7 +247,7 @@ class RunInteractiveTest(unittest.TestCase):
                 code = _agent(model="m").run_interactive("P", cwd=cwd)
         self.assertEqual(code, 7)
         argv = run.call_args.args[0]
-        self.assertEqual(argv[0], "codex")
+        self.assertEqual(os.path.basename(argv[0]), "codex")
         self.assertEqual(argv[-1], "P")
         self.assertEqual(run.call_args.kwargs["cwd"], cwd)
 

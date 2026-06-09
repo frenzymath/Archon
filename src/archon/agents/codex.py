@@ -110,6 +110,60 @@ def _ensure_archon_on_path(env: dict[str, str]) -> None:
         env["PATH"] = os.pathsep.join([bin_dir, *parts]) if parts else bin_dir
 
 
+def _resolve_external_bin(
+    name: str, *, override: object, env_var: str, env: dict[str, str],
+) -> str:
+    """Resolve an external executable to an absolute path, PATH-independent.
+
+    Resolution order:
+
+    1. an explicit ``override`` path (from the harness descriptor's ``raw``
+       config — the deterministic escape hatch).
+    2. ``env_var`` in ``env`` — stamped by a parent codex run's
+       :meth:`CodexAgent.build_env` so nested dispatches inherit the path.
+    3. ``name`` on ``PATH``.
+    4. the bare ``name`` (last resort).
+
+    Why this matters for subagents: a codex agent dispatches a subagent as
+    ``python3 .claude/tools/archon-subagent.py`` → ``archon subagent`` →
+    a fresh ``codex exec`` (which in turn spawns its MCP servers, e.g.
+    ``uv``). Codex runs the dispatch in a shell whose ``PATH`` is
+    sanitized — it can omit the venv ``bin/`` (so the wrapper falls back to
+    ``python -m archon``) and the directories holding ``codex`` / ``uv``.
+    A bare name then raises ``FileNotFoundError`` in the nested process.
+    Resolving to an absolute path here — and propagating it via ``env_var``
+    — makes the spawn independent of the child shell's ``PATH``.
+    """
+    if isinstance(override, str) and override:
+        return override
+    from_env = env.get(env_var)
+    if from_env:
+        return from_env
+    return shutil.which(name) or name
+
+
+def _resolve_codex_bin(descriptor: "HarnessDescriptor", env: dict[str, str]) -> str:
+    """Resolve the ``codex`` executable for ``argv[0]``. See _resolve_external_bin."""
+    return _resolve_external_bin(
+        "codex", override=descriptor.raw.get("bin"),
+        env_var="ARCHON_CODEX_BIN", env=env,
+    )
+
+
+def _resolve_uv_bin(descriptor: "HarnessDescriptor", env: dict[str, str]) -> str:
+    """Resolve the ``uv`` launcher used for the lean-lsp MCP server command.
+
+    Same rationale as :func:`_resolve_codex_bin`: the MCP server is
+    ``required=True``, so if a subagent's nested codex can't find ``uv`` on
+    its sanitized env the whole codex session aborts at startup. Override
+    key is ``uv_bin`` in the harness ``raw`` config.
+    """
+    return _resolve_external_bin(
+        "uv", override=descriptor.raw.get("uv_bin"),
+        env_var="ARCHON_UV_BIN", env=env,
+    )
+
+
 def resolve_prompt_variant(
     variant: str, *, project_path: Path | None = None,
 ) -> str | None:
@@ -446,7 +500,7 @@ class CodexAgent:
         (``descriptor.mcp``). The prompt is always the final positional arg.
         """
         argv: list[str] = [
-            "codex",
+            _resolve_codex_bin(self.descriptor, env_source or os.environ),
             "exec",
             "--json",
             "--skip-git-repo-check",
@@ -472,7 +526,7 @@ class CodexAgent:
                 "-c", f"model_providers.{_GATEWAY_PROVIDER}.supports_websockets=false",
             ]
 
-        argv += self._mcp_overrides(lake_root)
+        argv += self._mcp_overrides(lake_root, env_source or os.environ)
         argv += ["--sandbox", self.sandbox, "--ephemeral"]
         argv += self._descriptor_extra_args()
         if extra_args:
@@ -496,7 +550,7 @@ class CodexAgent:
         and extra ``-c`` overrides consistently across headless and foreground
         commands.
         """
-        argv: list[str] = ["codex"]
+        argv: list[str] = [_resolve_codex_bin(self.descriptor, env_source or os.environ)]
         if self.model:
             argv += ["-m", self.model]
         if self.effort:
@@ -513,7 +567,7 @@ class CodexAgent:
                 "-c", f"model_providers.{_GATEWAY_PROVIDER}.supports_websockets=false",
             ]
 
-        argv += self._mcp_overrides(lake_root)
+        argv += self._mcp_overrides(lake_root, env_source or os.environ)
         argv += ["--sandbox", self.sandbox]
         argv += self._descriptor_extra_args()
         if extra_args:
@@ -529,11 +583,15 @@ class CodexAgent:
             return raw_extra.split()
         return []
 
-    def _mcp_overrides(self, lake_root: Path | str | None) -> list[str]:
+    def _mcp_overrides(
+        self, lake_root: Path | str | None, env: dict[str, str],
+    ) -> list[str]:
         """Render ``-c mcp_servers.*`` flags for the descriptor's MCP bundles.
 
         Returns ``[]`` when ``descriptor.mcp`` is empty (the default → no
-        MCP). Today the only known bundle is ``"lean-lsp"``.
+        MCP). Today the only known bundle is ``"lean-lsp"``. ``env`` is the
+        resolved child env, used to resolve the MCP launcher (``uv``) to an
+        absolute path and to pass a PATH through to the server.
 
         Raises:
             UnknownMcpBundleError: a configured bundle name isn't known.
@@ -547,7 +605,7 @@ class CodexAgent:
         out: list[str] = []
         for bundle in bundles:
             if bundle == "lean-lsp":
-                out += self._lean_lsp_overrides(lake_root)
+                out += self._lean_lsp_overrides(lake_root, env)
             else:
                 raise UnknownMcpBundleError(
                     f"codex harness {self.descriptor.name!r}: unknown MCP "
@@ -576,8 +634,17 @@ class CodexAgent:
             )
         return lean_lsp_dir
 
-    def _lean_lsp_overrides(self, lake_root: Path | str | None) -> list[str]:
-        """The 5 ``-c`` overrides for the ``archon-lean-lsp`` server."""
+    def _lean_lsp_overrides(
+        self, lake_root: Path | str | None, env: dict[str, str],
+    ) -> list[str]:
+        """The ``-c`` overrides for the ``archon-lean-lsp`` server.
+
+        The launcher is resolved to an absolute ``uv`` path (the server is
+        ``required=True``, so a missing ``uv`` aborts the whole codex
+        session — see :func:`_resolve_uv_bin`). The child env's ``PATH`` is
+        forwarded to the server so the Lean toolchain it spawns
+        (``lake`` / ``lean``) is discoverable.
+        """
         lean_lsp_dir = self._lean_lsp_mcp_dir()
         root = Path(lake_root) if lake_root is not None else Path.cwd()
         base = f"mcp_servers.{_LEAN_LSP_SERVER}"
@@ -586,12 +653,15 @@ class CodexAgent:
             return ["-c", f"{key}={json.dumps(value)}"]
 
         out: list[str] = []
-        out += flag(f"{base}.command", "uv")
+        out += flag(f"{base}.command", _resolve_uv_bin(self.descriptor, env))
         out += flag(
             f"{base}.args",
             ["run", "--directory", str(lean_lsp_dir), "lean-lsp-mcp"],
         )
         out += flag(f"{base}.env.LEAN_PROJECT_PATH", str(root))
+        path = env.get("PATH")
+        if path:
+            out += flag(f"{base}.env.PATH", path)
         out += flag(f"{base}.required", True)
         out += flag(f"{base}.tool_timeout_sec", _MCP_TOOL_TIMEOUT_SEC)
         return out
@@ -636,6 +706,16 @@ class CodexAgent:
         if env_overrides:
             env.update(env_overrides)
         _ensure_archon_on_path(env)
+        # Propagate the resolved codex/uv paths so a nested subagent dispatch
+        # (archon subagent → codex exec → its uv-launched MCP) can spawn them
+        # even though codex's exec_command sanitizes PATH. See
+        # _resolve_external_bin.
+        codex_bin = _resolve_codex_bin(self.descriptor, env)
+        if codex_bin != "codex":
+            env["ARCHON_CODEX_BIN"] = codex_bin
+        uv_bin = _resolve_uv_bin(self.descriptor, env)
+        if uv_bin != "uv":
+            env["ARCHON_UV_BIN"] = uv_bin
         base_url, api_key = self._gateway_creds(env)
         if base_url and api_key:
             env[_GATEWAY_KEY_ENV] = api_key
