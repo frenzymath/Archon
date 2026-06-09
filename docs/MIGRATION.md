@@ -75,7 +75,7 @@ symlinked cache. This meant:
   was symlinked to it.
 
 v0.1.0 uses **copies** instead. Each project gets its own independent copy
-of the prompts, `CLAUDE.md`, the informal agent, and the skills plugin.
+of the prompts, `AGENTS.md`, the informal agent, and the skills plugin.
 This removes the fragility and lets you safely edit prompts per-project,
 but it also means template updates no longer propagate automatically — you
 pull them in by re-running `archon init` and choosing **merge** or
@@ -96,9 +96,9 @@ It detects the existing setup and offers four choices:
 
 - **keep** — leave files alone; just refresh MCP / plugin registrations.
 - **merge** *(recommended)* — launch Claude Code in a focused diff session
-  and reconcile each prompt / `CLAUDE.md` file interactively.
+  and reconcile each prompt / `AGENTS.md` file interactively.
 - **overwrite** — replace all Archon files with the bundled versions
-  (discards local edits to prompts and `CLAUDE.md`).
+  (discards local edits to prompts and `AGENTS.md`).
 - **abort** — cancel without changes.
 
 User state (`PROGRESS.md`, `USER_HINTS.md`, `task_pending.md`, `task_done.md`,
@@ -183,7 +183,7 @@ Back-up `.archon/` state files:
 cp -r .archon/ .archon-backup/
 ```
 
-If you have customizations under `.archon/prompts/` or in `.archon/CLAUDE.md`
+If you have customizations under `.archon/prompts/` or in `.archon/AGENTS.md`
 that you want to keep, be aware that currently `.archon/` is gitignored.
 
 ### 3.2 Run `archon init`
@@ -215,7 +215,7 @@ The right choice depends on what you've edited:
 
 | Situation | Choose |
 |-----------|--------|
-| You never edited anything under `.archon/prompts/` or `.archon/CLAUDE.md`. | **overwrite** |
+| You never edited anything under `.archon/prompts/` or `.archon/AGENTS.md`. | **overwrite** |
 | You edited some prompts and want to review the differences. | **merge** |
 | You want to keep your current setup and only refresh registrations. | **keep** |
 | You are not sure. | **merge** |
@@ -224,7 +224,7 @@ The right choice depends on what you've edited:
 
 When you pick `merge`, Archon:
 
-1. Copies the new bundled prompts and `CLAUDE.md` to a staging directory
+1. Copies the new bundled prompts and `AGENTS.md` to a staging directory
    (`.archon/.archon-incoming/`).
 2. Launches Claude Code with a focused prompt.
 3. For every file that differs, Claude summarizes the changes and asks you
@@ -237,7 +237,7 @@ When you pick `merge`, Archon:
 
 Claude is instructed to never touch `PROGRESS.md`, `USER_HINTS.md`,
 `task_pending.md`, `task_done.md`, `proof-journal/`, or any `.lean` file.
-Only prompts and `CLAUDE.md` are in scope.
+Only prompts and `AGENTS.md` are in scope.
 
 If Claude Code is not installed (it should be, if `archon setup` succeeded),
 the merge step falls back to a text-only diff summary.
@@ -363,7 +363,7 @@ one-line installer again — it is idempotent.
 
 ### 7.2 Re-run `archon init` in each project (recommended)
 
-The prompts and `CLAUDE.md` template gained several pieces of guidance in
+The prompts and `AGENTS.md` template gained several pieces of guidance in
 v0.2.0 — iteration-number canonicalization, LaTeX-macro hygiene, and a rule
 against listing off-limits files in `## Current Objectives`. The plan agent
 also now picks up the bundled dependency-graph script. To pull these into a
@@ -498,17 +498,23 @@ entrypoints and hardens stage detection.
 archon update
 ```
 
-### 8.2 Configurable Claude backend
+### 8.2 Modular engine system: harnesses + Claude backends
 
-You can now use alternative entrypoints for the headless `claude -p` command
-via the new `--claude-backend` CLI flag or by setting `loop.claude_backend`
-in `.archon/config.json`. This is useful for environments like VS Code or
-Claude Desktop.
+v0.3.0 makes the engine that runs each role/subagent configurable. Two knobs:
 
-Supported values:
-- `default`: plain `claude -p` (default)
-- `vscode`: sets `CLAUDE_CODE_ENTRYPOINT=claude-vscode`
-- `desktop`: sets `CLAUDE_CODE_ENTRYPOINT=claude-desktop`
+- **Harness** — *which* engine runs the work: the built-in Claude Code, or
+  **OpenAI Codex**. Set one harness for everything in one line
+  (`loop.harness: "codex"`), per role (`loop.roles.<plan|prover|review>`), or
+  per subagent (`subagents.<name>.harness`).
+- **Claude backend** — *how* the Claude engine is launched, via
+  `--claude-backend` or `loop.claude_backend`:
+  - `default`: plain `claude -p`
+  - `vscode` / `desktop`: sets `CLAUDE_CODE_ENTRYPOINT` accordingly
+  - `claude-p`: drives the Claude Code TUI headlessly (subscription auth)
+  - `interactive`: foreground, human-driven (forces serial, disables multilane)
+
+The backend now also propagates to subagents automatically. See the full
+reference in **[docs/CONFIGURATION.md](CONFIGURATION.md)**.
 
 ### 8.3 Hardened stage detection
 
@@ -516,6 +522,22 @@ Stage detection in `PROGRESS.md` is now more resilient. Human or agent
 annotations (e.g., dates or iteration numbers) appended after the stage token
 are ignored by the orchestrator, preventing the loop from stalling on
 unexpected input.
+
+### 8.4 `.archon/CLAUDE.md` renamed to `.archon/AGENTS.md`
+
+The bundled agent role doc is now `AGENTS.md` — the cross-tool convention
+auto-loaded by both Claude Code and Codex (which Archon also references
+explicitly in every prompt). **No action needed:** `archon init` / `archon
+update` removes the old `.archon/CLAUDE.md` and writes `.archon/AGENTS.md` for
+you. The file is a bundled reference, not a user-edited file, so nothing custom
+is lost. If you kept your own notes elsewhere, they're untouched.
+
+### 8.5 Automated validation notes moved out of `USER_HINTS.md`
+
+`USER_HINTS.md` is now strictly user-authored: the loop never writes to it.
+Automated plan-validation feedback (dropped/blocked/deferred objectives,
+format corrections) now lands in a separate, loop-managed `.archon/AUTO_NOTES.md`
+that is captured into the plan prompt and cleared each iteration.
 
 ---
 

@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-0.3.0-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 
-> **Archon v0.3.0.** Adds a configurable **Claude backend** (`--claude-backend`) for alternative headless entrypoints (VSCode, Desktop), and hardens **stage detection** in `PROGRESS.md` to be more resilient to annotations.
+> **Archon v0.3.0.** Adds a **modular engine system** — route any role or subagent to **OpenAI Codex** alongside Claude via named **harnesses**, and pick a **Claude backend** (`--claude-backend`: `default`/`claude-p`/`vscode`/`desktop`/`interactive`) per loop or per harness. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Also hardens **stage detection** in `PROGRESS.md` to be more resilient to annotations.
 >
 > **Archon v0.2.0.** Adds **multi-lane parallel proving** (Anthropic + Moonshot + DeepSeek side by side), a **refactor agent** driven by the plan agent, **inner-git versioning** of agent work, a frozen-signature surface (`archon-protected.yaml`), an **opt-in subagent system** (blueprint review, strategy critique, Mathlib design advice, and more), a **`--resume`** flag for interrupted runs, a **blueprint-doctor** phase that catches blueprint drift before the plan agent runs, and a **post-plan validation step**. New CLI commands: `archon refactor`, `archon discuss`, `archon branch`, `archon version`. Default single-agent behavior is preserved — subagents and multilane are both off by default.
 >
@@ -125,7 +125,7 @@ If no path is given, `init` prompts you for a project name and creates it.
 If the project has already been initialized, it might use a different version of Archon or you might have modified the prompts/skills manually, `init` offers four choices:
 
 - **keep** — leave your existing setup alone; refresh MCP/plugin registrations only
-- **merge** (recommended) — launch Claude Code in a focused diff session and reconcile each prompt / `CLAUDE.md` file interactively
+- **merge** (recommended) — launch Claude Code in a focused diff session and reconcile each prompt / `AGENTS.md` file interactively
 - **overwrite** — replace all Archon files with the bundled versions (discards local edits)
 - **abort** — cancel without changes
 

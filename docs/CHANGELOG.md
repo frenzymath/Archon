@@ -183,7 +183,7 @@ Upgrading an existing project? See [MIGRATION.md](MIGRATION.md).
   the repository manually.
 - **Interactive re-init flow**: when a project is already initialized,
   `archon init` offers `keep` / `merge` / `overwrite` / `abort`. The
-  `merge` mode launches Claude Code to reconcile prompts and `CLAUDE.md`
+  `merge` mode launches Claude Code to reconcile prompts and `AGENTS.md`
   file-by-file.
 - **Legacy-layout detection**: older projects that used symlinked prompts
   are detected and migrated gracefully instead of erroring.
