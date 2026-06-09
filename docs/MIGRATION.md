@@ -489,8 +489,12 @@ needed — it's silently included in every iteration.
 
 ## 8. Upgrading to v0.3.0
 
-v0.3.0 adds a configurable Claude backend for alternative headless
-entrypoints and hardens stage detection.
+v0.3.0 adds a **modular engine system** (run roles/subagents on Claude Code or
+**OpenAI Codex** via named harnesses; pick a Claude **backend**), **prover
+modes**, `archon extract`/`merge`, new dashboard views, and more. Most of it is
+opt-in — the default single-lane Claude Code loop is unchanged. The full feature
+list is in [CHANGELOG.md](CHANGELOG.md); the steps below are everything you must
+*do* to upgrade (almost all automatic).
 
 ### 8.1 Reinstall the CLI
 

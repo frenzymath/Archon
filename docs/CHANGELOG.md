@@ -2,9 +2,82 @@
 
 All notable changes to Archon are documented here.
 
-## [0.3.0] — 2026-05
+## [0.3.0] — 2026-06
 
-This release adds a configurable **Claude backend** (`--claude-backend` or `loop.claude_backend` in `config.json`), allowing alternative headless entrypoints (VSCode, Desktop). It also hardens **stage detection** in `PROGRESS.md` by tolerating human/agent annotations after the stage token and centralises the normalization logic.
+The headline is a **modular engine system**: every role and subagent can run on
+the built-in Claude Code engine or on **OpenAI Codex**, selected via named
+**harnesses**, and the Claude engine itself can be launched through several
+**backends**. Most of v0.3.0 is opt-in — the default single-lane Claude Code loop
+runs the same shape as before.
+
+Upgrading from v0.2.0? Run `archon update` (then `archon init` in each project).
+See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
+
+### Added
+
+- **Harnesses (modular engines).** Route any role (`loop.harness` /
+  `loop.roles.<role>`) or subagent (`subagents.<name>.harness`) to a named engine
+  descriptor under `harnesses`. A built-in `codex` harness runs **OpenAI Codex**
+  (`codex exec`) with first-class logging parity (its `--json` stream is
+  normalised into Archon's JSONL for the dashboard), per-invocation lean-lsp MCP
+  wiring, and a Codex-specific prompt variant. Define your own from the
+  `_my_harness_example` template. See [CONFIGURATION.md](CONFIGURATION.md).
+- **Claude backends** (`--claude-backend` / `loop.claude_backend`): `default`
+  (plain `claude -p`), `vscode` / `desktop` (entrypoint attribution), `claude-p`
+  (drives the interactive TUI headlessly via the
+  [claude-p](https://github.com/AxelDlv00/claude-p) fork — handy with a Claude
+  subscription under Anthropic's Agent SDK plan policy), and `interactive`
+  (human-driven foreground; serial). The backend propagates to subagents.
+- **Prover modes.** Per-objective `[prover-mode: <name>]` tags select a prover
+  playbook (`formalize`, `prove`, `fine-grained`, `polish`, `golf`,
+  `mathlib-build`); each stage has a default mode. Replaces the static
+  `prompts/prover-*.md`.
+- **`archon extract` / `archon merge`.** DAG-driven extraction of a subproject (a
+  dependency cone) and merging of two projects keeping the best shared proofs;
+  declaration-level carve with a parent-regression gate.
+- **Dashboard — DAG and Blueprint views.** An interactive dependency-graph view
+  (status-coloured nodes, node inspector, git-history scrubber) and a typeset
+  Blueprint view (chapters, `\leanok` / `\mathlibok` tags, source citations),
+  interlinked with the Diffs view.
+- **`archon blueprint-doctor`** lint (orphan chapters, broken/undefined
+  `\ref` / `\uses` / macros, literal-REF placeholders, interleaved math
+  delimiters, bare labels, axioms) — also run automatically before the plan phase.
+- **Planner signals**: a loop-managed `AUTO_NOTES.md` feedback channel (separate
+  from the user-authored `USER_HINTS.md`) and Lean↔blueprint coverage-debt
+  injection.
+- `archon-protected.yaml` v2: tex protection, protection levels, glob patterns,
+  and a hard gate.
+
+### Changed
+
+- **`.archon/CLAUDE.md` → `.archon/AGENTS.md`** — the cross-tool role doc loaded
+  by both Claude Code and Codex; prompts are now harness-neutral.
+  `archon init` / `update` performs the rename.
+- **`sync_leanok`** compile-checks via `lake build <module>` (dependencies built,
+  no spurious missing-import failures), run sequentially; timeout configurable
+  (`loop.sync_leanok_timeout_sec`); optional `#print axioms` sweep
+  (`loop.axiom_sweep`).
+- The plan phase no longer exits on a COMPLETE plan while sorries remain — it
+  resets to the prover stage and keeps going.
+- Subagent dispatch is engine-agnostic (`python -m archon` entrypoint;
+  PATH-independent CLI / codex / uv handles for the Codex login-shell sandbox).
+- `config.json` surfaces the `harnesses` block near the top, with shorter help
+  text and concrete examples; re-init refreshes help text and adds new keys
+  without touching your values.
+- Internal/agent CLI commands (`dag-query`, `subagent`, …) are hidden from
+  `archon --help` (still runnable).
+- The blueprint dependency graph is provided by the
+  [leandag](https://github.com/AxelDlv00/LeanDAG) package, and `claude-p` is now
+  a dependency — both pinned to release tags.
+- Hardened `PROGRESS.md` stage detection (tolerates annotations after the stage
+  token).
+
+### Fixed
+
+- Dashboard binds IPv4 `0.0.0.0` under WSL2 so `localhost:PORT` is reachable from
+  the Windows browser (was IPv6-only — `ERR_CONNECTION_REFUSED`).
+- `extract` parent-regression gate restricted to the agreed scope (no more false
+  positives from out-of-scope dependency Lean degrading to `lean_aux`).
 
 ## [0.2.0] — 2026-05
 
@@ -32,8 +105,7 @@ Upgrading from v0.1.0? See [MIGRATION.md](MIGRATION.md#7-upgrading-from-v010-to-
   file cleanly wins; other lanes get a 10-minute grace period and are then
   cancelled. A per-file merge agent picks the best proof per declaration across
   the lanes that did finish. See
-  [MULTILANE.md](https://github.com/frenzymath/Archon/blob/main/src/archon/.archon-src/archon-template/MULTILANE.md)
-  for setup. Multilane is opt-in via `.archon/config.json`; the default is a
+  [MULTILANE.md](MULTILANE.md) for setup. Multilane is opt-in via `.archon/config.json`; the default is a
   single Anthropic lane.
 - **Refactor agent** + `archon refactor`: when the plan agent identifies
   structural issues (wrong definitions, signature changes, file splits), it
