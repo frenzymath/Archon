@@ -300,65 +300,21 @@ Keep `leandag` edits inside your assigned chapter — fixing a dependency that l
 
 ## Logging
 
-Write your report to `.archon/task_results/blueprint-writer-<slug>.md` (or the parent-aware path under `task_results/<parent-slug>/` when invoked nested — your invocation prompt names the exact path).
+Write your report to `.archon/task_results/blueprint-writer-<slug>.md`. 
+
+**CRITICAL COST RULE**: Your report must be extremely concise. Use dense bullet points, abbreviations, and avoid conversational filler. Maximum ~100 words total. The plan agent does not need prose; it needs facts.
 
 ```markdown
-# Blueprint Writer Report
+# Blueprint Writer Report: <slug>
+**Status:** <COMPLETE | INCOMPLETE>
 
-## Slug
-<slug>
+## Changes
+- Add `def:foo` (`Foo.bar`): captures XYZ.
+- Revise `thm:bar`: updated `\uses{}`.
+- Ref `references/hartshorne.md`: cited smooth criterion.
 
-## Status
-<COMPLETE | INCOMPLETE>
-<If INCOMPLETE: which required items could not be written and why.>
-
-## Target chapter
-blueprint/src/chapters/<chapter-slug>.tex
-
-## Changes Made
-- **Added definition** `\definition`/`\label{def:foo}`/`\lean{Foo.bar}` — <one line on what it captures>
-- **Added theorem** `\theorem`/`\label{thm:foo}` — <one line on statement>
-  - Proof sketch added: <Y/N + brief shape>
-- **Revised** `<existing label>` — <one line on what changed>
-- **Fixed dependencies** `<label>` — corrected/added `\uses{...}` (was isolated / had a broken ref per leandag).
-- **Removed** `<label>` — orphaned isolated block, removal authorized by directive.
-- ...
-
-## Cross-references introduced
-- `\uses{thm:bar}` added in proof of `\thm:foo` — verify `thm:bar` exists in <chapter or this same one>
-- ...
-
-## References consulted
-<every local file under `references/` you OPENED and READ this session, with a one-line note on what you took from each. The plan agent and the reviewer use this list to verify that every `% SOURCE:` parenthetical points at a file you actually read. Omit this section only when you wrote zero citation blocks (Archon-original chapter).>
-- `references/hartshorne-III-5.md` — verbatim quote for `\thm:smooth_criterion` (statement + proof).
-- `references/stacks-tag-01V4.md` — verbatim quote for `\def:etale_morphism`.
-
-## Macros needed (if any)
-- `\foo{...}` — used in <where>; needs definition in `macros/common.tex`. NOT added by me (out of write-domain).
-
-## Reference-retriever dispatches (if any)
-- slug `<child-slug>`: requested `<source>`. Status: COMPLETE / NOT_FOUND / PARTIAL. Summary at `references/<slug>.md`.
-- ...
-
-## Notes for Plan Agent
-- <any inconsistency I noticed in sibling chapters that the directive didn't cover>
-- <any structural concern: e.g. "the chapter is now 800 lines, consider splitting">
-- <any reference I had to guess at because the directive's reference section was incomplete>
-
-## Strategy-modifying findings
-<populate this section ONLY if writing the chapter surfaced a need to
-change the project's strategy itself — not just the chapter content.
-Examples:
-- A definition you were asked to write turns out to require a property
-  that the strategy assumes is automatic but is not.
-- A theorem you sketched is provable as stated, but its consequence
-  used elsewhere in STRATEGY.md does not follow from it.
-- A reference cited as authoritative actually requires a different
-  setup than the strategy assumes.
-
-When this section is non-empty, the plan agent must update STRATEGY.md
-before any further Lean work this iteration. Do NOT silently adapt the
-chapter to paper over a strategy-level issue — surface it here.>
+## Notes / Strategy
+- <ONLY if blocking or critical issue found. Keep to 1 sentence. Omit section if none.>
 ```
 
 ## Return Value

@@ -371,83 +371,38 @@ For each analogue, ranked by porting cost (lowest first):
 
 ## Report format
 
-The report's body depends on the mode.
+Write your report to `.archon/task_results/mathlib-analogist-<slug>.md`.
 
-**Omit-empty rule.** Required sections: `## Mode`, `## Slug`, `## Iteration`, plus the mode-specific question/problem restatement, the verdicts/analogues table, and the overall verdict. **Everything else is optional and must be omitted when empty** — do NOT pad sections with "(none)" / "N/A" content.
-
-In api-alignment mode:
-
-- `## Must-fix-this-iter`: omit when no ALIGN_WITH_MATHLIB verdict applies to shipped code.
-- `## Major`: omit when no ALIGN_WITH_MATHLIB verdict applies to in-proposal code.
-- `## Informational`: omit when there's nothing worth surfacing beyond what's already in the verdicts table.
-
-In cross-domain-inspiration mode:
-
-- `## Top suggestion`: required only when at least one ANALOGUE_FOUND verdict exists. When every analogue was NO_USEFUL_ANALOGUE, replace with a one-sentence "no analogues with portable techniques surfaced" line under the verdicts table; do not invent a top suggestion to fill the slot.
-- `## Discarded`: omit when no analogues were considered-and-rejected.
-
-In both modes: stop searching once you have a confident finding. Don't enumerate near-misses exhaustively to look thorough — three solid analogues outrank a list of fifteen with one-line "doesn't quite work" notes.
+**CRITICAL COST RULE**: Your report must be extremely concise to save LLM tokens. Use dense bullet points, abbreviations, and zero conversational filler. DO NOT write paragraphs. Omit empty sections. The plan agent only needs facts.
 
 ### api-alignment
 
 ```markdown
-# Mathlib Analogist Report
+# Mathlib Analogist: <slug>
+**Mode:** api-alignment | **Iter:** <NNN>
 
-## Mode
-api-alignment
-
-## Slug
-<slug>
-
-## Iteration
-<NNN>
-
-## Question
-<verbatim>
-
-## Verdicts (summary)
-
-| Decision | Verdict | Severity |
-|---|---|---|
-| <name> | ALIGN_WITH_MATHLIB | critical |
-| <name> | PROCEED | informational |
-| ... | | |
-
-## Must-fix-this-iter
-
-Every ALIGN_WITH_MATHLIB verdict where the project has already shipped
-divergent code lands here automatically. Do not under-classify.
-
-- <decision name>: project's `<file>:<lines>` should be refactored to use Mathlib's `<idiom>`. The current parallel API causes <cost>.
-- ...
-
-## Major
-
-ALIGN_WITH_MATHLIB verdicts where the project hasn't shipped yet (still in proposal stage) — the planner can simply adopt the idiom rather than refactor.
-
-## Informational
-
-DIVERGE_INTENTIONALLY (with rationale captured in `analogies/<slug>.md`) and PROCEED verdicts. NEEDS_MATHLIB_GAP_FILL is also informational here — the gap is upstream, not a project failure.
+## Verdicts
+<Max 1-2 lines per finding>
+- **`Foo.bar`**: ALIGN_WITH_MATHLIB (Must-fix). Mathlib uses typeclass `Mathlib.X`. Project uses structure. Refactor needed.
+- **`Baz.qux`**: PROCEED. Matches Mathlib idiom.
 
 ## Persistent file
-- `analogies/<slug>.md` — design-rationale captured for future iters.
-
-Overall verdict: one sentence.
+- `analogies/<slug>.md` written.
 ```
 
 ### cross-domain-inspiration
 
 ```markdown
-# Mathlib Analogist Report
+# Mathlib Analogist: <slug>
+**Mode:** cross-domain | **Iter:** <NNN>
 
-## Mode
-cross-domain-inspiration
+## Analogues Found
+<Max 2-3 lines per analogue>
+- **`Mathlib.Topology.Foo`**: Used technique X to solve Y. Port to project by doing Z.
 
-## Slug
-<slug>
-
-## Iteration
-<NNN>
+## Top Suggestion
+- Try technique X from `Topology.Foo`.
+```
 
 ## Structural problem
 <verbatim re-statement>

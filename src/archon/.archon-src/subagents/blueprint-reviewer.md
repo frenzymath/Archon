@@ -279,146 +279,44 @@ You do **not** modify any project file, including the blueprint. Even if you spo
 
 ## Report format
 
-Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md` (or the parent-aware path when invoked nested — your invocation prompt names the exact path).
+Write your report to `.archon/task_results/blueprint-reviewer-<slug>.md`.
 
-**Omit-empty rule.** Required sections: `## Slug`, `## Iteration`, `## Per-chapter` (the HARD GATE depends on it), `## Severity summary`, `Overall verdict`. **Everything else is optional and must be omitted when empty.**
-
-Concretely:
-
-- `### Incomplete parts`, `### Proofs lacking detail`, `### Lean difficulty quality`, `### Multi-route coverage`, `### Citation discipline`, `### Dependency & isolation findings` under `## Top-level summaries`: omit each sub-section whose finding list is empty. If all six are empty, omit `## Top-level summaries` entirely — the per-chapter table already encodes "everything is fine".
-- `## Unstarted-phase blueprint proposals`: omit only when every phase in the strategy has adequate blueprint coverage. When present, this section is never empty — each proposal block is a concrete outline, not a one-line flag.
-- `## Cross-chapter notes`: omit when no cross-chapter findings exist (the most common case on a clean blueprint).
-- `## Strategy-modifying findings (if any)`: omit entirely when none. Do NOT write a section with "None" inside; the absence of the section IS the signal.
-- `## Per-chapter` blocks for clean chapters: when a chapter is `complete: true`, `correct: true`, and `notes` is empty, render it as a single compact line — `### blueprint/src/chapters/Foo.tex — complete + correct, no notes.` — NOT a multi-line block with `notes: -` filler. Reserve full multi-line blocks for chapters that have actual findings.
-- `## Severity summary`: when there are zero must-fix-this-iter and zero soon-severity items, render as `Severity summary: HARD GATE CLEARS — no findings.` and skip the per-tier breakdown.
-
-Filling templates with hollow "(none)" / "no drift" / "OK" content per chapter is the bloat the report should not produce. A clean 11-chapter audit should be a few hundred lines, not 16K tokens.
+**CRITICAL COST RULE**: Your report must be extremely concise to save LLM tokens. Use dense bullet points, abbreviations, and zero conversational filler. DO NOT write paragraphs. Omit any section that has no findings. The plan agent only needs the facts.
 
 ```markdown
-# Blueprint Review Report
-
-## Slug
-<slug>
-
-## Iteration
-<NNN>
+# Blueprint Review: <slug>
+**Iter:** <NNN>
 
 ## Top-level summaries
+<OMIT empty sections. Max 1 line per finding.>
+- **Incomplete**: `Foo.tex` (missing def X); `Bar.tex` (thm:baz proof too thin).
+- **Bad Lean targets**: `Foo.tex` (\lean{Foo.frob} signature ambiguous).
+- **Multi-route**: Route A (PARTIAL - `Cohomology.tex`); Route B (MISSING).
+- **Citations**: `Foo.tex` thm:smooth missing local file parenthetical.
+- **Deps/Isolated**: `Bar.tex` thm:foo missing `\uses{lem:bar}` (wire-up).
 
-### Incomplete parts
-<bullets naming chapter + which definition/theorem/proof is missing or shallow. Sorted by severity.>
-- `Foo.tex`: definition of `<name>` is missing entirely.
-- `Bar.tex`: theorem `\thm:baz` has a one-sentence "proof" — not enough for a prover to formalize.
-
-### Proofs lacking detail
-<bullets naming chapter + theorem label + what's vague. Distinct from "incomplete" — the proof exists but isn't enough.>
-- `Bar.tex` / `\thm:foo`: jumps from "X holds" to "therefore Y" without naming the lemma used.
-
-### Lean difficulty quality
-<bullets naming `\lean{<name>}` hints whose target is poorly formulated for a prover (too vague, ambiguous, or pointing at something that would lead to a bad type).>
-- `Foo.tex` / `\lean{Foo.frobnicate}`: signature unclear from prose; prover has no way to infer return type.
-
-### Multi-route coverage
-<one block per route mentioned in directive's Routes. PASS / PARTIAL / MISSING + which chapters cover it.>
-- Route "via cohomology": PARTIAL — covered in `Cohomology.tex` and `RR.tex` but `Bridge.tex` (which links them) is empty.
-- Route "via direct computation": MISSING — strategy mentions this as an alternative but no chapter discusses it.
-
-### Citation discipline
-<bullets naming chapter + label + which citation element is missing or suspect. Omit when zero findings.>
-- `Foo.tex` / `\thm:smooth_criterion`: `% SOURCE:` line has no `(read from references/<file>.md)` parenthetical — writer did not name the local file. Likely fabrication.
-- `Bar.tex` / `\def:scheme`: `% SOURCE:` claims `(read from references/hartshorne-II-1.md)` but that file does not exist on disk. Fabrication; writer must dispatch a retriever or remove the citation.
-
-### Dependency & isolation findings
-<from the leandag audit. Each line: chapter / label — finding + disposition the plan agent should hand a writer. Omit when zero findings.>
-- `Bar.tex` / `\thm:foo`: `\uses{}` is missing `lem:bar` (the proof's "by the gluing lemma" step depends on it). **wire-up** — add `\uses{lem:bar}`.
-- `Foo.tex` / `\thm:foo` → `\lem:gone`: broken `\uses{}` (no declaration defines `lem:gone`). **fix** — correct the label or add the missing lemma.
-- `Aux.tex` / `\lem:orphan`: isolated (no `\uses{}` out, nothing uses it), not the goal, not `\mathlibok`, nothing in the goal closure needs it. **remove** — authorize a writer to delete it from `Aux.tex`.
-- `Main.tex` / `\thm:goal`: isolated but it is the project goal. **keep**.
-- `Foo.tex` / `\thm:foo` → `\lem:hensel`: broken `\uses{}`, and `lem:hensel` is a Mathlib result. **wire-up** — add a `\mathlibok` anchor for it (state it, `\lean{Mathlib...}`), not a project lemma.
-- `Bar.tex` / `\lem:claimed_mathlib`: marked `\mathlibok` but Mathlib has no such declaration / the stated form is stronger than Mathlib's. **fix** — hard fail; the loop would skip a real gap. Remove the marker and treat as a result to prove, or correct the statement to match Mathlib.
-
-## Unstarted-phase blueprint proposals
-
-<One proposal block per strategy phase with no or stub blueprint coverage. Each block is a complete chapter outline as specified in "Unstarted-phase proposals" above — not a one-line flag. Omit this section only when every phase has adequate coverage.>
-
-### Proposed chapter: `blueprint/src/chapters/<slug>.tex`
-
-**Covers**: `<Lean file path(s)>`
-**Strategy phase**: <phase name>
-**Why now**: <one sentence>
-
-**Key declarations** (in dependency order):
-1. `\definition` `\label{def:foo}` — <one sentence>. `\lean{Foo.foo}` [expected]. Source: <...>
-2. `\lemma` `\label{lem:bar}` — <one sentence>. `\lean{Foo.bar}` [expected]. Source: <...>
-3. `\theorem` `\label{thm:baz}` — <one sentence>. `\lean{Foo.baz}` [expected]. Source: <...>
-
-**`\uses` skeleton**:
-- `thm:baz` uses `lem:bar`, `def:foo`
-- `lem:bar` uses `def:foo`
-
-**Main theorem proof strategy**: <2–4 sentences>
-
-**References for writer**:
-- `references/<slug>.<ext>`, §<section> — <why relevant>
-- <or: "retrieval needed: <source name>">
-
-**Subphase choices exposed**:
-- <choice description and trade-off, or omit field if single decomposition>
+## Unstarted-phase proposals
+<OMIT if all phases covered. Max 3-5 bullets per proposal. NO paragraphs.>
+### Proposed: `blueprint/src/chapters/<slug>.tex`
+- **Covers**: `Foo/Bar.lean` | **Phase**: <name>
+- **Key defs**: `def:foo` (`Foo.foo` [expected]), `thm:bar`.
+- **Skeleton**: `thm:bar` uses `def:foo`.
+- **Strategy**: <1-2 sentences max>.
 
 ## Per-chapter
-
-### blueprint/src/chapters/Foo.tex
-- **complete**: true | partial | false
-- **correct**: true | partial | false
-- **notes**:
-  - <missing | wrong | observation> — <one line>
-  - ...
-
-### blueprint/src/chapters/Bar.tex — complete + correct, no notes.
-
-(Cover every chapter. Chapters with findings get the full multi-line
-block. Chapters that are `complete: true`, `correct: true`, with
-no notes worth surfacing get the compact one-liner.)
-
-## Cross-chapter notes
-
-- `<chapter A>` defines `\foo` but `<chapter B>`'s proof of `\bar` uses a stronger version.
-- ...
-
-(Omit if empty.)
-
-## Strategy-modifying findings (if any)
-
-If you found a definition that, on close reading, conflicts with the strategy in a way that requires a strategy change (not just a chapter rewrite), name it here.
-
-- `<chapter A>` / `\def:foo`: as currently defined, this <conflict>. STRATEGY.md says <X>, but `foo` actually does <Y>.
+<OMIT clean chapters or use 1 line: `Foo.tex: complete/correct`>
+### `Foo.tex`
+- **Complete**: false
+- **Correct**: true
+- **Notes**: Missing X.
 
 ## Severity summary
-
-Apply these rules verbatim:
-
-- **must-fix-this-iter** — every one of the following lands here, no exceptions:
-  - The "Strategy-modifying findings" section is non-empty.
-  - A route under "Multi-route coverage" is reported as MISSING.
-  - **Any chapter has `complete: partial | false` OR `correct: partial | false`** — even if the strategy "does not require" that chapter this iter.
-  - **Any chapter whose `\lean{...}` hint** is marked "Lean difficulty quality: poor" AND the named target is part of an active prover route in PROGRESS.md.
-  - **Blueprint purity violations** — any chapter containing Lean syntax or project history must be cleaned before provers run.
-  - **Broken `\uses{}` cross-references** that point at non-existent labels.
-  - **Missing `\uses{}` edges** (a `wire-up` disposition) on a chapter feeding an active prover route — out-of-order dispatch risk.
-  - **Unfaithful `\mathlibok` anchors** — a `\mathlibok` block whose `\lean{}` Mathlib declaration doesn't exist or whose form is stronger/different than Mathlib's. Like a fabricated citation, this hides a real gap from the loop; always must-fix.
-  - **Citation-discipline findings on blocks feeding an active prover route**.
-  - **Unstarted-phase proposals** — each proposed chapter lands here as `unstarted-phase proposal: <phase name> — dispatch blueprint-writer for <proposed chapter filename> or record deferral`. These are must-act because an unwritten blueprint is an unparallelisable, unpreviewable phase; writing it early is the cheapest action in the loop.
-- **soon** — cross-cutting items that don't block any specific chapter's prover work yet:
-  - Lean-difficulty-quality findings for hints NOT in an active prover route.
-  - Citation-discipline findings on blocks NOT feeding an active prover route.
-  - Missing-edge `wire-up` findings on chapters NOT feeding an active prover route, and every `remove` disposition (orphaned-scaffolding cleanup is never urgent).
-  - Informational cross-chapter style issues.
-- **informational** — minor observations: naming drift, optional `\lean{...}` references to helpers worth promoting, low-impact prose suggestions.
-
-Overall verdict: one sentence. If unstarted-phase proposals exist, the verdict must name them — "N phases have no blueprint coverage; proposals provided for immediate writer dispatch" is a required component of the verdict when N > 0.
+<OMIT if clear. Max 1 line per severity tier.>
+- **must-fix**: `Foo.tex` complete=false.
+- **soon**: Minor citation issue in `Bar.tex`.
 ```
 
-The severity classification matters because the plan agent's gate uses it directly: any **must-fix-this-iter** finding tied to a chapter prevents the corresponding prover from running this iter. Unstarted-phase proposals do not block existing provers — they trigger blueprint-writer dispatch for future prover work. Do not under-classify them as "informational"; the project pays in deferred parallelism every iter a phase sits without a blueprint.
+The severity classification matters because the plan agent's gate uses it directly.
 
 ## Return value
 
