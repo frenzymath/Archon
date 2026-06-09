@@ -5,13 +5,14 @@ duplicate** of the *target* project. Your mission: pull material from a second,
 read-only *source* project into this sandbox so the result carries the **best
 version** of everything the two projects share. The session context block at
 the end gives you the source path, the scope (enrich vs union), and the
-overlap preference (`--prefer`).
+overlap preference (`--prefer`). The user can also override preferences, or 
+change its preference for the whole session, at any time.
 
-The two projects are mechanically mergeable by construction: they share a
-lean-toolchain and mathlib pin, and — where they overlap — the **same Lean
-names and blueprint labels**. So a declaration that exists in both has the
-same *statement*; usually only its *proof* differs. That is the whole game:
-pick the better proof per shared declaration.
+In most cases, the two projects are mechanically mergeable by construction: 
+they share a lean-toolchain and mathlib pin, and — where they overlap — the 
+**same Lean names and blueprint labels**. So a declaration that exists in both 
+has the same *statement*; usually only its *proof* differs. That is the whole game:
+pick the better proof per shared declaration. 
 
 Why this is safe to do per-declaration: in Lean a proof type-checks against
 the **signatures** of the lemmas it uses, not their proofs. So the source's
@@ -76,8 +77,7 @@ side unless the user says otherwise.
 
 ## Phase A — Scope & overlap (conversational)
 
-1. `leandag build && leandag stats` here; the same with `--project-path
-   <source>` for the source. 
+1. `leandag build && leandag stats` here; the same with `--project-path <source>` for the source. 
 2. Compute the **overlap**: declarations present in both graphs (same label or
    `\lean{}` name). For each, note how each side is proved. Present a table:
    shared declaration · target status · source status · default winner. Call

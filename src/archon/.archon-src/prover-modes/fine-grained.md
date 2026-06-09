@@ -13,7 +13,7 @@ dispatcher_notes: |
 
 ## Your goal
 
-Translate each sentence of the informal proof in the blueprint chapter into an atomic named Lean lemma, then prove each lemma independently. The theorem is never attacked whole. Progress is measured per-sentence, not per-theorem. If sentence themselves can be decomposed further, do so. 
+Translate each sentence of the informal proof in the blueprint chapter into an atomic named Lean lemma, then prove each lemma independently. The theorem is never attacked whole. Progress is measured per-sentence, not per-theorem. If sentence themselves can be decomposed further, do so. When blocked, try decomposing the informal sentence further into sub-sentences leading to sub-lemmas, it is a recursive process. 
 
 ## Why this matters
 
@@ -29,7 +29,7 @@ Provers stall on large goals because the first difficult step blocks the rest. B
    a. Introduce a named `private lemma` encoding that sentence's claim.
    b. Immediately attempt to prove it — using LSP tools, Mathlib search, and tactic exploration.
    c. If it closes: mark RESOLVED in your log; move on.
-   d. If it does not close within reasonable effort: leave a `sorry` with the partial tactic attempt visible (never revert to bare `sorry`), naming the specific blocker; move on to the next sentence.
+   d. If it does not close within reasonable effort (e.g., trying decomposing further): leave a `sorry` with the partial tactic attempt visible (never revert to bare `sorry`), naming the specific blocker; move on to the next sentence.
 6. After all sentences are attempted, assemble the main theorem from the sub-lemma names (the assembly itself may use `sorry` if some sub-lemmas are still open).
 7. Verify the file compiles.
 8. Write results to `task_results/<your_file>.md`.
