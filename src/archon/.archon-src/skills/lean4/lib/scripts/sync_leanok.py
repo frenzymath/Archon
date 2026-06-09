@@ -47,7 +47,6 @@ import os
 import re
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -258,11 +257,19 @@ def _decl_has_sorry(lean_file: Path, decl_name: str) -> bool | None:
 
 
 def _file_compiles(lean_file: Path, project_path: Path) -> bool | None:
-    """Best-effort compile check. Returns None if we can't decide."""
+    """Best-effort compile check. Returns None if we can't decide.
+
+    Uses `lake build <module>` rather than `lake env lean <file>` to
+    ensure dependencies are built correctly, avoiding spurious
+    missing-import failures.
+    """
     try:
+        # Convert path to module name: Foo/Bar.lean -> Foo.Bar
+        rel = lean_file.relative_to(project_path)
+        module = str(rel).replace('.lean', '').replace('/', '.')
         r = subprocess.run(
-            ['lake', 'env', 'lean', str(lean_file.relative_to(project_path))],
-            capture_output=True, text=True, timeout=180,
+            ['lake', 'build', module],
+            capture_output=True, text=True, timeout=300,
             cwd=project_path,
         )
     except (OSError, subprocess.SubprocessError):
@@ -576,7 +583,7 @@ def _sync_chapter(
 def _default_jobs() -> int:
     """Worker count for the per-file compile-check sweep.
 
-    Each worker runs one ``lake env lean <file>`` (a memory-heavy Lean
+    Each worker runs one ``lake build <module>`` (a memory-heavy Lean
     process), so cap the default modestly rather than at all cores. Override
     with ``ARCHON_SYNC_LEANOK_JOBS``.
     """
@@ -617,29 +624,29 @@ def _collect_compile_targets(
 def _populate_compile_cache(
     files: set[Path], project_path: Path, *, jobs: int,
 ) -> dict[Path, bool | None]:
-    """Compile-check ``files`` (optionally in parallel) into a cache dict.
+    """Compile-check ``files`` sequentially into a cache dict.
 
-    The checks are independent and ``_file_compiles`` holds no shared
-    state, so they parallelise cleanly across a bounded thread pool (each
-    just waits on a ``lake env lean`` subprocess). The returned dict is the
-    same ``{file: bool|None}`` shape ``_sync_chapter`` reads — and it keeps
-    its own lazy single-file fallback for any file not pre-warmed here.
+    While check individual files are independent, `lake build` uses a
+    global lock. Running multiple `lake build` processes concurrently
+    would cause lock contention and potential timeouts. We run them
+    sequentially here; Lake's internal parallelism will still utilize
+    available cores to build dependencies.
     """
     cache: dict[Path, bool | None] = {}
     if not files:
         return cache
-    if jobs <= 1 or len(files) == 1:
-        for f in files:
+
+    # Run checks sequentially to avoid Lake lock contention.
+    # Parallelism is handled internally by Lake.
+    for f in sorted(files):
+        try:
             cache[f] = _file_compiles(f, project_path)
-        return cache
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futs = {pool.submit(_file_compiles, f, project_path): f for f in files}
-        for fut in as_completed(futs):
-            f = futs[fut]
-            try:
-                cache[f] = fut.result()
-            except Exception:
-                cache[f] = None
+        except Exception:
+            # One file blowing up (transient toolchain error, unexpected
+            # raise) must not abort the whole warm-up sweep — record it as
+            # undecided (None) and move on. _file_compiles already maps its
+            # own OSError/SubprocessError to None; this is the outer backstop.
+            cache[f] = None
     return cache
 
 

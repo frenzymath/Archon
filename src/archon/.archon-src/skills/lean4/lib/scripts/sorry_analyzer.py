@@ -45,7 +45,7 @@ class Sorry:
     documentation: List[str]
     in_declaration: Optional[str] = None
 
-SORRY_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9_!?'])sorry(?![A-Za-z0-9_!?'])")
+SORRY_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9_!?'])(?:sorry|sorryAx|admit)(?![A-Za-z0-9_!?'])")
 
 def strip_lean_comments_and_strings(line: str, block_comment_depth: int) -> Tuple[str, int]:
     """Return code-only text for a line and updated Lean block-comment depth.
@@ -153,14 +153,15 @@ def find_sorries_in_file(filepath: Path) -> List[Sorry]:
 
     sorries = []
     block_comment_depth = 0
+    _TOKENS = ('sorry', 'sorryAx', 'admit')
     for i, line in enumerate(lines):
         # Fast path when we're not inside a block comment and the line has no
         # token of interest for sorry/comment/string parsing.
-        if block_comment_depth == 0 and 'sorry' not in line and '/-' not in line and '"' not in line:
+        if block_comment_depth == 0 and not any(t in line for t in _TOKENS) and '/-' not in line and '"' not in line:
             continue
 
         code_part, block_comment_depth = strip_lean_comments_and_strings(line, block_comment_depth)
-        if 'sorry' not in code_part:
+        if not any(t in code_part for t in _TOKENS):
             continue
 
         if SORRY_TOKEN_PATTERN.search(code_part):

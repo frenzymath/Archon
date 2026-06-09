@@ -1,19 +1,19 @@
-"""Tests for sync_leanok's parallel compile-check warm-up.
+"""Tests for sync_leanok's compile-check warm-up.
 
-The per-file ``lake env lean`` compile checks dominate the runtime on a
-large blueprint and used to run serially, blowing the phase timeout. They
-are now populated through a bounded thread pool before the sequential
-marker pass. These tests stub the actual compile call so they're fast and
-deterministic, and cover: parallel population, the serial (jobs=1) path,
-target collection mirroring the in-scope filter, per-file error isolation,
-and the default worker count.
+The per-file ``lake build <module>`` compile checks populate a cache before
+the sequential marker pass. They run **serially**: each check spawns a
+``lake build``, and concurrent ``lake build`` processes contend on Lake's
+global build directory lock, so parallelism there causes lock contention and
+timeouts rather than speedup (Lake parallelises dependency builds internally).
+These tests stub the actual compile call so they're fast and deterministic,
+and cover: full population, the jobs=1 path, empty targets, per-file error
+isolation, and the default worker count.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import sys
-import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -46,21 +46,18 @@ class PopulateCompileCacheTest(unittest.TestCase):
         self._orig = self.mod._file_compiles
         self.addCleanup(setattr, self.mod, "_file_compiles", self._orig)
 
-    def test_parallel_is_faster_than_serial_and_correct(self):
-        def slow_true(f, p):
-            time.sleep(0.15)
-            return True
-        self.mod._file_compiles = slow_true
+    def test_populates_every_file_correctly(self):
+        seen = []
+        self.mod._file_compiles = lambda f, p: (seen.append(f) or True)
         files = {Path(f"/x/f{i}.lean") for i in range(8)}
 
-        t = time.time()
         cache = self.mod._populate_compile_cache(files, Path("/x"), jobs=8)
-        parallel = time.time() - t
 
+        # Every target is checked exactly once and recorded.
         self.assertEqual(set(cache), files)
+        self.assertEqual(set(seen), files)
+        self.assertEqual(len(seen), len(files))
         self.assertTrue(all(cache.values()))
-        # 8 × 0.15s serial ≈ 1.2s; with 8 workers it should be well under.
-        self.assertLess(parallel, 0.8)
 
     def test_serial_path_jobs_one(self):
         seen = []
