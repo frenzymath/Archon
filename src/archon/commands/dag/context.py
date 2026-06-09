@@ -63,6 +63,19 @@ class DagContext:
     def backend(self) -> ClaudeBackend:
         return self.options.backend
 
+    def make_agent(self, role: str, *, model: str | None = None):
+        """Build the configured runner for a DAG command role."""
+        from archon.agent import build_runner
+        from archon.commands.tooling.project_config import load_project_config
+
+        cfg = load_project_config(self.project_path)
+        return build_runner(
+            role=role,
+            model=model if model is not None else self.model,
+            cfg=cfg,
+            backend=self.backend,
+        )
+
     @property
     def verbose_logs(self) -> bool:
         return self.options.verbose_logs

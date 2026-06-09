@@ -1,4 +1,4 @@
-"""Pre-loop sanity checks: claude availability, project state, env keys."""
+"""Pre-loop sanity checks: harness availability, project state, env keys."""
 
 from __future__ import annotations
 
@@ -14,8 +14,25 @@ from archon.commands.tooling.inner_git import InnerGit
 from archon.state import read_stage
 
 
+def _loop_requires_claude(project_path: Path) -> bool:
+    """Whether any core loop role is routed to the Claude Code runner."""
+    from archon.commands.tooling.project_config import (
+        load_harness_descriptor,
+        load_project_config,
+        resolve_role_harness,
+    )
+
+    cfg = load_project_config(project_path)
+    for role in ("plan", "prover", "review"):
+        name = resolve_role_harness(cfg, role)
+        descriptor = load_harness_descriptor(cfg, name)
+        if descriptor.runner == "claude-code":
+            return True
+    return False
+
+
 def preflight(project_path: Path, state_dir: Path, dry_run: bool, backend=None) -> None:
-    """Verify claude is installed/auth'd and the project has been init'd.
+    """Verify required harness auth and that the project has been init'd.
 
     ``backend`` is the resolved :class:`~archon.agent.ClaudeBackend`. When it
     is a ``ClaudePBackend``, the auth probe must NOT run plain ``claude -p``
@@ -27,45 +44,11 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool, backend=None) 
     progress = state_dir / "PROGRESS.md"
 
     if not dry_run:
-        from archon.agent import ClaudePBackend, InteractiveBackend
-
-        if isinstance(backend, InteractiveBackend):
-            # Human-driven foreground claude; auth is the user's interactive
-            # session. Like claude-p, the plain `claude -p` auth probe below
-            # is misleading for a subscription account, so skip it.
-            if not shutil.which("claude"):
-                log.error("Claude Code is not installed. Run: archon setup")
-                raise typer.Exit(1)
-            log.success(
-                "Using interactive backend (you will drive claude in the "
-                "foreground; provers run serially)."
-            )
-        elif isinstance(backend, ClaudePBackend):
-            if not shutil.which("claude-p"):
-                log.error(
-                    "claude-p is not installed. Install the maintained fork "
-                    "(adds --trust-workspace for headless TUI runs):\n"
-                    "  uv tool install --force "
-                    "git+https://github.com/AxelDlv00/claude-p\n"
-                    "  (or: pip install "
-                    "git+https://github.com/AxelDlv00/claude-p)"
-                )
-                raise typer.Exit(1)
-            cfg = backend.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
-            log.success(f"Using claude-p backend (auth via Claude Code session in {cfg})")
+        requires_claude = _loop_requires_claude(project_path)
+        if not requires_claude:
+            log.success("Core loop roles use non-Claude harnesses; skipping Claude Code auth check")
         else:
-            if not shutil.which("claude"):
-                log.error("Claude Code is not installed. Run: archon setup")
-                raise typer.Exit(1)
-            r = subprocess.run(
-                ["claude", "-p", "reply with OK", "--no-session-persistence"],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                log.error("Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network.")
-                # raise typer.Exit(1)
-            else:
-                log.success("Claude Code is authenticated and ready")
+            _preflight_claude_backend(backend)
 
     if not progress.exists():
         log.error(f"No project state found. Run: archon init {project_path}")
@@ -75,6 +58,48 @@ def preflight(project_path: Path, state_dir: Path, dry_run: bool, backend=None) 
     if "init" in stage:
         log.error(f"Project is still in init stage. Run: archon init {project_path}")
         raise typer.Exit(1)
+
+
+def _preflight_claude_backend(backend=None) -> None:
+    from archon.agent import ClaudePBackend, InteractiveBackend
+
+    if isinstance(backend, InteractiveBackend):
+        # Human-driven foreground claude; auth is the user's interactive
+        # session. Like claude-p, the plain `claude -p` auth probe below
+        # is misleading for a subscription account, so skip it.
+        if not shutil.which("claude"):
+            log.error("Claude Code is not installed. Run: archon setup")
+            raise typer.Exit(1)
+        log.success(
+            "Using interactive backend (you will drive claude in the "
+            "foreground; provers run serially)."
+        )
+    elif isinstance(backend, ClaudePBackend):
+        if not shutil.which("claude-p"):
+            log.error(
+                "claude-p is not installed. Install the maintained fork "
+                "(adds --trust-workspace for headless TUI runs):\n"
+                "  uv tool install --force "
+                "git+https://github.com/AxelDlv00/claude-p\n"
+                "  (or: pip install "
+                "git+https://github.com/AxelDlv00/claude-p)"
+            )
+            raise typer.Exit(1)
+        cfg = backend.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
+        log.success(f"Using claude-p backend (auth via Claude Code session in {cfg})")
+    else:
+        if not shutil.which("claude"):
+            log.error("Claude Code is not installed. Run: archon setup")
+            raise typer.Exit(1)
+        r = subprocess.run(
+            ["claude", "-p", "reply with OK", "--no-session-persistence"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            log.error("Claude Code cannot run. Check: claude auth, ANTHROPIC_API_KEY, network.")
+            # raise typer.Exit(1)
+        else:
+            log.success("Claude Code is authenticated and ready")
 
 
 def warn_if_lake_unbuilt(project_path: Path) -> None:

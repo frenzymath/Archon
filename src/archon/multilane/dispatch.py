@@ -20,7 +20,7 @@ def _prepare_assignment_state_view(source_state_dir: Path, lane_iter_dir: Path) 
         shutil.rmtree(state_view_dir)
     state_view_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in ('CLAUDE.md', 'PROGRESS.md', 'USER_HINTS.md'):
+    for name in ('AGENTS.md', 'PROGRESS.md', 'USER_HINTS.md'):
         src = source_state_dir / name
         if src.exists():
             shutil.copy2(src, state_view_dir / name)
@@ -101,7 +101,7 @@ def build_assignment_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {lane_project_path}
         Instruction/state directory (read-only): {state_view}
-        Read {state_view}/CLAUDE.md for your role, then read {state_view}/prompts/prover-{stage_path}.md and {state_view}/PROGRESS.md.
+        Read {state_view}/AGENTS.md for your role, then read {state_view}/prompts/prover-{stage_path}.md and {state_view}/PROGRESS.md.
         Check your assigned .lean file for /- USER: ... -/ comments for file-specific hints.
 
         CRITICAL WORKTREE RULES:

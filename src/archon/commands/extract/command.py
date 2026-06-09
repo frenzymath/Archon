@@ -26,7 +26,8 @@ from pathlib import Path
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
+from archon.commands.tooling.project_config import load_project_config
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 
 from .duplicate import DuplicateReport, duplicate_project
 from .verify import read_manifest, verify_sandbox
@@ -140,6 +141,7 @@ class ExtractCommand:
         build_check: bool = False,
         model: str = DEFAULT_MODEL,
         backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.parent = Path(parent).resolve()
         self.dest = Path(dest).resolve()
@@ -152,6 +154,7 @@ class ExtractCommand:
         self.build_check = build_check
         self.model = model
         self.backend = backend
+        self.harness = harness
 
     # ── public ──────────────────────────────────────────────────────────
 
@@ -175,8 +178,12 @@ class ExtractCommand:
         log.info(f"Opening interactive {self.mode} session — Ctrl+C / exit to end")
         log.rule()
         try:
-            ClaudeAgent(
-                model=self.model, role="extract",
+            cfg = load_project_config(self.parent)
+            build_runner(
+                role="extract",
+                model=self.model,
+                cfg=cfg,
+                harness=self.harness,
                 backend=self.backend or ClaudeBackend(),
             ).run_interactive(prompt, cwd=self.dest)
         except KeyboardInterrupt:

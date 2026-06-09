@@ -55,6 +55,10 @@ def extract(
         None, "--claude-backend",
         help="How `claude` is invoked (default | vscode | desktop).",
     ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive session harness, e.g. codex-gpt.",
+    ),
 ) -> None:
     """Extract a subproject (a dependency cone) from an archon project.
 
@@ -94,5 +98,5 @@ def extract(
     ExtractCommand(
         parent, dest,
         merge_source=merge, lake_mode=lake, resume=resume,
-        build_check=build, model=model, backend=backend,
+        build_check=build, model=model, backend=backend, harness=harness,
     ).run()

@@ -247,7 +247,7 @@ class ProjectStateDoctorCheck(DoctorCheck):
             return rows
         rows.append((".archon/", "ok", str(state_dir)))
 
-        for name in ("PROGRESS.md", "CLAUDE.md"):
+        for name in ("PROGRESS.md", "AGENTS.md"):
             f = state_dir / name
             if f.exists():
                 rows.append((name, "ok", f"{f.stat().st_size:,} bytes"))

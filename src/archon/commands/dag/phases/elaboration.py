@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 from archon import log
-from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
 from archon.state import write_meta
 
@@ -36,7 +35,7 @@ class DagElaborationPhase(DagPhase):
             print(prompt)
         else:
             dag_log = ctx.iter_dir / "dag"
-            ClaudeAgent(model=ctx.model, role="dag", backend=ctx.backend).run(
+            ctx.make_agent("dag").run(
                 prompt,
                 cwd=ctx.project_path,
                 log_base=dag_log,

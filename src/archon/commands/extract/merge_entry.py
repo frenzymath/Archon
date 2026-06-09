@@ -80,6 +80,10 @@ def merge(
         None, "--claude-backend",
         help="How `claude` is invoked (default | vscode | desktop).",
     ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive session harness, e.g. codex-gpt.",
+    ),
 ) -> None:
     """Merge two archon projects via the DAG, keeping the best shared proofs.
 
@@ -119,5 +123,5 @@ def merge(
         target, dest,
         merge_source=source, union=union, prefer=prefer,
         lake_mode=lake, resume=resume,
-        build_check=build, model=model, backend=backend,
+        build_check=build, model=model, backend=backend, harness=harness,
     ).run()

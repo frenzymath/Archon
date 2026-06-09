@@ -13,7 +13,7 @@ from typing import Optional
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 from archon.state import read_stage
 from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
 
@@ -114,11 +114,13 @@ class DiscussCommand:
         focus: str | None = None,
         model: str = DEFAULT_MODEL,
         backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.project_path = project_path
         self.focus = focus
         self.model = model
         self.backend = backend
+        self.harness = harness
 
     def run(self) -> None:
         resolved = Path(self.project_path).resolve()
@@ -140,9 +142,14 @@ class DiscussCommand:
 
         self._announce(resolved, stage)
         try:
-            ClaudeAgent(model=self.model, role="discuss", backend=self.backend or ClaudeBackend()).run_interactive(
-                prompt, cwd=resolved,
-            )
+            cfg = load_project_config(resolved)
+            build_runner(
+                role="discuss",
+                model=self.model,
+                cfg=cfg,
+                harness=self.harness,
+                backend=self.backend or ClaudeBackend(),
+            ).run_interactive(prompt, cwd=resolved)
         except KeyboardInterrupt:
             log.info("Discussion ended")
 
@@ -198,7 +205,7 @@ Project directory: {resolved}
 Project state directory: {state_dir}
 Current stage: {stage}
 
-Read {state_dir}/CLAUDE.md for full project context.
+Read {state_dir}/AGENTS.md for full project context.
 {focus_section}
 ## Rules
 
@@ -377,6 +384,10 @@ def discuss(
             "(default from .archon/config.json loop.claude_backend or 'default')"
         ),
     ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive session harness, e.g. codex-gpt.",
+    ),
 ) -> None:
     """Start an interactive discussion about the project.
 
@@ -402,4 +413,6 @@ def discuss(
     """
     project_config = load_project_config(Path(project_path))
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
-    DiscussCommand(project_path, focus=focus, model=model, backend=backend).run()
+    DiscussCommand(
+        project_path, focus=focus, model=model, backend=backend, harness=harness,
+    ).run()

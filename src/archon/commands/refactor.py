@@ -1,9 +1,9 @@
 """`archon refactor draft` and `archon refactor run`.
 
 Two-phase design:
-  - `draft`  : launches Claude interactively to interview the user and
-               produce a well-formed REFACTOR_DIRECTIVE.md. The mathematician
-               reviews / edits the directive before step two.
+  - `draft`  : launches the configured harness interactively to interview the
+               user and produce a well-formed REFACTOR_DIRECTIVE.md. The
+               mathematician reviews / edits the directive before step two.
   - `run`    : reads the directive, invokes the refactor agent in autonomous
                mode, and commits the result to the inner git.
 
@@ -15,7 +15,6 @@ the directive can churn for hours.
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 from textwrap import dedent
 from typing import Optional
@@ -23,7 +22,7 @@ from typing import Optional
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 from archon.commands.tooling.inner_git import InnerGit
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.version import warn_if_mismatch
@@ -87,27 +86,30 @@ class RefactorDraftCommand:
         auto_run: bool = False,
         model: str = DEFAULT_MODEL,
         backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.project_path = project_path
         self.auto_run = auto_run
         self.model = model
         self.backend = backend
+        self.harness = harness
 
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
         warn_if_mismatch(resolved)
 
-        if not shutil.which("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
-
         log.header("archon refactor draft")
-        log.step("Launching Claude to interview you and write REFACTOR_DIRECTIVE.md.")
+        log.step("Launching the configured harness to interview you and write REFACTOR_DIRECTIVE.md.")
 
         prompt = self._build_prompt(resolved, state_dir)
-        ClaudeAgent(model=self.model, role="refactor-draft", backend=self.backend or ClaudeBackend()).run_interactive(
-            prompt, cwd=resolved,
-        )
+        cfg = load_project_config(resolved)
+        build_runner(
+            role="refactor-draft",
+            model=self.model,
+            cfg=cfg,
+            harness=self.harness,
+            backend=self.backend or ClaudeBackend(),
+        ).run_interactive(prompt, cwd=resolved)
 
         directive = _read_directive(state_dir)
         if directive is None:
@@ -157,10 +159,6 @@ class RefactorRunCommand:
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
         warn_if_mismatch(resolved)
-
-        if not shutil.which("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
 
         directive = _read_directive(state_dir)
         if directive is None:
@@ -312,18 +310,24 @@ def draft(
             "(default from .archon/config.json loop.claude_backend or 'default')"
         ),
     ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive draft harness, e.g. codex-gpt.",
+    ),
 ) -> None:
     """Interview the user and write a REFACTOR_DIRECTIVE.md.
 
-    Claude walks the user through the five required sections (problem,
-    justification, changes, risk, rollback). The directive is written to
-    `.archon/REFACTOR_DIRECTIVE.md`. By default, the refactor agent is NOT
-    launched — the user is expected to review the directive first and
-    then run `archon refactor run`.
+    The configured harness walks the user through the five required sections
+    (problem, justification, changes, risk, rollback). The directive is written
+    to `.archon/REFACTOR_DIRECTIVE.md`. By default, the refactor agent is NOT
+    launched — the user is expected to review the directive first and then run
+    `archon refactor run`.
     """
     project_config = load_project_config(Path(project_path))
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
-    RefactorDraftCommand(project_path, auto_run=auto_run, model=model, backend=backend).run()
+    RefactorDraftCommand(
+        project_path, auto_run=auto_run, model=model, backend=backend, harness=harness,
+    ).run()
 
 
 @app.command("run")

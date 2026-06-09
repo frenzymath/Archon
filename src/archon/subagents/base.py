@@ -318,7 +318,7 @@ class Subagent:
             Slug: {slug}
 
             Read {state_dir}/subagents/{self.name}.md for your full instructions.
-            Read {state_dir}/CLAUDE.md for project-wide context.
+            Read {state_dir}/AGENTS.md for project-wide context.
 
             Your directive (also reproduced below for convenience) is at:
               {state_dir}/logs/iter-{iter_num:03d}/{self.name}-{slug}-directive.md
