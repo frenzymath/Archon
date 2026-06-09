@@ -111,6 +111,40 @@ def _ensure_archon_on_path(env: dict[str, str]) -> None:
         env["PATH"] = os.pathsep.join([bin_dir, *parts]) if parts else bin_dir
 
 
+def _prepend_to_path(env: dict[str, str], directory: str) -> None:
+    """Prepend ``directory`` to ``env['PATH']`` (idempotent, no-op if empty)."""
+    if not directory:
+        return
+    path = env.get("PATH", "")
+    parts = path.split(os.pathsep) if path else []
+    if directory not in parts:
+        env["PATH"] = os.pathsep.join([directory, *parts]) if parts else directory
+
+
+def _ensure_codex_runtime_on_path(env: dict[str, str], codex_bin: str) -> None:
+    """Put the ``codex`` launcher's own directory on the child ``PATH``.
+
+    The ``codex`` CLI is a **Node script** (``#!/usr/bin/env node``). When a
+    nested subagent dispatch spawns codex from inside a *parent* codex's
+    ``bash -lc`` sandbox, ``PATH`` has been reset to the sandbox profile and
+    no longer contains the nvm ``bin/`` that holds ``node`` — so the OS
+    shebang lookup fails and codex dies instantly at exit 127
+    (``/usr/bin/env: 'node': No such file or directory``) with zero JSONL
+    output. The symptom is an inner codex run that "fails in 0s": it never
+    even reached ``thread.started``.
+
+    ``node`` lives in the same directory as the resolved ``codex`` binary
+    (both under the nvm/npm bin), so prepending that directory makes the
+    launcher's interpreter discoverable. No-op for a bare ``"codex"`` (not an
+    absolute path → nothing reliable to derive a directory from).
+    """
+    if not codex_bin or codex_bin == "codex":
+        return
+    abs_bin = os.path.abspath(codex_bin)
+    if os.path.sep in codex_bin or os.path.isabs(abs_bin):
+        _prepend_to_path(env, os.path.dirname(abs_bin))
+
+
 def _stamp_archon_cli(env: dict[str, str]) -> None:
     """Stamp PATH-independent archon-CLI handles into the codex child env.
 
@@ -745,6 +779,10 @@ class CodexAgent:
         codex_bin = _resolve_codex_bin(self.descriptor, env)
         if codex_bin != "codex":
             env["ARCHON_CODEX_BIN"] = codex_bin
+            # codex is a Node script: a nested dispatch inside a parent
+            # codex's PATH-reset sandbox can't find `node` (sibling of the
+            # codex binary) and the launcher dies at 127 with no output.
+            _ensure_codex_runtime_on_path(env, codex_bin)
         uv_bin = _resolve_uv_bin(self.descriptor, env)
         if uv_bin != "uv":
             env["ARCHON_UV_BIN"] = uv_bin

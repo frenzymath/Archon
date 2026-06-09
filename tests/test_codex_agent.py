@@ -24,6 +24,7 @@ from archon.agents.codex import (
     UnknownMcpBundleError,
     _CODEX_STREAM_PARSER,
     _ensure_archon_on_path,
+    _ensure_codex_runtime_on_path,
     _resolve_codex_bin,
     _stamp_archon_cli,
     resolve_prompt_variant,
@@ -401,6 +402,37 @@ class StampArchonCliTest(unittest.TestCase):
             env = _agent(model="m").build_env()
         self.assertEqual(env["ARCHON_CLI_BIN"], "/venv/bin/archon")
         self.assertEqual(env["ARCHON_PYTHON"], "/venv/bin/python")
+
+
+class EnsureCodexRuntimeOnPathTest(unittest.TestCase):
+    """codex is a Node script; a nested dispatch inside a parent codex's
+    PATH-reset sandbox must still find `node` (sibling of the codex binary),
+    or the launcher dies at 127 with zero output.
+    """
+
+    def test_prepends_codex_bin_dir(self):
+        env = {"PATH": "/usr/bin"}
+        _ensure_codex_runtime_on_path(env, "/home/u/.nvm/versions/node/v24/bin/codex")
+        self.assertEqual(
+            env["PATH"].split(":")[0], "/home/u/.nvm/versions/node/v24/bin"
+        )
+        self.assertIn("/usr/bin", env["PATH"].split(":"))
+
+    def test_idempotent_when_already_present(self):
+        env = {"PATH": "/home/u/bin:/usr/bin"}
+        _ensure_codex_runtime_on_path(env, "/home/u/bin/codex")
+        self.assertEqual(env["PATH"], "/home/u/bin:/usr/bin")
+
+    def test_noop_for_bare_name(self):
+        env = {"PATH": "/usr/bin"}
+        _ensure_codex_runtime_on_path(env, "codex")
+        self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_build_env_puts_codex_dir_on_path(self):
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/opt/node/bin/codex"):
+            env = _agent(model="m").build_env()
+        self.assertIn("/opt/node/bin", env["PATH"].split(os.pathsep))
 
 
 class EnsureArchonOnPathTest(unittest.TestCase):
