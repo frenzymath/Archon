@@ -49,7 +49,7 @@ _ROOT_SKIP = {".git", ".lake", ".leandag", ".archon"}
 
 # .archon entries that carry over: knowledge to adapt + configuration.
 _STATE_KEEP_FILES = (
-    "CLAUDE.md",
+    "AGENTS.md",
     "config.json",
     "VERSION",
     "ARCHON_MEMORY.md",

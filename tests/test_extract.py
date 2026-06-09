@@ -330,6 +330,38 @@ def test_command_mode_derived_from_merge_source(tmp_path: Path):
     assert merge_cmd.prefer == "target"
 
 
+def test_extract_command_passes_harness_override(monkeypatch, tmp_path: Path):
+    seen = {}
+
+    class DummyRunner:
+        def run_interactive(self, prompt, *, cwd):
+            seen["prompt"] = prompt
+            seen["cwd"] = cwd
+            return 0
+
+    def fake_build_runner(**kwargs):
+        seen["runner_kwargs"] = kwargs
+        return DummyRunner()
+
+    monkeypatch.setattr("archon.commands.extract.command.build_runner", fake_build_runner)
+    monkeypatch.setattr(ExtractCommand, "_preflight", lambda self: None)
+    monkeypatch.setattr(ExtractCommand, "_build_prompt", lambda self: "PROMPT")
+    monkeypatch.setattr(ExtractCommand, "_gate_and_finalize", lambda self: None)
+
+    cmd = ExtractCommand(
+        str(tmp_path / "parent"),
+        str(tmp_path / "dest"),
+        resume=True,
+        harness="codex",
+    )
+    cmd.run()
+
+    assert seen["runner_kwargs"]["role"] == "extract"
+    assert seen["runner_kwargs"]["harness"] == "codex"
+    assert seen["prompt"] == "PROMPT"
+    assert seen["cwd"] == tmp_path / "dest"
+
+
 def test_merge_command_registered():
     from archon.commands.extract import merge
     assert callable(merge)
@@ -507,12 +539,14 @@ def _child(type_, eff, sorry, *, lean_name, id_):
 def test_parent_regression_detects_degradation(tmp_path: Path, monkeypatch):
     from archon.commands.extract import verify as V
     monkeypatch.setattr(V, "build_graph_at_commit", lambda p, s: _parent_graph())
-    # x degraded to a sorried lean_aux (chapter dropped); y is healthy.
+    # x degraded to a sorried lean_aux (chapter dropped); y is healthy. x is
+    # IN SCOPE (a recorded seed) so the degradation is a real regression.
     child = [
         _child("lean_aux", None, True, lean_name="Lib.x", id_="lean:Lib.x"),
         _child("theorem", 5, False, lean_name="Lib.y", id_="thm:y"),
     ]
-    manifest = {"parent": str(tmp_path), "parent_inner_head": "deadbeef"}
+    manifest = {"parent": str(tmp_path), "parent_inner_head": "deadbeef",
+                "seeds": ["thm:x"], "closure": ["thm:y"]}
     probs, compared = V._parent_regressions(tmp_path, manifest, child)
     assert compared is True
     assert any("Lib.x" in p for p in probs)
@@ -523,10 +557,29 @@ def test_parent_regression_respects_rider_whitelist(tmp_path: Path, monkeypatch)
     from archon.commands.extract import verify as V
     monkeypatch.setattr(V, "build_graph_at_commit", lambda p, s: _parent_graph())
     child = [_child("lean_aux", None, True, lean_name="Lib.x", id_="lean:Lib.x")]
+    # x is in scope AND whitelisted — the rider whitelist suppresses it.
     manifest = {"parent": str(tmp_path), "parent_inner_head": "d",
-                "riders": ["Lib.x"]}
+                "seeds": ["thm:x"], "riders": ["Lib.x"]}
     probs, compared = V._parent_regressions(tmp_path, manifest, child)
     assert compared is True and probs == []
+
+
+def test_parent_regression_ignores_out_of_scope_rider(tmp_path: Path, monkeypatch):
+    """An out-of-scope dependency kept as compile-time Lean degrading to a bare
+    lean_aux (chapter dropped) is the expected outcome of a focused extract —
+    it must NOT trip the gate even though it degraded vs the parent."""
+    from archon.commands.extract import verify as V
+    monkeypatch.setattr(V, "build_graph_at_commit", lambda p, s: _parent_graph())
+    # x degraded, but only y is in the agreed scope. x is an out-of-scope rider.
+    child = [
+        _child("lean_aux", None, True, lean_name="Lib.x", id_="lean:Lib.x"),
+        _child("theorem", 5, False, lean_name="Lib.y", id_="thm:y"),
+    ]
+    manifest = {"parent": str(tmp_path), "parent_inner_head": "d",
+                "seeds": ["thm:y"]}
+    probs, compared = V._parent_regressions(tmp_path, manifest, child)
+    assert compared is True
+    assert probs == []  # x degradation is expected, not flagged
 
 
 def test_parent_regression_skips_when_no_parent_commit(tmp_path: Path):

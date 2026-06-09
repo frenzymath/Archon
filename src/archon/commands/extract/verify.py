@@ -70,6 +70,13 @@ def _parent_regressions(dest: Path, manifest: dict, child_nodes) -> tuple[list[s
     intentional and skipped. Best-effort: returns ``([], False)`` (no parent
     available) rather than raising. The second value reports whether a real
     comparison ran.
+
+    Only the agreed scope (seeds + their recorded blueprint closure) is judged.
+    Out-of-scope dependency declarations that a carve keeps as compile-time
+    Lean while dropping their chapters are EXPECTED to degrade to ``lean_aux``
+    and are not flagged — judging them flooded the gate on every subproject
+    extract. In-scope chapter loss is still caught by the closure-presence
+    check (the node's id flips ``thm:`` -> ``lean:``).
     """
     parent = manifest.get("parent")
     sha = manifest.get("parent_inner_head")
@@ -80,12 +87,42 @@ def _parent_regressions(dest: Path, manifest: dict, child_nodes) -> tuple[list[s
         return [], False
 
     riders = set(manifest.get("riders") or [])
-    p_idx = _name_index(data.get("nodes", []), is_dict=True)
+    parent_nodes = data.get("nodes", [])
+
+    # The gate judges only the AGREED SCOPE — the seeds and their recorded
+    # blueprint closure. Carving a focused subproject intentionally keeps
+    # out-of-scope dependency Lean (with its sorries) so the subproject still
+    # compiles, while dropping those decls' blueprint chapters; such a node
+    # degrading to a bare lean_aux is the EXPECTED outcome of an extract, NOT a
+    # regression. Without this restriction every kept Lean-import rider trips
+    # the gate — the recurring false-positive flood on subproject extracts.
+    # In-scope chapter loss is still caught: the node's id flips thm:->lean: so
+    # the closure-presence check fails on it independently. Scope ids are
+    # resolved to Lean names through the PARENT graph (the manifest records
+    # ids). When no scope was recorded we judge nothing here (the seed/closure
+    # presence checks already gate that) rather than flag every upstream node.
+    in_scope_ids = set(manifest.get("seeds") or []) | set(manifest.get("closure") or [])
+    in_scope_names: set[str] = set()
+    for pn in parent_nodes:
+        if pn.get("id") not in in_scope_ids:
+            continue
+        ln = pn.get("lean_name")
+        if not ln:
+            continue
+        for part in (p.strip() for p in ln.split(",")):
+            if part:
+                in_scope_names.add(part)
+
+    p_idx = _name_index(parent_nodes, is_dict=True)
     c_idx = _name_index(child_nodes, is_dict=False)
 
     problems: list[str] = []
     for name, pn in p_idx.items():
         if name in riders:
+            continue
+        # Out-of-scope dependency kept only as compile-time Lean — dropping its
+        # chapter (and so its blueprint status) is by design, not a regression.
+        if name not in in_scope_names:
             continue
         # Only judge nodes that were healthy upstream: a real blueprint node
         # (not lean_aux) carrying a finite local effort.
