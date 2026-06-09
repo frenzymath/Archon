@@ -6,8 +6,9 @@ a PROGRESS.md that the prover dispatcher can actually parse, and (2)
 silently rename common heading drift (``## Strategy`` →
 ``## Current Objectives``) so a productive plan isn't wasted by a
 one-character format mistake. On persistent failure, appends a
-*discuss-format* corrective line to ``USER_HINTS.md`` (which the next
-plan agent reads and clears) and signals the caller to skip prover
+*discuss-format* corrective line to ``AUTO_NOTES.md`` — the loop-managed
+feedback channel the next plan agent reads and clears, kept separate from
+the user-authored ``USER_HINTS.md`` — and signals the caller to skip prover
 dispatch for this iteration.
 
 Recognizes an *intentional* no-prover-this-iter marker in PROGRESS.md
@@ -44,6 +45,15 @@ from .blocked_deps import (
 )
 from .context import LoopContext
 from .sorry_count import filter_noop_objectives
+
+
+# Loop-managed feedback channel for automated plan-validation notes
+# (dropped/blocked/deferred objectives, format-corrections). Kept SEPARATE
+# from USER_HINTS.md, which is user-authored only — nothing automatic is ever
+# written there. The next iter's plan phase captures this file, injects it into
+# the plan prompt under "## Automated validation notes", and clears it. See
+# ``phases/plan.py``.
+AUTO_NOTES_FILENAME = "AUTO_NOTES.md"
 
 
 # A line inside `## Current Objectives` matching this regex marks the
@@ -90,7 +100,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
     * On rewrites: PROGRESS.md is updated in place and an inner-git
       commit ``archon[NNN/plan-fixup]`` records what changed.
     * On parse failure with no intentional-skip marker: a discuss-format
-      corrective hint is appended to ``USER_HINTS.md`` and
+      corrective note is appended to ``AUTO_NOTES.md`` and
       ``planValidate.status=failed`` is stamped into the iteration's
       ``meta.json``.
     * On intentional skip: ``planValidate.status=ok_intentional_skip``
@@ -150,7 +160,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"objectivesBlocked in meta.json for details."
             )
             _append_blocked_hint(
-                ctx.state_dir / "USER_HINTS.md", blocked_meta,
+                ctx.state_dir / AUTO_NOTES_FILENAME, blocked_meta,
             )
 
         if not objectives:
@@ -191,7 +201,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"a prover on them would quit immediately with no work. See "
                 f"planValidate.objectivesNoop in meta.json for details."
             )
-            _append_noop_hint(ctx.state_dir / "USER_HINTS.md", noop_rels)
+            _append_noop_hint(ctx.state_dir / AUTO_NOTES_FILENAME, noop_rels)
 
         if not objectives:
             # Every surviving objective was a no-op. Skip prover rather
@@ -228,12 +238,12 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"plan-validate: PROGRESS.md lists {proposed} objectives — "
                 f"over the dispatch cap of {cap}. The runner will dispatch "
                 f"only the first {cap}; {len(deferred)} files are deferred "
-                f"and re-surfaced to the next plan agent via USER_HINTS. "
+                f"and re-surfaced to the next plan agent via AUTO_NOTES. "
                 f"This guards against runaway fan-out (e.g. 27 provers "
                 f"launched in one iter)."
             )
             _append_overcap_hint(
-                ctx.state_dir / "USER_HINTS.md",
+                ctx.state_dir / AUTO_NOTES_FILENAME,
                 cap=cap, proposed=proposed, deferred_rels=deferred_rels,
             )
             write_meta(ctx.iter_meta, **{
@@ -268,10 +278,10 @@ def validate_plan_output(ctx: LoopContext) -> bool:
     log.error(
         "plan-validate: PROGRESS.md has no parseable objectives under "
         "'## Current Objectives' (after auto-fix). Skipping prover this "
-        "iteration; appended a corrective hint to USER_HINTS.md so the "
+        "iteration; appended a corrective note to AUTO_NOTES.md so the "
         "next plan agent can self-correct."
     )
-    _append_hint(ctx.state_dir / "USER_HINTS.md")
+    _append_hint(ctx.state_dir / AUTO_NOTES_FILENAME)
     write_meta(ctx.iter_meta, **{
         "planValidate.status": "failed",
         "planValidate.objectives": 0,
@@ -370,7 +380,7 @@ def _apply_blocked_deps_filter(
     Returns ``(kept, dropped)``. ``dropped`` is
     ``[(objective_path, [blocked_dep_rel, ...]), ...]`` — the second
     element lists the blocked files that disqualified the objective,
-    so the caller can render a useful USER_HINTS message.
+    so the caller can render a useful AUTO_NOTES message.
 
     The blocked set is read from ``.archon/last_lake_build.log`` — the
     file the finalize phase writes when ``lake build`` fails. An
@@ -395,7 +405,7 @@ def _apply_blocked_deps_filter(
 def _append_noop_hint(hints_file: Path, noop_rels: list[str]) -> None:
     """Append a hint listing files dropped as guaranteed no-op dispatches.
 
-    The next plan agent reads-then-clears USER_HINTS, so this lands in
+    The next plan agent reads-then-clears AUTO_NOTES, so this lands in
     front of the planner exactly once. It tells the planner these files
     had nothing to prove — they were already done, or listed as
     off-limits/reference, and should not be re-listed as objectives.
@@ -427,7 +437,7 @@ def _append_blocked_hint(
 ) -> None:
     """Append a hint listing files dropped because their imports don't compile.
 
-    The next plan agent reads-then-clears USER_HINTS, so this lands
+    The next plan agent reads-then-clears AUTO_NOTES, so this lands
     in front of the planner exactly once. Listing the specific
     blocking deps means the planner can prioritize fixing the
     upstream files first.
@@ -470,7 +480,7 @@ def _append_overcap_hint(
 ) -> None:
     """Append a hint listing the files deferred by the dispatch cap.
 
-    The next plan agent reads-then-clears USER_HINTS each iter, so the
+    The next plan agent reads-then-clears AUTO_NOTES each iter, so the
     listing lands in front of the planner exactly once. Including the
     file paths means the planner doesn't have to dig through meta.json
     to re-prioritize.
@@ -498,10 +508,9 @@ def _append_overcap_hint(
 def _append_hint(hints_file: Path) -> None:
     """Append a one-line discuss-format corrective hint.
 
-    Discuss-format keeps USER_HINTS.md as a uniform list of timestamped
-    one-liners (the ``archon discuss`` convention). The plan agent
-    reads-then-clears the file each iteration so the hint is consumed
-    exactly once.
+    Discuss-format keeps AUTO_NOTES.md as a uniform list of timestamped
+    one-liners. The plan phase reads-then-clears the file each iteration
+    so the note is consumed exactly once.
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     hint = (

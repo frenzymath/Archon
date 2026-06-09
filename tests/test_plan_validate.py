@@ -256,7 +256,7 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
 
             self.assertTrue(result)
             # The hint file lists the 3 deferred files.
-            hints_body = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            hints_body = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
             self.assertIn("over the dispatch cap of 10", hints_body)
             self.assertIn("13 objectives", hints_body)
             for deferred_name in files[10:]:
@@ -283,7 +283,7 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
             result = validate_plan_output(ctx)
 
             self.assertTrue(result)
-            self.assertFalse((state / "USER_HINTS.md").exists())
+            self.assertFalse((state / "AUTO_NOTES.md").exists())
 
 
 class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
@@ -338,7 +338,7 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             result = validate_plan_output(ctx)
             # Every objective was dropped → False (no prover this iter).
             self.assertFalse(result)
-            hints = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
             self.assertIn("Downstream.lean", hints)
             self.assertIn("Upstream.lean", hints)
 
@@ -358,8 +358,8 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            # No USER_HINTS line written — nothing was dropped.
-            self.assertFalse((state / "USER_HINTS.md").exists())
+            # No AUTO_NOTES line written — nothing was dropped.
+            self.assertFalse((state / "AUTO_NOTES.md").exists())
 
     def test_no_log_means_no_filter(self):
         # First-iter / no-prior-failure case: no log file, no blocked
@@ -374,7 +374,7 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            self.assertFalse((state / "USER_HINTS.md").exists())
+            self.assertFalse((state / "AUTO_NOTES.md").exists())
 
     def test_partial_filter_keeps_unblocked_and_hints_dropped(self):
         # Mix: one objective is downstream-of-blocked (drop), one is
@@ -396,7 +396,7 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            hints = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
             self.assertIn("Downstream.lean", hints)
             self.assertNotIn("Independent.lean", hints)
 
@@ -441,10 +441,12 @@ class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)  # Work.lean survives → dispatch proceeds
-            hints = (state / "USER_HINTS.md").read_text(encoding="utf-8")
+            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
             self.assertIn("Done.lean", hints)
             self.assertIn("open sorries", hints)
             self.assertNotIn("Work.lean", hints)
+            # The user-authored hint file must NEVER be written automatically.
+            self.assertFalse((state / "USER_HINTS.md").exists())
 
     def test_scaffold_dispatch_is_exempt(self):
         with tempfile.TemporaryDirectory() as d:
@@ -460,7 +462,7 @@ class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            self.assertFalse((state / "USER_HINTS.md").exists())
+            self.assertFalse((state / "AUTO_NOTES.md").exists())
 
     def test_new_file_is_kept(self):
         with tempfile.TemporaryDirectory() as d:
@@ -474,7 +476,7 @@ class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            self.assertFalse((state / "USER_HINTS.md").exists())
+            self.assertFalse((state / "AUTO_NOTES.md").exists())
 
     def test_all_noop_skips_prover(self):
         with tempfile.TemporaryDirectory() as d:

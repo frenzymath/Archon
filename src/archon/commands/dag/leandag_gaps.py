@@ -311,8 +311,8 @@ def compute_gaps(project_path: Path) -> GapReport:
         isolated_bp = [n.id for n in dag.isolated if n.type != "lean_aux"]
 
         q = Queries(dag)
-        unproved = [n.id for n in q.unproved()]
-        ready = [n.id for n in q.ready_to_prove()]
+        unproved = [n.id for n in q.unproved() if not getattr(n, "mathlib_ok", False)]
+        ready = [n.id for n in q.ready_to_prove() if not (n.proved or getattr(n, "mathlib_ok", False))]
 
         # ── Infinity analysis (blueprint nodes only; lean_aux is the separate
         # "uncovered" track). effort_local is None ⇔ no sorry-free Lean AND no
@@ -377,7 +377,7 @@ QUERY_VERBS: dict[str, str] = {
     "leaves": "nothing depends on them (rdep_count 0)",
     "roots": "depend on nothing (dep_count 0)",
     "isolated": "no edges at all — possibly dead",
-    "unproved": "blueprint nodes without \\leanok",
+    "unproved": "blueprint nodes without \\leanok or \\mathlibok",
     "sorry": "Lean proof contains sorry/admit",
     "gaps": "∞ effort — statement with no informal proof (roadmap holes)",
     "needs-leanok": "sorry-free in Lean but not marked \\leanok",
@@ -464,7 +464,7 @@ def run_query(
                         "error": f"--vs node(s) not found: {', '.join(vs_missing)}"}
 
         if verb in ("frontier",):
-            sel = q.ready_to_prove()
+            sel = [n for n in q.ready_to_prove() if not (n.proved or getattr(n, "mathlib_ok", False))]
         elif verb == "leaves":
             sel = dag.leaves
         elif verb == "roots":
@@ -472,7 +472,7 @@ def run_query(
         elif verb == "isolated":
             sel = dag.isolated
         elif verb == "unproved":
-            sel = q.unproved()
+            sel = [n for n in q.unproved() if not getattr(n, "mathlib_ok", False)]
         elif verb == "sorry":
             sel = q.with_sorry()
         elif verb == "gaps":
@@ -977,7 +977,7 @@ def format_markdown(report: GapReport) -> str:
         "Proved in Lean but no informal proof — add a brief \"proved directly "
         "in Lean\" note", report.lean_only,
     )
-    _section("Unproved blueprint declarations (no \\leanok)", report.unproved)
+    _section("Unproved blueprint declarations (no \\leanok or \\mathlibok)", report.unproved)
     _section("Ready to prove (deps all proved)", report.ready)
     return "\n".join(lines)
 

@@ -408,6 +408,34 @@ def _user_hints_block(captured_hints: str | None) -> str:
     return "".join(parts)
 
 
+def _auto_notes_block(captured_auto_notes: str | None) -> str:
+    """Inject loop-generated AUTO_NOTES.md feedback into the plan prompt.
+
+    These are plan-validate's automated notes (no-op/blocked/deferred
+    objectives, format corrections) from the previous iteration — the
+    system-managed counterpart to user hints. Returns "" when there is
+    nothing to surface, so no empty section is rendered.
+    """
+    raw = _strip_html_comments(captured_auto_notes or "").strip()
+    if not raw:
+        return ""
+    return dedent(f"""
+
+        ## Automated validation notes
+
+        The Archon loop's plan-validation step recorded the following about the
+        previous iteration (objectives it dropped as no-ops, blocked-by-failed-
+        build, or deferred over the dispatch cap, and any format corrections).
+        These are **loop-generated diagnostics, not user input** — act on them
+        when choosing this iteration's objectives. The loop captured and will
+        clear them; you do NOT need to read or clear `AUTO_NOTES.md` yourself.
+
+        ```
+        {raw}
+        ```
+    """)
+
+
 def _archon_memory_block(state_dir: Path | None, *, writable: bool = False) -> str:
     """Inject ARCHON_MEMORY.md content into an agent prompt.
 
@@ -957,9 +985,12 @@ def _blueprint_frontier_block(project_path: Path) -> str:
         return ""
 
     # Planner-focused, token-cheap rendering: the frontier (what to dispatch),
-    # the ∞ holes (what to blueprint first), and broken deps (what to fix). The
-    # full coverage dump (uncovered Lean decls, etc.) is the dag agent's concern
-    # and is injected there via _leandag_block — not here.
+    # the ∞ holes (what to blueprint first), broken deps (what to fix), and
+    # the Lean ↔ blueprint coverage debt (lean_aux + isolated nodes). The
+    # debt MUST be shown here: provers create helpers every iter, the dag
+    # agent only runs before the loop, and the planner is the only agent
+    # that authors blueprint entries — omitting it lets isolated nodes
+    # accumulate silently (observed: 28 unmatched decls after 10 iters).
     def _lst(title: str, items: list, n: int, render=lambda x: f"`{x}`") -> str:
         shown = items[:n]
         out = [f"**{title}** ({len(items)}):"]
@@ -974,7 +1005,8 @@ def _blueprint_frontier_block(project_path: Path) -> str:
     body = "\n\n".join([
         f"Entry `{report.entry}` — {report.total_blueprint_decls} blueprint "
         f"declaration(s); {len(report.unproved)} unproved, "
-        f"{report.infinity_total} with ∞-effort closure.",
+        f"{report.infinity_total} with ∞-effort closure, "
+        f"{len(report.uncovered)} Lean decl(s) with no blueprint entry.",
         _lst("Ready to prove (every \\uses dep done — dispatch these first)",
              report.ready, 25),
         _lst("∞ sources — statements with NO informal proof (root-first)",
@@ -982,6 +1014,10 @@ def _blueprint_frontier_block(project_path: Path) -> str:
         _lst("Broken \\uses{} (label exists in no chapter)",
              report.broken_uses, 15,
              render=lambda t: f"`{t[0]}` → `{t[1]}`"),
+        _lst("Coverage debt — Lean decls with NO blueprint entry "
+             "(isolated `lean_aux` nodes)", report.uncovered, 25),
+        _lst("Isolated blueprint nodes (no \\uses{} edges in or out)",
+             report.isolated_blueprint, 15),
     ])
 
     header = dedent("""
@@ -1001,6 +1037,8 @@ def _blueprint_frontier_block(project_path: Path) -> str:
         - **∞ effort / ∞ sources** — a statement with NO informal proof. Formalizing it is blind progress: **never dispatch a prover at an ∞-effort node.** Write the missing informal proof (or dispatch a blueprint subagent) to give it finite effort first.
         - **Broken \\uses{}** — fix the ref (remove it, or add the missing \\begin{lemma} block with \\label/\\lean/\\uses) before dispatching anything that depends on it.
         - If a frontier node SHOULD depend on something not yet done, add the missing \\uses{label} so the graph reflects the true dependency — an incomplete \\uses list makes a node look ready when it isn't.
+        - **Coverage debt is YOURS to clear THIS iter — it does not carry over silently.** Each listed Lean decl is a prover-created helper with no blueprint entry: an isolated node the graph cannot see (it appears in no frontier, effort, or cone computation). For each one, author the blueprint block — statement, \\label{}, \\lean{exact.Lean.Name}, **accurate \\uses{...}** reflecting what the Lean proof actually needs, and at least a one-line informal proof — or dispatch a blueprint-writer subagent to do it. The provers' task_results/*.md list each helper's dependencies under "## Needs blueprint entry"; consult them for the \\uses{} lists. Helpers that are genuinely implementation details may instead be marked `private` in the Lean source so they leave the scan.
+        - **Isolated blueprint nodes** — their dependencies were never transcribed into \\uses{}; wire them in (or delete the node if it is dead).
         """)
     return header + body + "\n" + footer
 
@@ -1105,6 +1143,7 @@ def build_plan_prompt(
     debug_feedback: bool = False,
     recent_iter_window: int = 3,
     captured_user_hints: str | None = None,
+    captured_auto_notes: str | None = None,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
     refs_block = ""
@@ -1160,6 +1199,7 @@ def build_plan_prompt(
     modes_catalog_block = _prover_modes_catalog_block(state_dir)
     catalog_block = _subagent_catalog_block(project_path, role="plan")
     user_hints_block = _user_hints_block(captured_user_hints)
+    auto_notes_block = _auto_notes_block(captured_auto_notes)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
     frontier_block = _blueprint_frontier_block(project_path)
@@ -1171,14 +1211,15 @@ def build_plan_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         State files (PROGRESS.md, task_pending.md, task_done.md, task_results/) live in {state_dir}/.
         The .lean files are in {project_path}/.
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
+        - Automated validation notes from the previous iter's plan-validate (dropped/blocked/deferred objectives, format corrections) are injected below under `## Automated validation notes` when there were any. These are loop-generated, NOT user input — the user-authored `USER_HINTS.md` never carries them.
         - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
-        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs, Lean ↔ blueprint coverage debt) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + auto_notes_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def _lean_files_block(project_path: Path) -> str:
@@ -1366,7 +1407,7 @@ def build_dag_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/dag.md for your full role.
+        Read {state_dir}/AGENTS.md for project context, then read {state_dir}/prompts/dag.md for your full role.
 
         Your mission: produce a mathematically complete, dependency-correct informal blueprint
         for the ENTIRE project — the full mathematical roadmap that `archon loop` will follow
@@ -1398,7 +1439,7 @@ def build_prover_prompt(
             Archon iteration: {iter_num:03d}.
             Project directory: {project_path}
             Project state directory: {state_dir}
-            Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
+            Read {state_dir}/AGENTS.md for your role, then read {state_dir}/PROGRESS.md.
             All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
             + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
@@ -1408,7 +1449,7 @@ def build_prover_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
         + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
@@ -1448,7 +1489,7 @@ def build_parallel_prover_prompt(
             Archon iteration: {iter_num:03d}.
             Project directory: {project_path}
             Project state directory: {state_dir}
-            Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/PROGRESS.md.
+            Read {state_dir}/AGENTS.md for your role, then read {state_dir}/PROGRESS.md.
             Check your .lean file for /- USER: ... -/ comments for file-specific hints.
 
             IMPORTANT:
@@ -1466,7 +1507,7 @@ def build_parallel_prover_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         Check your .lean file for /- USER: ... -/ comments for file-specific hints.
 
         IMPORTANT:
@@ -1496,7 +1537,7 @@ def build_refactor_prompt(
         Project directory: {project_path}
         Project state directory: {state_dir}
         Slug: {slug}
-        Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/refactor.md.
+        Read {state_dir}/AGENTS.md for project context, then read {state_dir}/prompts/refactor.md.
 
         DIRECTIVE FROM PLAN AGENT:
         {directive}
@@ -1573,7 +1614,8 @@ def _sync_leanok_block(state_dir: Path, iter_num: int) -> str:
         - ``iter`` equals this iteration ({iter_num:03d}) ⇒ sync has run for
           the current tree. Any remaining ``\\leanok`` is the script's
           deterministic verdict; only flag genuine laundering after a
-          first-hand audit of the Lean source.
+          first-hand audit of the Lean source. You are authorized to manually
+          override incorrect markers if you are certain (see Step 6).
         - ``iter`` is older or the file is missing ⇒ markers may be stale.
           Note the ambiguity in ``summary.md`` instead of raising CRITICAL.""")
 
@@ -1599,7 +1641,7 @@ def build_review_prompt(
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/review.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/review.md.
         Session number: {session_num} (matches the iteration number — session_{session_num}/ is the review of iter-{iter_num:03d}).
         Pre-processed attempt data: {attempts_file} (READ THIS FIRST).
         Prover log: {combined_prover_log}

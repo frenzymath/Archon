@@ -26,11 +26,45 @@ from archon.commands.tooling.project_config import (
     resolve_subagents_enabled,
 )
 from archon.prompts import build_plan_prompt
-from archon.state import is_complete, read_stage, write_meta
+from archon.commands.loop.sorry_count import count_sorries
+from archon.state import is_complete, read_stage, write_meta, write_stage
 from archon.subagents.audit import check_mandatory_dispatched
 
+from ..plan_validate import AUTO_NOTES_FILENAME
 from ..resume import PLAN_CONTINUE, persist_session_id, pick_resume_session
 from .base import Phase, PhaseResult
+
+
+def _capture_auto_notes(state_dir: Path) -> str | None:
+    """Read AUTO_NOTES.md (loop-managed validation feedback) if present.
+
+    This is the system-generated counterpart to USER_HINTS.md: plan-validate
+    writes dropped/blocked/deferred-objective notes here (never into the
+    user-authored USER_HINTS.md). Captured before the plan agent runs and
+    cleared after, exactly like user hints, but with no persistent section to
+    preserve — it is fully loop-owned.
+    """
+    notes_file = state_dir / AUTO_NOTES_FILENAME
+    if not notes_file.is_file():
+        return None
+    try:
+        return notes_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _clear_auto_notes(state_dir: Path) -> None:
+    """Delete AUTO_NOTES.md after the plan phase consumed it.
+
+    Unlike USER_HINTS.md (which keeps a template + persistent section), this
+    file is purely loop-owned, so clearing means removing it — the next
+    plan-validate run recreates it on demand.
+    """
+    notes_file = state_dir / AUTO_NOTES_FILENAME
+    try:
+        notes_file.unlink(missing_ok=True)
+    except OSError as e:
+        log.warn(f"could not clear {notes_file}: {e}")
 
 
 def _capture_user_hints(state_dir: Path) -> str | None:
@@ -155,6 +189,7 @@ class PlanPhase(Phase):
         plan_start = time.monotonic()
         cfg = load_project_config(ctx.project_path)
         captured_hints = _capture_user_hints(ctx.state_dir)
+        captured_auto_notes = _capture_auto_notes(ctx.state_dir)
         plan_prompt = build_plan_prompt(
             ctx.project_name, ctx.project_path, ctx.state_dir, ctx.current_stage,
             ctx.iter_num,
@@ -164,6 +199,7 @@ class PlanPhase(Phase):
             debug_feedback=ctx.options.debug_feedback,
             recent_iter_window=resolve_recent_iter_window(cfg),
             captured_user_hints=captured_hints,
+            captured_auto_notes=captured_auto_notes,
         )
 
         if ctx.dry_run:
@@ -199,6 +235,10 @@ class PlanPhase(Phase):
             # the retry sees the same hints.
             if captured_hints is not None and captured_hints.strip():
                 _clear_user_hints(ctx.state_dir)
+            # AUTO_NOTES.md is fully loop-owned — clear it whenever it had
+            # content so each validation note reaches the planner exactly once.
+            if captured_auto_notes is not None and captured_auto_notes.strip():
+                _clear_auto_notes(ctx.state_dir)
             check_mandatory_dispatched(
                 ctx.project_path, ctx.state_dir, ctx.iter_num,
                 phase="plan",
@@ -214,8 +254,21 @@ class PlanPhase(Phase):
             )
 
         if is_complete(ctx.progress_file, ctx.force_stage()):
-            log.success("PROGRESS.md says COMPLETE. Exiting loop.")
-            return PhaseResult(completed=True)
+            remaining_sorries = None if ctx.dry_run else count_sorries(ctx.project_path)
+            if remaining_sorries is not None and remaining_sorries > 0:
+                log.warn(
+                    f"Plan marked COMPLETE, but {remaining_sorries} sorries "
+                    f"were found."
+                )
+                write_stage(ctx.progress_file, "prover")
+                ctx.current_stage = read_stage(ctx.progress_file, ctx.force_stage())
+                log.warn(
+                    "Stage reset to 'prover' so the loop continues instead "
+                    "of accepting an incomplete project."
+                )
+            else:
+                log.success("PROGRESS.md says COMPLETE. Exiting loop.")
+                return PhaseResult(completed=True)
 
         ctx.current_stage = read_stage(ctx.progress_file, ctx.force_stage())
         return PhaseResult()
