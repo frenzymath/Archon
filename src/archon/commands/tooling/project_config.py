@@ -222,31 +222,44 @@ def default_config() -> dict[str, Any]:
                     "and set those vars in .archon/.env."
                 ),
             },
-            'codex-gpt': {
-                '_help': "Backward-compatible alias for the built-in codex harness.",
-                'runner': 'codex',
-                'effort': 'xhigh',
-                'sandbox': 'danger-full-access',
-                'mcp': 'lean-lsp',
-                'prompt_variant': 'codex',
-                'extra_args': (
-                    '-c features.plugins=false '
-                    '-c features.responses_websockets=false '
-                    '-c features.responses_websockets_v2=false'
+            '_my_harness_example': {
+                '_help': (
+                    "Template for a custom harness. Copy this to a real name "
+                    "(drop the leading underscore), edit it, then point "
+                    "loop.harness / loop.roles.<role> / subagents.<name>.harness "
+                    "at that name. claude-code fields: model, backend. codex "
+                    "fields: model, effort, sandbox, mcp, base_url_env/key_env. "
+                    "See docs/CONFIGURATION.md §2."
                 ),
+                'runner': 'claude-code',
+                'model': 'sonnet',
+                'backend': 'claude-p',
             },
         },
     }
 
 
+# Top-level key order in the written config.json. `harnesses` sits high so
+# the engine knobs are visible without scrolling past the long subagent /
+# multilane blocks. Any key not listed keeps its original order, appended.
+_TOP_LEVEL_ORDER = ('loop', 'harnesses', 'subagents', 'state', 'multilane')
+
+
+def _ordered_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    ordered = {k: cfg[k] for k in _TOP_LEVEL_ORDER if k in cfg}
+    for k, v in cfg.items():
+        ordered.setdefault(k, v)
+    return ordered
+
+
 def render_default_config() -> str:
-    return json.dumps(default_config(), indent=2) + '\n'
+    return json.dumps(_ordered_config(default_config()), indent=2) + '\n'
 
 
 # ── harness selection (used by `archon init`) ─────────────────────────
 
 LOOP_ROLES = ('plan', 'prover', 'review')
-SHIPPED_HARNESSES = ('codex', 'codex-gpt')
+SHIPPED_HARNESSES = ('codex',)
 
 
 def apply_harness_selection(cfg: dict[str, Any], selection: Any) -> None:
@@ -297,7 +310,7 @@ def write_default_config(
     path.parent.mkdir(parents=True, exist_ok=True)
     cfg = default_config()
     apply_harness_selection(cfg, harness_selection)
-    path.write_text(json.dumps(cfg, indent=2) + '\n', encoding='utf-8')
+    path.write_text(json.dumps(_ordered_config(cfg), indent=2) + '\n', encoding='utf-8')
     return True
 
 
@@ -311,7 +324,14 @@ def _fill_missing_keys(user: dict, defaults: dict) -> tuple[dict, bool]:
     changed = False
     result = dict(user)
     for key, default_val in defaults.items():
-        if key not in result:
+        # `_`-prefixed keys are docs/help/examples, not user data — always
+        # refresh them to the current text so re-init picks up improved help
+        # (the rest preserves the user's values).
+        if key.startswith('_'):
+            if result.get(key) != default_val:
+                result[key] = default_val
+                changed = True
+        elif key not in result:
             result[key] = default_val
             changed = True
         elif isinstance(default_val, dict) and isinstance(result[key], dict):
@@ -338,7 +358,8 @@ def migrate_project_config(project_path: Path) -> bool:
     if not isinstance(data, dict):
         return False
     updated, changed = _fill_missing_keys(data, default_config())
-    if not changed:
+    updated = _ordered_config(updated)
+    if not changed and updated == data:
         return False
     path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8')
     return True
@@ -511,7 +532,7 @@ class HarnessDescriptor:
 
     Fields common to all harnesses:
 
-    * ``name`` — the harness key (e.g. ``"claude-code"`` / ``"codex-gpt"``).
+    * ``name`` — the harness key (e.g. ``"claude-code"`` / ``"codex"``).
     * ``runner`` — which engine implements it. Supported runners:
       ``"claude-code"`` (the built-in) and ``"codex"``.
     * ``model`` — optional model id for this harness. For claude-code it

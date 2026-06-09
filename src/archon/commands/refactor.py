@@ -312,7 +312,7 @@ def draft(
     ),
     harness: Optional[str] = typer.Option(
         None, "--harness",
-        help="Override the interactive draft harness, e.g. codex-gpt.",
+        help="Override the interactive draft harness, e.g. codex.",
     ),
 ) -> None:
     """Interview the user and write a REFACTOR_DIRECTIVE.md.

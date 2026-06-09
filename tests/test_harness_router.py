@@ -197,13 +197,6 @@ class LoadHarnessDescriptorTest(unittest.TestCase):
         self.assertEqual(d.effort, "xhigh")
         self.assertEqual(d.mcp, ("lean-lsp",))
 
-    def test_legacy_codex_gpt_alias_available_without_config_block(self):
-        d = load_harness_descriptor(ProjectConfig(), "codex-gpt")
-        self.assertEqual(d.runner, "codex")
-        self.assertIsNone(d.model)
-        self.assertEqual(d.effort, "xhigh")
-        self.assertEqual(d.mcp, ("lean-lsp",))
-
     def test_has_explicit_harness_override(self):
         self.assertFalse(has_explicit_harness_override(ProjectConfig(), "claude-code"))
         cfg = ProjectConfig(raw={"harnesses": {"claude-code": {"runner": "claude-code"}}})

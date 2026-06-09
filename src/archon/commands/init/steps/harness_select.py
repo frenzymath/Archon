@@ -8,7 +8,7 @@ from archon import log
 from archon.commands.tooling.project_config import DEFAULT_HARNESS, LOOP_ROLES
 
 _CODEX_HARNESS = "codex"
-_FLAG_CHOICES = ("claude-code", _CODEX_HARNESS, "codex-gpt", "mixed")
+_FLAG_CHOICES = ("claude-code", _CODEX_HARNESS, "mixed")
 _MIXED_ROLE_DEFAULTS = {
     "plan": DEFAULT_HARNESS,
     "prover": _CODEX_HARNESS,
@@ -21,7 +21,7 @@ def selection_from_choice(choice: str, role_choices: dict | None = None):
     normalized = choice.strip().lower()
     if normalized in ("1", "claude-code", "claude", "c"):
         return None
-    if normalized in ("2", _CODEX_HARNESS, "codex-gpt", "x"):
+    if normalized in ("2", _CODEX_HARNESS, "x"):
         return _CODEX_HARNESS
     if normalized in ("3", "mixed", "m"):
         roles = dict(role_choices or {})
@@ -47,7 +47,7 @@ def _prompt_role_choices() -> dict:
             if ans in ("c", "claude-code", "claude"):
                 choices[role] = DEFAULT_HARNESS
                 break
-            if ans in ("x", "codex", "codex-gpt"):
+            if ans in ("x", "codex"):
                 choices[role] = _CODEX_HARNESS
                 break
     return choices

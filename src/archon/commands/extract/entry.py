@@ -57,7 +57,7 @@ def extract(
     ),
     harness: Optional[str] = typer.Option(
         None, "--harness",
-        help="Override the interactive session harness, e.g. codex-gpt.",
+        help="Override the interactive session harness, e.g. codex.",
     ),
 ) -> None:
     """Extract a subproject (a dependency cone) from an archon project.

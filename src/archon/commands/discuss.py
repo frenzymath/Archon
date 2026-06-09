@@ -405,7 +405,7 @@ def discuss(
     ),
     harness: Optional[str] = typer.Option(
         None, "--harness",
-        help="Override the interactive session harness, e.g. codex-gpt.",
+        help="Override the interactive session harness, e.g. codex.",
     ),
 ) -> None:
     """Start an interactive discussion about the project.

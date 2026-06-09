@@ -97,8 +97,9 @@ Fields:
 | `base_url_env` / `key_env` | codex | Names of env vars holding the gateway base URL / API key. |
 | `wire_api` | codex | Wire protocol (default `responses`). |
 
-Built-in harnesses ship for `codex` (and the `codex-gpt` alias) so you can route
-to Codex without defining one yourself.
+A built-in `codex` harness ships, so you can route to Codex without defining one
+yourself. To customize (or make a claude-code variant), copy the
+`_my_harness_example` block in `.archon/config.json`, rename it, and reference it.
 
 ### One-line global default (everything uses codex)
 
@@ -173,7 +174,7 @@ The shipped subagents are listed under `subagents._available` in the generated
 see `.archon/subagents/<name>.md` for each one's role, write-domain, and
 `default_enabled` status.
 
-Per-subagent model override (no harness change):
+Per-subagent model override (no harness change, it inherits the parent harness !):
 
 ```json
 { "subagents": { "strategy-critic": "opus", "mathlib-analogist": "sonnet" } }

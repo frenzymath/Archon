@@ -82,7 +82,7 @@ def merge(
     ),
     harness: Optional[str] = typer.Option(
         None, "--harness",
-        help="Override the interactive session harness, e.g. codex-gpt.",
+        help="Override the interactive session harness, e.g. codex.",
     ),
 ) -> None:
     """Merge two archon projects via the DAG, keeping the best shared proofs.

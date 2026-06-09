@@ -25,7 +25,6 @@ class DefaultConfigHarnessesTest(unittest.TestCase):
     def test_harnesses_block_is_inert_by_default(self):
         cfg = ProjectConfig(raw=default_config())
         self.assertIn("codex", cfg.raw["harnesses"])
-        self.assertIn("codex-gpt", cfg.raw["harnesses"])
         self.assertNotIn("claude-code", cfg.raw["harnesses"])
         for role in ("plan", "prover", "review"):
             self.assertEqual(resolve_role_harness(cfg, role), DEFAULT_HARNESS)

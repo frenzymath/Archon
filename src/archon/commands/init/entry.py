@@ -45,8 +45,8 @@ def init(
     harness: Optional[str] = typer.Option(
         None, "--harness",
         help=(
-            "Engine for loop roles: 'claude-code' (default), 'codex-gpt' "
-            "(Codex CLI + GPT-5.5), or 'mixed' (pick per role)."
+            "Engine for loop roles: 'claude-code' (default), 'codex' "
+            "(Codex CLI), or 'mixed' (pick per role)."
         ),
     ),
 ) -> None:
