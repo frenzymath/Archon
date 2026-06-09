@@ -76,6 +76,19 @@ def default_config() -> dict[str, Any]:
                 "execution (parallel off, max_parallel 1) and disables multilane."
             ),
             'claude_backend': 'default',
+            '_harness_help': (
+                "Global engine selector for EVERYTHING — all roles "
+                "(plan/prover/review) AND all subagents — in one line. Empty "
+                "(the default) means the built-in Claude Code engine "
+                "everywhere. Set it to a harness name defined under the "
+                "top-level `harnesses` block (e.g. \"codex\") to route the "
+                "whole loop through that engine; you do NOT need to set a "
+                "harness per subagent. Narrower overrides still win: "
+                "loop.roles.<plan|prover|review> for one role, "
+                "subagents.<name>.harness for one subagent. NOTE: multilane "
+                "lanes carry their own per-lane harness and are not affected "
+                "by this key. See docs/CONFIGURATION.md."
+            ),
             '_axiom_sweep_help': (
                 "Run a deterministic #print axioms sweep between the "
                 "prover and review phases (after \\leanok sync) to catch "
@@ -133,14 +146,19 @@ def default_config() -> dict[str, Any]:
                 # names into `enabled` to activate. See
                 # `.archon/subagents/<name>.md` (or the shipped
                 # built-ins) for each one's role and write-domain.
+                'blueprint-clean',
                 'blueprint-reviewer',
                 'blueprint-writer',
+                'dag-walker',
+                'effort-breaker',
                 'lean-auditor',
+                'lean-scaffolder',
                 'lean-vs-blueprint-checker',
                 'mathlib-analogist',
                 'progress-critic',
                 'reference-retriever',
                 'refactor',
+                'strategy-auditor',
                 'strategy-critic',
             ],
             '_recommended_plan_phase': [
@@ -223,6 +241,48 @@ def default_config() -> dict[str, Any]:
                 },
             },
         },
+        'harnesses': {
+            '_help': (
+                "A harness is the engine that runs a role (plan/prover/"
+                "review). Default is Claude Code: with no loop.harness / "
+                "loop.roles key, every role uses 'claude-code' and this "
+                "block is ignored. Route a role to codex by setting "
+                "loop.harness (all roles) or loop.roles.<role> (one role) "
+                "to a descriptor name below, e.g. 'codex'."
+            ),
+            'codex': {
+                'runner': 'codex',
+                'effort': 'xhigh',
+                'sandbox': 'danger-full-access',
+                'mcp': 'lean-lsp',
+                'prompt_variant': 'codex',
+                'extra_args': (
+                    '-c features.plugins=false '
+                    '-c features.responses_websockets=false '
+                    '-c features.responses_websockets_v2=false'
+                ),
+                '_env': (
+                    "Uses your native ~/.codex (ChatGPT) login and lets the "
+                    "Codex CLI choose its default model. To force a model, add "
+                    "'model' to this descriptor. To route through a gateway, add "
+                    "'base_url_env'/'key_env' (e.g. CODEX_BASE_URL/CZ_API_KEY) "
+                    "and set those vars in .archon/.env."
+                ),
+            },
+            'codex-gpt': {
+                '_help': "Backward-compatible alias for the built-in codex harness.",
+                'runner': 'codex',
+                'effort': 'xhigh',
+                'sandbox': 'danger-full-access',
+                'mcp': 'lean-lsp',
+                'prompt_variant': 'codex',
+                'extra_args': (
+                    '-c features.plugins=false '
+                    '-c features.responses_websockets=false '
+                    '-c features.responses_websockets_v2=false'
+                ),
+            },
+        },
     }
 
 
@@ -230,16 +290,61 @@ def render_default_config() -> str:
     return json.dumps(default_config(), indent=2) + '\n'
 
 
+# ── harness selection (used by `archon init`) ─────────────────────────
+
+LOOP_ROLES = ('plan', 'prover', 'review')
+SHIPPED_HARNESSES = ('codex', 'codex-gpt')
+
+
+def apply_harness_selection(cfg: dict[str, Any], selection: Any) -> None:
+    """Route loop roles to a harness by mutating ``cfg['loop']`` in place.
+
+    ``None`` / ``"claude-code"`` leaves the zero-config Claude Code path
+    untouched. A harness-name string sets ``loop.harness`` for all roles.
+    A ``{role: harness_name}`` dict writes non-default per-role overrides.
+    """
+    if selection is None:
+        return
+    loop = cfg.setdefault('loop', {})
+    if isinstance(selection, str):
+        if selection and selection != DEFAULT_HARNESS:
+            loop['harness'] = selection
+        return
+    if isinstance(selection, dict):
+        roles = {
+            role: name
+            for role, name in selection.items()
+            if role in LOOP_ROLES
+            and isinstance(name, str)
+            and name
+            and name != DEFAULT_HARNESS
+        }
+        if roles:
+            loop['roles'] = roles
+        return
+    raise TypeError(
+        f"apply_harness_selection: unsupported selection {selection!r} "
+        f"(expected None, a harness name, or a {{role: name}} dict)."
+    )
+
+
 # ── load / write ──────────────────────────────────────────────────────
 
 
-def write_default_config(project_path: Path, *, force: bool = False) -> bool:
-    """Create .archon/config.json if missing. Returns True iff a new file was written."""
+def write_default_config(
+    project_path: Path,
+    *,
+    force: bool = False,
+    harness_selection: Any = None,
+) -> bool:
+    """Create .archon/config.json if missing. Returns True iff written."""
     path = config_path(project_path)
     if path.exists() and not force:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_default_config(), encoding='utf-8')
+    cfg = default_config()
+    apply_harness_selection(cfg, harness_selection)
+    path.write_text(json.dumps(cfg, indent=2) + '\n', encoding='utf-8')
     return True
 
 
@@ -458,7 +563,7 @@ class HarnessDescriptor:
       ``"claude-code"`` (the built-in) and ``"codex"``.
     * ``model`` — optional model id for this harness. For claude-code it
       overrides the role/loop model alias; for codex it is the concrete
-      ``codex exec -m <model>`` model id (e.g. ``"gpt-5.5"``).
+      optional ``codex exec -m <model>`` model id. When unset, Archon lets the Codex CLI choose its configured/default model.
     * ``backend`` — claude-code launch strategy (``default`` / ``claude-p``
       / ``vscode`` / ``desktop`` / ``interactive``). This is the *layer-2*
       seam: :func:`archon.agent.build_runner` resolves it to a
@@ -542,7 +647,11 @@ def load_harness_descriptor(cfg: ProjectConfig, name: str) -> HarnessDescriptor:
     harnesses = cfg.raw.get('harnesses')
     entry = harnesses.get(name) if isinstance(harnesses, dict) else None
     if not isinstance(entry, dict):
-        return HarnessDescriptor(name=name, runner=name)
+        shipped = default_config().get('harnesses', {}).get(name)
+        if isinstance(shipped, dict):
+            entry = shipped
+        else:
+            return HarnessDescriptor(name=name, runner=name)
     runner = entry.get('runner')
     if not isinstance(runner, str) or not runner:
         runner = name
@@ -603,6 +712,15 @@ _CLAUDE_BACKEND_ENTRYPOINTS: dict[str, str | None] = {
 # Backends that need their own class rather than just an entrypoint env var.
 _CLAUDE_BACKEND_SPECIAL = {"claude-p", "interactive"}
 
+# Env vars a parent agent exports into the child claude/codex process so that
+# nested ``archon subagent`` dispatches reproduce the parent's claude backend
+# choice. The subagent wrapper shells out to ``archon subagent`` WITHOUT a
+# ``--claude-backend`` flag, so without these the child would re-resolve from
+# config and silently fall back to ``default`` (plain ``claude -p``) even when
+# the parent loop runs e.g. ``claude-p``. See ``ClaudeAgent._build_env``.
+CLAUDE_BACKEND_ENV = "ARCHON_CLAUDE_BACKEND"
+CLAUDE_P_CONFIG_DIR_ENV = "ARCHON_CLAUDE_P_CONFIG_DIR"
+
 
 def resolve_claude_backend(
     cfg: ProjectConfig,
@@ -610,16 +728,27 @@ def resolve_claude_backend(
     cli_value: str | None = None,
     claude_p_config_dir: str | None = None,
 ) -> "ClaudeBackend":
-    """Return a :class:`~archon.agent.ClaudeBackend` from CLI or config.
+    """Return a :class:`~archon.agent.ClaudeBackend` from CLI, env, or config.
 
-    Precedence: ``cli_value`` (``--claude-backend`` flag) > ``loop.
-    claude_backend`` in ``config.json`` > built-in default (``"default"``).
-    Unknown values fall back to ``"default"`` with a warning.
+    Precedence: ``cli_value`` (``--claude-backend`` flag) > ``ARCHON_CLAUDE_BACKEND``
+    in the environment > ``loop.claude_backend`` in ``config.json`` > built-in
+    default (``"default"``). Unknown values fall back to ``"default"`` with a
+    warning.
+
+    The env layer is what propagates a parent loop's backend down to
+    ``archon subagent`` dispatches: the parent exports ``ARCHON_CLAUDE_BACKEND``
+    (and ``ARCHON_CLAUDE_P_CONFIG_DIR``) into the agent's child process, the
+    subagent wrapper inherits it, and the nested ``archon subagent`` call —
+    which passes no ``--claude-backend`` flag — re-resolves to the same backend
+    instead of dropping to ``default``.
 
     ``claude_p_config_dir`` sets ``CLAUDE_CONFIG_DIR`` for ``ClaudePBackend``.
-    Precedence: CLI ``--claude-p-config-dir`` > ``loop.claude_p_config_dir``
-    in ``config.json`` > ``CLAUDE_CONFIG_DIR`` already in the environment.
+    Precedence: CLI ``--claude-p-config-dir`` > ``ARCHON_CLAUDE_P_CONFIG_DIR``
+    env > ``loop.claude_p_config_dir`` in ``config.json`` > ``CLAUDE_CONFIG_DIR``
+    already in the environment.
     """
+    import os
+
     from archon.agent import (
         ClaudeBackend, ClaudePBackend, EntrypointBackend, InteractiveBackend,
     )
@@ -627,7 +756,12 @@ def resolve_claude_backend(
 
     valid = set(_CLAUDE_BACKEND_ENTRYPOINTS) | _CLAUDE_BACKEND_SPECIAL
     section = cfg.loop_section()
-    raw = (cli_value or section.get("claude_backend") or "default").strip().lower()
+    raw = (
+        cli_value
+        or os.environ.get(CLAUDE_BACKEND_ENV)
+        or section.get("claude_backend")
+        or "default"
+    ).strip().lower()
     if raw not in valid:
         _log.warn(
             f"Unknown claude_backend '{raw}'; valid values: "
@@ -637,6 +771,7 @@ def resolve_claude_backend(
     if raw == "claude-p":
         config_dir = (
             claude_p_config_dir
+            or os.environ.get(CLAUDE_P_CONFIG_DIR_ENV)
             or section.get("claude_p_config_dir")
             or None
         )

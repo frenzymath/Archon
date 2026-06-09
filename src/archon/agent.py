@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import enum
 import functools
+import glob
 import json
 import os
 import signal
@@ -31,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,6 +185,22 @@ def _emit_session_start(
         f.write(json.dumps(row) + "\n")
 
 
+def _emit_session_meta(jsonl_path: str, *, session_id: str) -> None:
+    """Stamp the Claude Code session id so ``--resume`` can recover it.
+
+    The interactive backend pins its own ``--session-id``; recording it as a
+    ``session_meta`` row (the same shape the headless parser emits) lets
+    :func:`archon.state.extract_session_id` find it, so an interactive phase is
+    resumable just like a headless one.
+    """
+    row = {"ts": _now_iso(), "event": "session_meta", "session_id": session_id}
+    try:
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        pass
+
+
 def _emit_prompt(
     jsonl_path: str,
     *,
@@ -251,6 +269,216 @@ def _emit_interactive_session_end(jsonl_path: str, *, ok: bool, summary: str) ->
             f.write(json.dumps(row) + "\n")
     except OSError:
         pass
+
+
+def _claude_config_dir(env: "dict | None" = None) -> Path:
+    """Claude Code's config root, honouring ``CLAUDE_CONFIG_DIR``.
+
+    Mirrors claude-p: a custom config dir (e.g. ``CLAUDE_CONFIG_DIR=~/.claude-
+    sophie``) moves the whole ``projects/`` session store, so the transcript we
+    tail lives under it, not the default ``~/.claude``.
+    """
+    src = (env or os.environ).get("CLAUDE_CONFIG_DIR")
+    return Path(src).expanduser() if src else Path.home() / ".claude"
+
+
+def _find_claude_session_file(session_id: str, *, env: "dict | None" = None) -> "Path | None":
+    """Locate Claude Code's session transcript for a KNOWN session id.
+
+    Claude Code writes interactive sessions to
+    ``<config-dir>/projects/<sanitized-cwd>/<session-id>.jsonl``. Rather than
+    guess the sanitized dir or the newest file (fragile across config dirs and
+    path-sanitisation rules), we glob by the session id we passed to
+    ``claude --session-id`` — exactly how claude-p finds it. Returns None until
+    the file exists (the TUI creates it a beat after launch).
+    """
+    try:
+        pattern = str(_claude_config_dir(env) / "projects" / "**" / f"{session_id}.jsonl")
+        paths = [Path(p) for p in glob.glob(pattern, recursive=True)]
+        if not paths:
+            return None
+        return max(paths, key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _claude_tool_result_text(content: object) -> str:
+    """Flatten a Claude session ``tool_result`` content into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                texts.append(b.get("text") or "")
+            elif isinstance(b, str):
+                texts.append(b)
+        return "\n".join(t for t in texts if t)
+    return ""
+
+
+def _claude_session_obj_to_rows(obj: object) -> list[dict]:
+    """Convert one Claude Code session-store JSON object into archon rows.
+
+    Maps an ``assistant`` / ``user`` line's content blocks to ``thinking`` /
+    ``text`` / ``tool_call`` / ``tool_result`` events — the SAME schema the
+    headless stream parser emits. Unrecognised types/blocks yield ``[]``.
+    Shared by the post-run importer and the live tailer so both stay in sync.
+    """
+    if not isinstance(obj, dict):
+        return []
+    typ = obj.get("type")
+    if typ not in ("assistant", "user"):
+        return []
+    msg = obj.get("message") or {}
+    content = msg.get("content")
+    ts = obj.get("timestamp") or _now_iso()
+    if not isinstance(content, list):
+        return []
+    rows: list[dict] = []
+    for b in content:
+        if not isinstance(b, dict):
+            continue
+        bt = b.get("type")
+        if typ == "assistant" and bt == "thinking":
+            rows.append({"ts": ts, "event": "thinking", "content": b.get("thinking") or ""})
+        elif typ == "assistant" and bt == "text":
+            rows.append({"ts": ts, "event": "text", "content": b.get("text") or ""})
+        elif typ == "assistant" and bt == "tool_use":
+            rows.append({
+                "ts": ts, "event": "tool_call",
+                "tool": b.get("name") or "", "input": b.get("input") or {},
+            })
+        elif typ == "user" and bt == "tool_result":
+            rows.append({
+                "ts": ts, "event": "tool_result",
+                "content": _claude_tool_result_text(b.get("content")),
+            })
+    return rows
+
+
+def _import_claude_session_jsonl(src: Path, dst_jsonl: str) -> int:
+    """Convert Claude Code's native session transcript into archon JSONL.
+
+    A foreground (``interactive`` backend) session produces no stream-json for
+    us to parse, so the phase log would otherwise hold only the synthetic
+    ``session_start`` / ``session_end`` stamps. We read Claude Code's own
+    session store and append the converted ``thinking`` / ``text`` /
+    ``tool_call`` / ``tool_result`` rows so the dashboard renders the real
+    conversation. Used as a one-shot fallback when the live tailer never
+    locked onto a session file. Returns the number of rows written.
+    """
+    try:
+        raw = src.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    rows: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        rows.extend(_claude_session_obj_to_rows(obj))
+    if not rows:
+        return 0
+    try:
+        with open(dst_jsonl, "a") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+    except OSError:
+        return 0
+    return len(rows)
+
+
+class _LiveClaudeSessionTailer(threading.Thread):
+    """Tail Claude Code's session JSONL live and re-emit archon events.
+
+    The ``interactive`` backend runs ``claude`` in the foreground, so we can't
+    capture a stream from its stdout the way the ``claude-p`` backend does
+    (claude-p emits ``--stream-session-events`` to a pipe). But Claude Code
+    writes its session transcript to ``~/.claude/projects/<cwd>/<sid>.jsonl``
+    as the conversation progresses, so we tail THAT file from a background
+    thread and append converted rows to the phase JSONL in real time — giving
+    the dashboard a live log just like claude-p.
+
+    Lifecycle: ``start()`` before launching the foreground claude, ``stop()``
+    (which joins) after it exits. The locked-onto file is exposed via
+    :attr:`locked` so the caller can fall back to a one-shot import if the
+    session never appeared while we were watching.
+
+    It finds the transcript by the ``session_id`` we passed to
+    ``claude --session-id`` (honouring ``CLAUDE_CONFIG_DIR`` via ``env``) — the
+    same deterministic lookup claude-p uses, not a newest-file guess.
+    """
+
+    def __init__(
+        self, session_id: str, dst_jsonl: str, *, env: "dict | None" = None,
+    ) -> None:
+        super().__init__(daemon=True)
+        self._session_id = session_id
+        self._dst = dst_jsonl
+        self._env = env
+        self._stop_event = threading.Event()
+        self._offset = 0
+        self._leftover = b""
+        self._rows_written = 0
+        self.locked: Path | None = None
+
+    def stop(self) -> int:
+        """Signal the thread to finish, join it, and return rows written."""
+        self._stop_event.set()
+        self.join(timeout=10)
+        return self._rows_written
+
+    def run(self) -> None:
+        # Phase 1: wait for the session file to appear (claude creates it a
+        # beat after launch). Re-scan until found, stopped, or ~exit.
+        while not self._stop_event.is_set() and self.locked is None:
+            self.locked = _find_claude_session_file(self._session_id, env=self._env)
+            if self.locked is None:
+                self._stop_event.wait(0.3)
+        # Phase 2: tail the locked file until stopped, then one final drain.
+        while not self._stop_event.is_set():
+            self._drain()
+            self._stop_event.wait(0.4)
+        self._drain()
+
+    def _drain(self) -> None:
+        if self.locked is None:
+            return
+        try:
+            with open(self.locked, "rb") as f:
+                f.seek(self._offset)
+                data = f.read()
+        except OSError:
+            return
+        if not data:
+            return
+        self._offset += len(data)
+        buf = self._leftover + data
+        *complete, self._leftover = buf.split(b"\n")
+        out: list[dict] = []
+        for raw in complete:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            out.extend(_claude_session_obj_to_rows(obj))
+        if not out:
+            return
+        try:
+            with open(self._dst, "a") as f:
+                for r in out:
+                    f.write(json.dumps(r) + "\n")
+        except OSError:
+            return
+        self._rows_written += len(out)
 
 
 def _emit_idle_timeout(jsonl_path: str, idle_s: float, attempt: int) -> None:
@@ -476,7 +704,14 @@ class ClaudeBackend:
     Adding a new backend (e.g. a Python wrapper that makes the
     interactive ``claude`` session headless) is a single new subclass
     here; nothing else in ``ClaudeAgent`` or its callers changes.
+
+    ``name`` is the config token this backend resolves from
+    (``loop.claude_backend`` / ``--claude-backend``). It is exported into
+    child agent processes so nested ``archon subagent`` dispatches
+    reproduce the same backend — see :meth:`ClaudeAgent._build_env`.
     """
+
+    name: str = "default"
 
     def build_headless(
         self,
@@ -552,6 +787,8 @@ class ClaudePBackend(ClaudeBackend):
     3 s).  Raised slightly to avoid premature exit during gaps between tool
     calls (e.g. lake build).
     """
+
+    name = "claude-p"
 
     _DEFAULT_TIMEOUT_SEC = 1800   # 30 min — archon's idle watchdog is 15 min
     _DEFAULT_QUIET_AFTER_SEC = 15  # allow gaps between tool calls
@@ -662,8 +899,14 @@ class EntrypointBackend(ClaudeBackend):
     no env injection.
     """
 
+    # Map the CLAUDE_CODE_ENTRYPOINT value back to its config token so the
+    # backend's identity round-trips into child agents (see ClaudeAgent.
+    # _build_env). "claude-vscode" -> "vscode", "claude-desktop" -> "desktop".
+    _ENTRYPOINT_TO_NAME = {"claude-vscode": "vscode", "claude-desktop": "desktop"}
+
     def __init__(self, entrypoint: str | None = None) -> None:
         self.entrypoint = entrypoint
+        self.name = self._ENTRYPOINT_TO_NAME.get(entrypoint or "", "default")
 
     def build_headless(
         self,
@@ -701,6 +944,8 @@ class InteractiveBackend(ClaudeBackend):
     backend is selected (see ``commands/loop/entry.py``). ``build_headless``
     is never used for this backend; it raises to make a misuse obvious.
     """
+
+    name = "interactive"
 
     def build_headless(self, *args, **kwargs):  # noqa: D401 - see class doc
         raise NotImplementedError(
@@ -997,6 +1242,7 @@ class ClaudeAgent:
         *,
         cwd: Path,
         extra_args: list[str] | None = None,
+        session_id: str | None = None,
     ) -> int:
         """Foreground interactive launch (no ``-p``).
 
@@ -1004,6 +1250,10 @@ class ClaudeAgent:
         bootstrap flow in ``archon init`` — anywhere claude takes over
         the terminal and expects user input. Returns the subprocess exit
         code so the caller can decide how to react to non-zero.
+
+        ``session_id`` pins Claude Code's session id (``claude --session-id``)
+        so the caller knows exactly which ``<config-dir>/projects/**/<id>.jsonl``
+        transcript to tail — the same trick claude-p uses for live logging.
 
         No idle watchdog here: a human is sitting at the terminal and
         long pauses are normal (they're reading, thinking, typing).
@@ -1013,6 +1263,8 @@ class ClaudeAgent:
         # swallow the trailing positional prompt below — and interactive
         # sessions don't need the guard (a human drives, no orchestrator).
         cmd = ["claude", *self._build_flags(real_model, include_disallowed=False)]
+        if session_id:
+            cmd.extend(["--session-id", session_id])
         if extra_args:
             cmd.extend(extra_args)
         cmd.append(prompt)
@@ -1044,15 +1296,60 @@ class ClaudeAgent:
             "Interactive backend: launching claude in the foreground. Drive "
             "the session yourself, then exit claude to let the loop continue."
         )
+        # Pin the session id so we know exactly which transcript to tail —
+        # the same approach claude-p uses (claude --session-id <uuid>, then
+        # glob <config-dir>/projects/**/<uuid>.jsonl). Guessing by newest-file
+        # / sanitized-cwd broke under a custom CLAUDE_CONFIG_DIR.
+        session_id = str(uuid.uuid4())
         jsonl: str | None = None
+        tailer: "_LiveClaudeSessionTailer | None" = None
         if log_base is not None:
             jsonl = f"{log_base}.jsonl"
             _emit_session_start(jsonl, model=self.model, role=self.role)
+            _emit_session_meta(jsonl, session_id=session_id)
             _emit_prompt(jsonl, prompt=prompt)
+            # Live-tail Claude Code's own session JSONL in the background so the
+            # dashboard updates in real time — the same live-log experience the
+            # claude-p backend gets, but for the foreground TUI (which streams
+            # nothing to our stdout). Best-effort; never let it break the run.
+            try:
+                tailer = _LiveClaudeSessionTailer(session_id, jsonl, env=os.environ)
+                tailer.start()
+            except Exception:
+                tailer = None
 
-        code = self.run_interactive(prompt, cwd=cwd, extra_args=extra_args)
+        code = self.run_interactive(
+            prompt, cwd=cwd, extra_args=extra_args, session_id=session_id,
+        )
         ok = code == 0
         if jsonl is not None:
+            live_rows = 0
+            locked = None
+            if tailer is not None:
+                try:
+                    live_rows = tailer.stop()
+                    locked = tailer.locked
+                except Exception:
+                    live_rows = 0
+            # Fallback: if the live tailer never locked onto a session file
+            # (e.g. it appeared only as claude exited), import it once now.
+            if locked is None:
+                try:
+                    src = _find_claude_session_file(session_id, env=os.environ)
+                    if src is not None:
+                        live_rows += _import_claude_session_jsonl(src, jsonl)
+                except Exception:
+                    pass
+            if live_rows:
+                log.info(
+                    f"Interactive backend: captured {live_rows} transcript "
+                    f"event(s) from Claude Code's session log."
+                )
+            else:
+                log.info(
+                    "Interactive backend: no Claude Code session transcript "
+                    "found; the phase log holds the run's start/end markers only."
+                )
             _emit_interactive_session_end(
                 jsonl,
                 ok=ok,
@@ -1090,6 +1387,22 @@ class ClaudeAgent:
         # BASH_FOREGROUND_TIMEOUT_MS. setdefault so an explicit override wins.
         env.setdefault("BASH_DEFAULT_TIMEOUT_MS", str(BASH_FOREGROUND_TIMEOUT_MS))
         env.setdefault("BASH_MAX_TIMEOUT_MS", str(BASH_FOREGROUND_TIMEOUT_MS))
+        # Propagate this agent's claude backend to nested `archon subagent`
+        # dispatches. The subagent wrapper shells out to `archon subagent`
+        # WITHOUT a --claude-backend flag, so without this the child re-resolves
+        # from config and silently falls back to `default` (plain `claude -p`)
+        # even when the parent loop runs claude-p/vscode/desktop. setdefault so
+        # a caller-supplied override always wins.
+        from archon.commands.tooling.project_config import (
+            CLAUDE_BACKEND_ENV, CLAUDE_P_CONFIG_DIR_ENV,
+        )
+        backend = getattr(self, "backend", None)
+        backend_name = getattr(backend, "name", None)
+        if backend_name:
+            env.setdefault(CLAUDE_BACKEND_ENV, backend_name)
+        config_dir = getattr(backend, "config_dir", None)
+        if config_dir:
+            env.setdefault(CLAUDE_P_CONFIG_DIR_ENV, str(config_dir))
         return env
 
     def _run_with_logging(

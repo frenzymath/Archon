@@ -21,6 +21,7 @@ whatever loop-wide backend it was given.
 
 from __future__ import annotations
 
+import os
 import pickle
 import tempfile
 import unittest
@@ -37,10 +38,13 @@ from archon.agent import (
     build_runner,
 )
 from archon.commands.tooling.project_config import (
+    CLAUDE_BACKEND_ENV,
+    CLAUDE_P_CONFIG_DIR_ENV,
     HarnessDescriptor,
     ProjectConfig,
     has_explicit_harness_override,
     load_harness_descriptor,
+    resolve_claude_backend,
     resolve_role_harness,
     resolve_subagent_harness,
 )
@@ -170,7 +174,7 @@ class LoadHarnessDescriptorTest(unittest.TestCase):
                 "harnesses": {
                     "codex": {
                         "runner": "codex",
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.1-codex",
                         "effort": "xhigh",
                         "mcp": "lean-lsp",
                         "base_url_env": "CODEX_BASE_URL",
@@ -184,6 +188,21 @@ class LoadHarnessDescriptorTest(unittest.TestCase):
         self.assertEqual(d.effort, "xhigh")
         self.assertEqual(d.mcp, ("lean-lsp",))
         self.assertEqual(d.base_url_env, "CODEX_BASE_URL")
+
+
+    def test_shipped_codex_descriptor_available_without_config_block(self):
+        d = load_harness_descriptor(ProjectConfig(), "codex")
+        self.assertEqual(d.runner, "codex")
+        self.assertIsNone(d.model)
+        self.assertEqual(d.effort, "xhigh")
+        self.assertEqual(d.mcp, ("lean-lsp",))
+
+    def test_legacy_codex_gpt_alias_available_without_config_block(self):
+        d = load_harness_descriptor(ProjectConfig(), "codex-gpt")
+        self.assertEqual(d.runner, "codex")
+        self.assertIsNone(d.model)
+        self.assertEqual(d.effort, "xhigh")
+        self.assertEqual(d.mcp, ("lean-lsp",))
 
     def test_has_explicit_harness_override(self):
         self.assertFalse(has_explicit_harness_override(ProjectConfig(), "claude-code"))
@@ -365,6 +384,70 @@ class LaneConfigHarnessTest(unittest.TestCase):
             }
         )
         self.assertEqual(cfg.lanes[0].harness, "codex-gpt")
+
+
+# ── claude backend propagation to subagents ──────────────────────────
+
+
+class BackendPropagationTest(unittest.TestCase):
+    """A parent agent exports its claude backend so nested ``archon
+    subagent`` dispatches (which pass no ``--claude-backend`` flag)
+    re-resolve to the same backend instead of dropping to ``default``.
+    """
+
+    def setUp(self):
+        # Snapshot/clear the propagation env vars so each test is isolated.
+        self._saved = {
+            k: os.environ.pop(k, None)
+            for k in (CLAUDE_BACKEND_ENV, CLAUDE_P_CONFIG_DIR_ENV)
+        }
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_backend_name_attributes(self):
+        self.assertEqual(ClaudeBackend().name, "default")
+        self.assertEqual(ClaudePBackend().name, "claude-p")
+        self.assertEqual(EntrypointBackend("claude-vscode").name, "vscode")
+        self.assertEqual(EntrypointBackend("claude-desktop").name, "desktop")
+        self.assertEqual(EntrypointBackend(None).name, "default")
+
+    def test_claude_p_agent_exports_backend_and_config_dir(self):
+        ag = ClaudeAgent(
+            model="opus", role="plan",
+            backend=ClaudePBackend(config_dir="/tmp/cfgX"),
+        )
+        env = ag._build_env(None)
+        self.assertEqual(env[CLAUDE_BACKEND_ENV], "claude-p")
+        self.assertEqual(env[CLAUDE_P_CONFIG_DIR_ENV], "/tmp/cfgX")
+
+    def test_default_agent_exports_default_without_config_dir(self):
+        ag = ClaudeAgent(model="opus", role="plan", backend=ClaudeBackend())
+        env = ag._build_env(None)
+        self.assertEqual(env[CLAUDE_BACKEND_ENV], "default")
+        self.assertNotIn(CLAUDE_P_CONFIG_DIR_ENV, env)
+
+    def test_subagent_reresolves_backend_from_env(self):
+        os.environ[CLAUDE_BACKEND_ENV] = "claude-p"
+        os.environ[CLAUDE_P_CONFIG_DIR_ENV] = "/tmp/cfgX"
+        b = resolve_claude_backend(ProjectConfig(), cli_value=None)
+        self.assertIsInstance(b, ClaudePBackend)
+        self.assertEqual(b.config_dir, "/tmp/cfgX")
+
+    def test_explicit_cli_beats_env(self):
+        os.environ[CLAUDE_BACKEND_ENV] = "claude-p"
+        b = resolve_claude_backend(ProjectConfig(), cli_value="default")
+        self.assertIs(type(b), ClaudeBackend)
+
+    def test_config_used_when_env_absent(self):
+        cfg = ProjectConfig(raw={"loop": {"claude_backend": "vscode"}})
+        b = resolve_claude_backend(cfg, cli_value=None)
+        self.assertIsInstance(b, EntrypointBackend)
+        self.assertEqual(b.name, "vscode")
 
 
 if __name__ == "__main__":

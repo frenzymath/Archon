@@ -15,15 +15,13 @@ Unlike a bolt-on, codex is a first-class engine here:
   :func:`~archon.agent.supervise_streamed_run` — into Archon's own JSONL
   ``thinking`` / ``text`` / ``tool_call`` / ``tool_result`` / ``session_end``
   rows, so the dashboard shows a live transcript and the token panel.
-  (Codex reports token usage but not a USD cost, so ``total_cost_usd`` is
-  emitted as ``0``; the token counts are the real signal.)
+  (Codex reports token usage but not a USD cost, so ``session_end``
+  omits ``total_cost_usd``; the token counts are the real signal.)
 * Shared subprocess supervision (cancel / idle-watchdog / ordered
   teardown) via :func:`~archon.agent.supervise_streamed_run`.
 
 Current limits (see ``docs/MIGRATION.md``):
 
-* Headless only. :meth:`run_interactive` raises — interactive sites
-  (``archon discuss`` / ``refactor draft``) stay on claude-code.
 * No true resume. Codex mints its own ``thread_id`` and resumes via a
   separate subcommand; v1 logs a warning and runs fresh when a
   ``resume_session_id`` is passed.
@@ -36,15 +34,16 @@ flag, so unlike the claude-code path (which registers the server at
 this runner's argv.
 
 The invocation mirrors the FormalQualBench reference runner:
-``codex exec --json --skip-git-repo-check --ignore-user-config -m <model>
--c model_reasoning_effort="<effort>" --sandbox <sandbox> --ephemeral
-[gateway -c …] [mcp -c …] [extra] <prompt>``.
+``codex exec --json --skip-git-repo-check --ignore-user-config
+[-m <model>] [-c model_reasoning_effort="<effort>"] --sandbox <sandbox>
+--ephemeral [gateway -c …] [mcp -c …] [extra] <prompt>``.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -88,6 +87,27 @@ class PartialGatewayConfigError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _ensure_archon_on_path(env: dict[str, str]) -> None:
+    """Make the ``archon`` CLI resolvable inside the codex subprocess.
+
+    Codex runs subagent dispatch (``python3 .claude/tools/archon-subagent.py``)
+    in its own shell, whose ``PATH`` may not include the venv ``bin/`` that
+    holds the ``archon`` console script — the wrapper then aborts with "archon
+    CLI not found on PATH" and no subagents are dispatched. The parent archon
+    process always has it on PATH, so locate it here and prepend its directory
+    to the child's ``PATH``. No-op when ``archon`` can't be located (the wrapper
+    has its own ``python -m archon`` fallback for that case).
+    """
+    exe = shutil.which("archon")
+    if not exe:
+        return
+    bin_dir = os.path.dirname(os.path.abspath(exe))
+    path = env.get("PATH", "")
+    parts = path.split(os.pathsep) if path else []
+    if bin_dir not in parts:
+        env["PATH"] = os.pathsep.join([bin_dir, *parts]) if parts else bin_dir
 
 
 def resolve_prompt_variant(
@@ -148,15 +168,17 @@ def resolve_prompt_variant(
 #   {"type":"turn.failed","error":{"message":…}}
 #   {"type":"error","message":…}
 #
-# A single session_end is emitted once stdin closes (codex exec is one
-# turn), carrying the last turn's usage and the last agent_message as the
-# summary. Codex reports no USD cost → total_cost_usd is 0.
+# A single session_end is emitted once stdin closes. Usage is summed
+# across turn.completed events, while num_turns reports completed Codex
+# items/work steps because one codex exec is otherwise always one turn.
+# Codex reports no USD cost, so total_cost_usd is omitted.
 _CODEX_STREAM_PARSER = r'''
-import sys, json, datetime, time
+import sys, json, datetime
 
 VERBOSE = '{verbose}' == 'True'
 RAW = open('{raw_log}', 'a') if VERBOSE else None
 JSONL = open('{jsonl}', 'a')
+MODEL = '{model}'
 
 def emit(event_type, **fields):
     row = {{'ts': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'), 'event': event_type, **fields}}
@@ -166,14 +188,62 @@ def emit(event_type, **fields):
 def terminal(s):
     print(s, flush=True)
 
-start = time.monotonic()
-last_text = ''
-turns = 0
-sid = ''
-sid_emitted = False
-usage = {{}}
-failed = False
-fail_msg = ''
+_TOOL_ITEMS = ('command_execution', 'mcp_tool_call', 'file_change', 'todo_list')
+_TOOL_LABEL = {{'command_execution': 'Bash', 'file_change': 'Edit', 'todo_list': 'TodoWrite'}}
+
+def tool_label(item):
+    if item.get('type') == 'mcp_tool_call':
+        return item.get('tool') or 'mcp'
+    return _TOOL_LABEL.get(item.get('type', ''), item.get('type', '') or 'tool')
+
+def tool_input(item):
+    t = item.get('type', '')
+    if t == 'command_execution':
+        return {{'command': item.get('command', '')}}
+    if t == 'mcp_tool_call':
+        return {{
+            'server': item.get('server', ''),
+            'tool': item.get('tool', ''),
+            'arguments': item.get('arguments', {{}}),
+        }}
+    if t == 'file_change':
+        return {{'changes': item.get('changes', [])}}
+    if t == 'todo_list':
+        return {{'items': item.get('items', [])}}
+    return {{}}
+
+def tool_result_content(item):
+    t = item.get('type', '')
+    if t == 'command_execution':
+        out = item.get('aggregated_output') or item.get('output') or ''
+        code = item.get('exit_code')
+        if code is not None:
+            out = (out + '\n' if out else '') + '[exit ' + str(code) + ']'
+        return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+    if t == 'mcp_tool_call':
+        err = item.get('error')
+        if err:
+            return '[error] ' + (err if isinstance(err, str) else json.dumps(err, ensure_ascii=False))
+        res = item.get('result')
+        if res is None:
+            return str(item.get('status', '') or '')
+        return res if isinstance(res, str) else json.dumps(res, ensure_ascii=False)
+    if t == 'file_change':
+        lines = []
+        for ch in item.get('changes', []) or []:
+            if isinstance(ch, dict):
+                lines.append(str(ch.get('kind', '?')) + ' ' + str(ch.get('path', '')))
+        status = item.get('status', '')
+        if status and not lines:
+            lines.append(str(status))
+        return '\n'.join(lines)
+    return ''
+
+session_id_emitted = False
+started_ids = set()
+last_message = ''
+sum_input = sum_cached = sum_output = sum_reasoning = 0
+num_iters = 0
 
 for line in sys.stdin:
     line = line.strip()
@@ -190,107 +260,86 @@ for line in sys.stdin:
     t = obj.get('type', '')
 
     if t == 'thread.started':
-        sid = obj.get('thread_id', '') or ''
-        if sid and not sid_emitted:
-            emit('session_meta', session_id=sid)
-            sid_emitted = True
+        if not session_id_emitted:
+            sid = obj.get('thread_id', '') or ''
+            if sid:
+                emit('session_meta', session_id=sid)
+                session_id_emitted = True
 
-    elif t == 'turn.started':
-        turns += 1
+    elif t == 'item.started':
+        item = obj.get('item', {{}}) or {{}}
+        if item.get('type', '') in _TOOL_ITEMS:
+            started_ids.add(item.get('id', ''))
+            emit('tool_call', tool=tool_label(item), input=tool_input(item))
 
-    elif t in ('item.started', 'item.completed', 'item.updated'):
+    elif t == 'item.completed':
+        num_iters += 1
         item = obj.get('item', {{}}) or {{}}
         it = item.get('type', '')
         if it == 'agent_message':
-            if t == 'item.completed':
-                txt = (item.get('text') or '').strip()
-                if txt:
-                    emit('text', content=txt)
-                    last_text = txt
+            text = (item.get('text', '') or '').strip()
+            if text:
+                emit('text', content=text)
+                last_message = text
         elif it == 'reasoning':
-            if t == 'item.completed':
-                txt = (item.get('text') or '').strip()
-                if txt:
-                    emit('thinking', content=txt)
-        elif it == 'command_execution':
-            if t == 'item.started':
-                cmd = item.get('command', '')
-                emit('tool_call', tool='shell', input={{'command': cmd}})
-            elif t == 'item.completed':
-                out = item.get('aggregated_output') or item.get('output') or ''
-                code = item.get('exit_code')
-                status = item.get('status', '')
-                head = f'[exit {{code}}] ' if code is not None else (f'[{{status}}] ' if status else '')
-                emit('tool_result', content=head + (out if isinstance(out, str) else json.dumps(out)))
-        elif it == 'file_change':
-            if t == 'item.started':
-                emit('tool_call', tool='apply_patch', input={{'changes': item.get('changes', [])}})
-            elif t == 'item.completed':
-                emit('tool_result', content='file_change: ' + str(item.get('status', '')))
-        elif it == 'mcp_tool_call':
-            server = item.get('server', '')
-            tool = item.get('tool', '')
-            name = (server + '.' + tool) if server else tool
-            if t == 'item.started':
-                emit('tool_call', tool='mcp:' + name, input=item.get('arguments', {{}}) or {{}})
-            elif t == 'item.completed':
-                emit('tool_result', content='mcp ' + name + ': ' + str(item.get('status', '')))
-        elif it == 'web_search':
-            if t == 'item.completed':
-                emit('tool_call', tool='web_search', input={{'query': item.get('query', '')}})
+            text = (item.get('text', '') or '').strip()
+            if text:
+                emit('thinking', content=text)
+        elif it in _TOOL_ITEMS:
+            if item.get('id', '') not in started_ids:
+                emit('tool_call', tool=tool_label(item), input=tool_input(item))
+            if it != 'todo_list':
+                emit('tool_result', content=tool_result_content(item))
         elif it == 'error':
-            if t == 'item.completed':
-                emit('text', content='[error] ' + str(item.get('message', '')))
-        # todo_list and any unknown item types are ignored (additive).
+            msg = str(item.get('message', ''))
+            if msg:
+                last_message = '[error] ' + msg
+                emit('text', content=last_message)
 
     elif t == 'turn.completed':
         usage = obj.get('usage', {{}}) or {{}}
+        sum_input += usage.get('input_tokens', 0) or 0
+        sum_cached += usage.get('cached_input_tokens', 0) or 0
+        sum_output += usage.get('output_tokens', 0) or 0
+        sum_reasoning += usage.get('reasoning_output_tokens', 0) or 0
 
     elif t == 'turn.failed':
-        failed = True
-        err = obj.get('error', {{}}) or {{}}
-        fail_msg = err.get('message', '') if isinstance(err, dict) else str(err)
+        err = obj.get('error')
+        if err:
+            last_message = '[turn.failed] ' + (err if isinstance(err, str) else json.dumps(err, ensure_ascii=False))
 
     elif t == 'error':
-        failed = True
-        fail_msg = str(obj.get('message', '')) or fail_msg
+        msg = str(obj.get('message', ''))
+        if msg:
+            last_message = '[error] ' + msg
+            emit('text', content=last_message)
 
-# One session_end once the stream closes (codex exec is a single turn).
-summary = last_text
-if failed and fail_msg:
-    summary = '[turn failed] ' + fail_msg if not last_text else last_text
-duration_ms = (time.monotonic() - start) * 1000.0
-input_tokens = usage.get('input_tokens', 0) or 0
-output_tokens = usage.get('output_tokens', 0) or 0
-cache_read = usage.get('cached_input_tokens', 0) or 0
+fresh_input = sum_input - sum_cached
+if fresh_input < 0:
+    fresh_input = 0
 emit('session_end',
-    session_id=sid,
-    total_cost_usd=0,
-    duration_ms=duration_ms,
-    duration_api_ms=0,
-    num_turns=turns,
-    input_tokens=input_tokens,
-    output_tokens=output_tokens,
-    cache_read_input_tokens=cache_read,
+    num_turns=num_iters,
+    num_items=num_iters,
+    input_tokens=fresh_input,
+    output_tokens=sum_output,
+    cache_read_input_tokens=sum_cached,
     cache_creation_input_tokens=0,
-    reasoning_output_tokens=usage.get('reasoning_output_tokens', 0) or 0,
-    model_usage={{}},
-    summary=summary,
-    ended_early=False,
+    reasoning_output_tokens=sum_reasoning,
+    input_tokens_total=sum_input,
+    model_usage={{MODEL: {{'inputTokens': fresh_input, 'outputTokens': sum_output}}}},
+    summary=last_message,
     runner='codex',
 )
 
-if summary:
-    terminal(summary)
+if last_message:
+    terminal(last_message)
 parts = []
-if duration_ms:
-    parts.append(f'{{duration_ms/60000:.1f}}min')
-if input_tokens or output_tokens:
-    parts.append(f'in={{input_tokens}} out={{output_tokens}}')
-if turns:
-    parts.append(f'turns={{turns}}')
+if fresh_input or sum_output:
+    parts.append('in=' + str(fresh_input) + ' cached=' + str(sum_cached) + ' out=' + str(sum_output) + ' reasoning=' + str(sum_reasoning))
+if num_iters:
+    parts.append('iters=' + str(num_iters))
 if parts:
-    terminal('[COST] ' + ' | '.join(parts))
+    terminal('[TOKENS] ' + ' | '.join(parts))
 
 JSONL.close()
 if RAW:
@@ -317,9 +366,13 @@ class CodexAgent:
     # ── command assembly (pure; unit-tested without spawning codex) ──────
 
     @property
-    def model(self) -> str:
-        """The codex model id (``codex exec -m``)."""
-        return self.descriptor.model or "gpt-5.1-codex-max"
+    def model(self) -> str | None:
+        """Explicit codex model id, or ``None`` to use the CLI default."""
+        return self.descriptor.model
+
+    @property
+    def log_model(self) -> str:
+        return self.descriptor.model or "codex-default"
 
     @property
     def effort(self) -> str | None:
@@ -382,7 +435,7 @@ class CodexAgent:
         """Build the full ``codex exec`` argv (no subprocess spawned).
 
         ``codex exec --json --skip-git-repo-check --ignore-user-config
-          -m <model> -c model_reasoning_effort="<effort>"
+          [-m <model>] [-c model_reasoning_effort="<effort>"]
           [-o <last_message_path>] [gateway -c …] [mcp -c …]
           --sandbox <sandbox> --ephemeral [extra] <prompt>``.
 
@@ -398,9 +451,9 @@ class CodexAgent:
             "--json",
             "--skip-git-repo-check",
             "--ignore-user-config",
-            "-m",
-            self.model,
         ]
+        if self.model:
+            argv += ["-m", self.model]
         if self.effort:
             argv += ["-c", f'model_reasoning_effort="{self.effort}"']
         if last_message_path is not None:
@@ -421,6 +474,47 @@ class CodexAgent:
 
         argv += self._mcp_overrides(lake_root)
         argv += ["--sandbox", self.sandbox, "--ephemeral"]
+        argv += self._descriptor_extra_args()
+        if extra_args:
+            argv += list(extra_args)
+        argv.append(prompt)
+        return argv
+
+    def build_interactive_argv(
+        self,
+        prompt: str,
+        *,
+        extra_args: list[str] | None = None,
+        env_source: dict[str, str] | None = None,
+        lake_root: Path | str | None = None,
+    ) -> list[str]:
+        """Build a foreground Codex CLI invocation for interactive roles.
+
+        Unlike :meth:`build_argv`, this uses the native TUI entry point
+        (``codex`` rather than ``codex exec --json``). It still applies the
+        harness descriptor's optional model, effort, sandbox, gateway, MCP,
+        and extra ``-c`` overrides consistently across headless and foreground
+        commands.
+        """
+        argv: list[str] = ["codex"]
+        if self.model:
+            argv += ["-m", self.model]
+        if self.effort:
+            argv += ["-c", f'model_reasoning_effort="{self.effort}"']
+
+        base_url, api_key = self._gateway_creds(env_source)
+        if base_url and api_key:
+            argv += [
+                "-c", f'model_provider="{_GATEWAY_PROVIDER}"',
+                "-c", f'model_providers.{_GATEWAY_PROVIDER}.name="{_GATEWAY_PROVIDER}"',
+                "-c", f'model_providers.{_GATEWAY_PROVIDER}.base_url="{base_url}"',
+                "-c", f'model_providers.{_GATEWAY_PROVIDER}.env_key="{_GATEWAY_KEY_ENV}"',
+                "-c", f'model_providers.{_GATEWAY_PROVIDER}.wire_api="{self.descriptor.wire_api}"',
+                "-c", f"model_providers.{_GATEWAY_PROVIDER}.supports_websockets=false",
+            ]
+
+        argv += self._mcp_overrides(lake_root)
+        argv += ["--sandbox", self.sandbox]
         argv += self._descriptor_extra_args()
         if extra_args:
             argv += list(extra_args)
@@ -541,6 +635,7 @@ class CodexAgent:
         env = os.environ.copy()
         if env_overrides:
             env.update(env_overrides)
+        _ensure_archon_on_path(env)
         base_url, api_key = self._gateway_creds(env)
         if base_url and api_key:
             env[_GATEWAY_KEY_ENV] = api_key
@@ -635,10 +730,21 @@ class CodexAgent:
         cwd: Path,
         extra_args: list[str] | None = None,
     ) -> int:
-        raise NotImplementedError(
-            "codex harness is headless-only; interactive roles stay on "
-            "claude-code"
+        """Foreground Codex TUI run for interactive Archon commands.
+
+        This intentionally does not normalize logs: interactive Codex owns
+        the terminal until the user exits. Headless Archon loop phases should
+        continue to use :meth:`run`, which is supervised and logged.
+        """
+        import subprocess
+
+        prompt = self._apply_prompt_variant(prompt, project_path=cwd)
+        env = self.build_env()
+        self._announce()
+        argv = self.build_interactive_argv(
+            prompt, extra_args=extra_args, env_source=env, lake_root=cwd,
         )
+        return subprocess.run(argv, cwd=cwd, env=env).returncode
 
     # ── internals ────────────────────────────────────────────────────────
 
@@ -722,6 +828,7 @@ class CodexAgent:
             verbose=str(verbose_logs),
             raw_log=raw_log,
             jsonl=jsonl,
+            model=self.model,
         )
         # codex's human-readable logs go to stderr; keep them only when
         # verbose (mirrors ClaudeAgent), separate from the codex JSON which

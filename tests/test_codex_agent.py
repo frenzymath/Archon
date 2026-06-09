@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from archon.agents.codex import (
     CodexAgent,
@@ -21,6 +22,7 @@ from archon.agents.codex import (
     PartialGatewayConfigError,
     UnknownMcpBundleError,
     _CODEX_STREAM_PARSER,
+    _ensure_archon_on_path,
     resolve_prompt_variant,
 )
 from archon.commands.tooling.project_config import HarnessDescriptor
@@ -36,12 +38,12 @@ def _agent(**kw) -> CodexAgent:
 
 class BuildArgvTest(unittest.TestCase):
     def test_base_argv_shape(self):
-        argv = _agent(model="gpt-5.1-codex-max").build_argv(
+        argv = _agent(model="gpt-5.1-codex").build_argv(
             "PROMPT", env_source={}, lake_root="/proj"
         )
         self.assertEqual(argv[:7], [
             "codex", "exec", "--json", "--skip-git-repo-check",
-            "--ignore-user-config", "-m", "gpt-5.1-codex-max",
+            "--ignore-user-config", "-m", "gpt-5.1-codex",
         ])
         self.assertIn("--ephemeral", argv)
         self.assertEqual(argv.index("--sandbox") + 1, argv.index("danger-full-access"))
@@ -55,14 +57,32 @@ class BuildArgvTest(unittest.TestCase):
         argv = _agent(model="m").build_argv("P", env_source={})
         self.assertFalse(any("model_reasoning_effort" in a for a in argv))
 
-    def test_model_falls_back_to_default(self):
-        # No model on the descriptor → the codex default id.
-        self.assertEqual(_agent().model, "gpt-5.1-codex-max")
+    def test_model_omitted_when_descriptor_has_no_model(self):
+        argv = _agent().build_argv("P", env_source={})
+        self.assertIsNone(_agent().model)
+        self.assertNotIn("-m", argv)
+
+    def test_interactive_model_omitted_when_descriptor_has_no_model(self):
+        argv = _agent().build_interactive_argv("P", env_source={})
+        self.assertNotIn("-m", argv)
 
     def test_extra_args_appended_before_prompt(self):
         a = _agent(model="m", raw={"runner": "codex", "extra_args": ["--foo", "bar"]})
         argv = a.build_argv("P", env_source={})
         self.assertEqual(argv[-3:], ["--foo", "bar", "P"])
+
+
+    def test_interactive_argv_uses_tui_entrypoint(self):
+        argv = _agent(model="m", effort="xhigh").build_interactive_argv(
+            "PROMPT", env_source={}, lake_root="/proj",
+        )
+        self.assertEqual(argv[0], "codex")
+        self.assertNotIn("exec", argv)
+        self.assertNotIn("--json", argv)
+        self.assertIn("-m", argv)
+        self.assertIn("m", argv)
+        self.assertIn('model_reasoning_effort="xhigh"', argv)
+        self.assertEqual(argv[-1], "PROMPT")
 
 
 # ── gateway credentials ──────────────────────────────────────────────
@@ -153,13 +173,21 @@ class PromptVariantTest(unittest.TestCase):
             )
 
 
-# ── run_interactive unsupported ───────────────────────────────────────
+# ── interactive foreground Codex ──────────────────────────────────────
 
 
 class RunInteractiveTest(unittest.TestCase):
-    def test_raises_not_implemented(self):
-        with self.assertRaises(NotImplementedError):
-            _agent(model="m").run_interactive("P", cwd=Path("/x"))
+    def test_runs_foreground_codex_cli(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = Path(d)
+            with patch("subprocess.run") as run:
+                run.return_value.returncode = 7
+                code = _agent(model="m").run_interactive("P", cwd=cwd)
+        self.assertEqual(code, 7)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "codex")
+        self.assertEqual(argv[-1], "P")
+        self.assertEqual(run.call_args.kwargs["cwd"], cwd)
 
 
 # ── codex --json → archon JSONL parser ────────────────────────────────
@@ -170,7 +198,10 @@ def _run_parser(events: list[dict]) -> list[dict]:
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "out.jsonl"
         script = _CODEX_STREAM_PARSER.format(
-            verbose="False", raw_log=str(Path(d) / "raw"), jsonl=str(out),
+            verbose="False",
+            raw_log=str(Path(d) / "raw"),
+            jsonl=str(out),
+            model="gpt-5.5",
         )
         stream = "".join(json.dumps(e) + "\n" for e in events)
         subprocess.run(
@@ -197,20 +228,21 @@ class CodexParserTest(unittest.TestCase):
 
         self.assertEqual(by_event["session_meta"][0]["session_id"], "tid-1")
         self.assertEqual(by_event["thinking"][0]["content"], "thinking hard")
-        self.assertEqual(by_event["tool_call"][0]["tool"], "shell")
+        self.assertEqual(by_event["tool_call"][0]["tool"], "Bash")
         self.assertIn("lake build", by_event["tool_call"][0]["input"]["command"])
         self.assertIn("Build completed", by_event["tool_result"][0]["content"])
         self.assertEqual(by_event["text"][0]["content"], "Done proving.")
 
         end = by_event["session_end"][0]
-        self.assertEqual(end["session_id"], "tid-1")
-        self.assertEqual(end["input_tokens"], 100)
+        self.assertEqual(end["input_tokens"], 60)
+        self.assertEqual(end["input_tokens_total"], 100)
         self.assertEqual(end["output_tokens"], 20)
         self.assertEqual(end["cache_read_input_tokens"], 40)
-        self.assertEqual(end["num_turns"], 1)
-        self.assertEqual(end["total_cost_usd"], 0)
+        self.assertEqual(end["num_turns"], 3)
+        self.assertEqual(end["num_items"], 3)
+        self.assertNotIn("total_cost_usd", end)
+        self.assertEqual(end["model_usage"]["gpt-5.5"]["inputTokens"], 60)
         self.assertEqual(end["summary"], "Done proving.")
-        self.assertFalse(end["ended_early"])
         self.assertEqual(end["runner"], "codex")
 
     def test_file_change_maps_to_apply_patch_tool(self):
@@ -222,7 +254,7 @@ class CodexParserTest(unittest.TestCase):
             {"type": "turn.completed", "usage": {}},
         ])
         tool_calls = [r for r in rows if r["event"] == "tool_call"]
-        self.assertEqual(tool_calls[0]["tool"], "apply_patch")
+        self.assertEqual(tool_calls[0]["tool"], "Edit")
         self.assertEqual(tool_calls[0]["input"]["changes"][0]["path"], "A.lean")
 
     def test_turn_failed_surfaces_as_summary(self):
@@ -235,9 +267,7 @@ class CodexParserTest(unittest.TestCase):
         end = [r for r in rows if r["event"] == "session_end"][0]
         self.assertIn("model not allowed", end["summary"])
 
-    def test_unknown_item_types_ignored(self):
-        # Additive: a todo_list / never-seen item must not crash the parser
-        # and must not produce stray transcript rows.
+    def test_unknown_item_types_do_not_crash(self):
         rows = _run_parser([
             {"type": "thread.started", "thread_id": "t"},
             {"type": "turn.started"},
@@ -246,7 +276,53 @@ class CodexParserTest(unittest.TestCase):
             {"type": "turn.completed", "usage": {}},
         ])
         events = {r["event"] for r in rows}
-        self.assertEqual(events, {"session_meta", "session_end"})
+        self.assertIn("session_meta", events)
+        self.assertIn("session_end", events)
+        self.assertEqual([r for r in rows if r["event"] == "session_end"][0]["num_items"], 2)
+
+    def test_completed_tool_without_started_still_emits_call(self):
+        rows = _run_parser([
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "item.completed", "item": {
+                "id": "c1", "type": "command_execution",
+                "command": "echo hi", "aggregated_output": "hi",
+                "exit_code": 0, "status": "completed"}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 1, "cached_input_tokens": 0,
+                "output_tokens": 1, "reasoning_output_tokens": 0}},
+        ])
+        events = [r["event"] for r in rows]
+        self.assertEqual(events.count("tool_call"), 1)
+        self.assertEqual(events.count("tool_result"), 1)
+        self.assertLess(events.index("tool_call"), events.index("tool_result"))
+        self.assertEqual([r for r in rows if r["event"] == "session_end"][0]["num_turns"], 1)
+
+
+class EnsureArchonOnPathTest(unittest.TestCase):
+    """The codex child env must expose `archon` so sandboxed subagent
+    dispatch (`python3 .claude/tools/archon-subagent.py`) can find it.
+    """
+
+    def test_prepends_archon_bin_dir(self):
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/opt/venv/bin/archon"):
+            env = {"PATH": "/usr/bin"}
+            _ensure_archon_on_path(env)
+        self.assertEqual(env["PATH"].split(":")[0], "/opt/venv/bin")
+        self.assertIn("/usr/bin", env["PATH"].split(":"))
+
+    def test_idempotent_when_already_present(self):
+        with patch("archon.agents.codex.shutil.which",
+                   return_value="/opt/venv/bin/archon"):
+            env = {"PATH": "/opt/venv/bin:/usr/bin"}
+            _ensure_archon_on_path(env)
+        self.assertEqual(env["PATH"], "/opt/venv/bin:/usr/bin")
+
+    def test_noop_when_archon_not_found(self):
+        with patch("archon.agents.codex.shutil.which", return_value=None):
+            env = {"PATH": "/usr/bin"}
+            _ensure_archon_on_path(env)
+        self.assertEqual(env["PATH"], "/usr/bin")
 
 
 if __name__ == "__main__":
