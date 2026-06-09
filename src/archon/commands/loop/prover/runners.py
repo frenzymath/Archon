@@ -26,6 +26,7 @@ from archon.commands.tooling.project_config import HarnessDescriptor
 from archon.prompts import (
     build_parallel_prover_prompt,
     build_prover_prompt,
+    default_prover_mode_for_stage,
 )
 from archon.state import (
     archive_task_results,
@@ -145,9 +146,15 @@ class SerialProverRunner:
         self.harness = harness if harness is not None else _default_harness()
 
     def run(self, *, dry_run: bool, progress_file: Path) -> None:
+        # No per-file tags on the serial whole-stage path → use the stage's
+        # default prover mode (the static prover-<stage>.md prompts were
+        # retired; modes are the single source of truth).
+        stage_mode = default_prover_mode_for_stage(self.state_dir, self.stage)
         prompt = build_prover_prompt(
             self.project_name, self.project_path, self.state_dir, self.stage,
             self.iter_num, debug_feedback=self.debug_feedback,
+            mode_name=stage_mode,
+            mode_content=_load_mode_content(self.state_dir, stage_mode),
         )
         if dry_run:
             log.step("[dry-run] Prover prompt:")
@@ -342,6 +349,9 @@ class ParallelProverRunner:
         self._run_fanout(sorry_files, file_modes=file_modes)
 
     def _run_single_file(self, target: Path, mode_name: str | None = None) -> None:
+        # Fall back to the stage's default mode when the objective carried no
+        # explicit [prover-mode: …] tag (modes replaced the static prompts).
+        mode_name = mode_name or default_prover_mode_for_stage(self.state_dir, self.stage)
         rel = relpath(target, self.project_path)
         slug = file_slug(rel)
         log.info(f"Only 1 file ({rel}) — running serial prover")
@@ -426,7 +436,8 @@ class ParallelProverRunner:
                 prover_log = self.iter_dir / "provers" / slug
                 prover_logs[slug] = prover_log
 
-                mode_name = file_modes.get(str(f))
+                mode_name = file_modes.get(str(f)) or default_prover_mode_for_stage(
+                    self.state_dir, self.stage)
                 mode_content = _load_mode_content(self.state_dir, mode_name)
                 base_prompt = build_parallel_prover_prompt(
                     self.project_name, self.project_path, self.state_dir, self.stage,

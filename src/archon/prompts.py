@@ -890,6 +890,52 @@ def _parse_mode_frontmatter(text: str) -> dict:
         return {}
 
 
+def load_prover_mode_content(state_dir: Path, mode_name: str | None) -> str | None:
+    """Return a prover-mode descriptor's body (frontmatter stripped), or None.
+
+    ``None`` when ``mode_name`` is falsy or the file is missing.
+    """
+    if not mode_name:
+        return None
+    mode_file = state_dir / "prover-modes" / f"{mode_name}.md"
+    if not mode_file.exists():
+        return None
+    text = mode_file.read_text(encoding="utf-8")
+    stripped = re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.DOTALL)
+    return stripped.strip() or None
+
+
+def default_prover_mode_for_stage(state_dir: Path, stage: str) -> str | None:
+    """Return the prover-mode that declares itself default for ``stage``.
+
+    Scans ``<state_dir>/prover-modes/*.md`` for a descriptor whose
+    ``default_for_stages`` frontmatter includes the canonical stage token
+    (e.g. ``prove`` for ``prover``, ``formalize`` for ``autoformalize``,
+    ``polish`` for ``polish``) and returns its file stem — usable directly by
+    the runner's mode loader. The default mode is what a prover gets when its
+    objective carries no explicit ``[prover-mode: …]`` tag, so the modes are
+    the single source of truth (the static ``prompts/prover-<stage>.md`` files
+    were retired). Returns ``None`` when the modes dir is absent or no mode
+    claims the stage — then the caller falls back to the legacy static prompt
+    for old projects that predate modes.
+    """
+    modes_dir = state_dir / "prover-modes"
+    if not modes_dir.is_dir():
+        return None
+    canonical = normalize_stage_for_prompt_path(stage)
+    for path in sorted(modes_dir.glob("*.md")):
+        try:
+            fm = _parse_mode_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        defaults = fm.get("default_for_stages") or []
+        if isinstance(defaults, str):
+            defaults = [defaults]
+        if canonical in defaults:
+            return path.stem
+    return None
+
+
 def _prover_modes_catalog_block(state_dir: Path) -> str:
     """Render the available prover-modes catalog for injection into the plan prompt.
 
@@ -1109,9 +1155,9 @@ def _protected_block(project_path: Path) -> str:
 def _prover_dag_hint_block(project_path: Path) -> str:
     """Short DAG-navigation note injected into every prover prompt.
 
-    A prover running in a mode reads the mode body *instead of*
-    ``prover-prover.md``, so this lives in the prompt builder (like
-    ``_protected_block``) to reach provers regardless of mode. Only shown
+    A prover reads the active mode body (the mode block injected into its
+    prompt), so this lives in the prompt builder (like ``_protected_block``)
+    to reach provers regardless of mode. Only shown
     when the project has a blueprint — otherwise there is no graph to query.
     """
     if not (project_path / "blueprint" / "src" / "chapters").is_dir():
