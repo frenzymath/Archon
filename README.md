@@ -2,6 +2,8 @@
 
 ![Version](https://img.shields.io/badge/version-0.3.0-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
+[![claude-p](https://img.shields.io/badge/driver-claude--p-8A2BE2?logo=github)](https://github.com/AxelDlv00/claude-p)
+[![leandag](https://img.shields.io/badge/graph-leandag-1f6feb?logo=github)](https://github.com/AxelDlv00/LeanDAG)
 
 > **Archon v0.3.0.** Adds a **modular engine system** — route any role or subagent to **OpenAI Codex** alongside Claude via named **harnesses**, and pick a **Claude backend** (`--claude-backend`: `default`/`claude-p`/`vscode`/`desktop`/`interactive`) per loop or per harness. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Also hardens **stage detection** in `PROGRESS.md` to be more resilient to annotations.
 >
@@ -10,6 +12,12 @@
 > **Upgrading from v0.2.0?** Just run `archon update`. **Upgrading from v0.1.0?** See [section 7 of MIGRATION.md](docs/MIGRATION.md#7-upgrading-from-v010-to-v020).
 >
 > Full release notes: [CHANGELOG.md](docs/CHANGELOG.md).
+>
+> **Using a Claude subscription?** Under Anthropic's [Agent SDK plan policy](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), subscription holders get a *separate, limited* monthly credit for headless `claude -p` (Archon's default driver), distinct from your interactive limits. If that's too small for long unattended runs, Archon gives you alternatives — pick one in `.archon/config.json` (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)):
+> - **`codex` harness** — run roles/subagents on OpenAI Codex instead of Claude.
+> - **`claude-p` backend** — drives the interactive Claude Code TUI headlessly (auto-accepts edits), so the work draws on your interactive session.
+> - **`interactive` backend** — Claude runs in the foreground and you drive/exit each agent session by hand (serial; no multilane).
+> - **Env overrides** — point Claude Code at your own gateway/credentials via `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` (*behaviour under the new policy not yet verified*).
 
 Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. Built on Claude Code and Claude Opus 4.6, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw. See also our [blog](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
 
@@ -227,23 +235,24 @@ Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfr
 To check how the formalization is going, the easiest starting point is the **dashboard** (auto-launched by `archon loop` — visit the URL printed in the terminal, e.g. `http://localhost:8080`). It shows iteration progress, parallel prover status, a file-centric Diffs view backed by recorded code snapshots, agent logs with live streaming, and proof journal milestones.
 
 <p align="center">
-<img src="docs/dashboard-logs.jpg" alt="Archon Dashboard — Logs view" width="800">
+<img src="docs/dashboard-logs.png" alt="Archon Dashboard — Logs view" width="800">
 </p>
 
 The **Logs** view groups logs by iteration with phase timing (plan → prover → review) and per-prover completion status.
 
-The **Journal** view tracks proof milestones across sessions — see which theorems were solved, blocked, or retried, with condensed reasoning traces that let you follow how the agents approached each proof.
+The **DAG** view renders the blueprint dependency graph interactively — nodes are colour-coded by status (proved / Mathlib-backed / ∞-effort), and clicking one shows its Lean name, status, and shortcuts to focus its cone or open it in the Blueprint / Diffs views. A git-history scrubber along the bottom replays the graph at any past iteration.
 
 <p align="center">
-<img src="docs/dashboard-journal.jpg" alt="Archon Dashboard — Journal view" width="800">
+<img src="docs/dashboard-DAG.png" alt="Archon Dashboard — DAG (blueprint dependency graph) view" width="800">
 </p>
 
-The **Graph** view renders the proof dependency graph interactively so you
-can see which theorems block which, and the **Diffs** view replays
-per-iteration code snapshots — including a live fallback that reads the
-working tree when an iteration is mid-flight and no snapshot has been
-captured yet (v0.2.0). When multi-lane is enabled, lane-specific logs and
-the per-file merge agent's output show up alongside the single-lane view.
+The **Blueprint** view renders the informal blueprint as a typeset document — chapters, definitions/theorems tagged with their `\leanok` / `\mathlibok` status, source citations, and per-declaration links into the graph and diffs.
+
+<p align="center">
+<img src="docs/dashboard-blueprints.png" alt="Archon Dashboard — Blueprint view" width="800">
+</p>
+
+The **Journal** view tracks proof milestones across sessions (which theorems were solved, blocked, or retried, with condensed reasoning traces), and the **Diffs** view replays per-iteration code snapshots — including a live fallback that reads the working tree when an iteration is mid-flight. When multi-lane is enabled, lane-specific logs and the per-file merge agent's output show up alongside the single-lane view.
 
 You can also inspect state files directly:
 
