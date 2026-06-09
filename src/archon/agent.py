@@ -1595,6 +1595,17 @@ def supervise_streamed_run(
         if parser_cmd is not None:
             agent_proc = subprocess.Popen(
                 agent_cmd,
+                # stdin=DEVNULL is load-bearing for the codex runner: `codex
+                # exec [PROMPT]` treats a piped (non-TTY) stdin as "read more
+                # prompt and append it as a <stdin> block", printing "Reading
+                # additional input from stdin..." and BLOCKING until EOF.
+                # A supervised, headless run never feeds stdin, but without
+                # this the child inherits the parent's stdin — an open pipe
+                # that never closes — so codex hangs until the idle-watchdog
+                # kills it (the subagent then reports "failed (0s)" / idle).
+                # DEVNULL hands it immediate EOF; the positional prompt runs.
+                # Harmless for claude -p, which doesn't read stdin either.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 cwd=cwd,
@@ -1612,6 +1623,7 @@ def supervise_streamed_run(
             stdout_file = open(stdout_dest, "a")  # type: ignore[arg-type]
             agent_proc = subprocess.Popen(
                 agent_cmd,
+                stdin=subprocess.DEVNULL,  # see note above — codex blocks on inherited stdin
                 stdout=stdout_file,
                 stderr=stderr_file,
                 cwd=cwd,
