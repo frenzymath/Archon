@@ -149,14 +149,20 @@ it once under `harnesses`, then reference it by name:
 
 ### Codex subagent dispatch
 
-Codex runs its shell in a sandbox. Subagent dispatch shells out to the `archon`
-CLI, so `archon` must be reachable from inside that sandbox. Archon now handles
-this automatically: the Codex engine prepends the `archon` executable's
-directory to the child `PATH`, and the dispatch wrapper falls back to
-`python -m archon` when the console script still isn't found. If you see
-*"archon CLI not found"*, ensure Archon is installed in the environment Codex
-runs in (and re-run `archon init` so the project's
-`.claude/tools/archon-subagent.py` is the current version).
+Codex runs each command in a sandboxed login shell that re-derives `PATH`,
+dropping the venv `bin/` — so `archon`, `codex`, and `uv` aren't on `PATH` when
+a subagent is dispatched. Archon handles this automatically by passing absolute
+paths through the environment (`ARCHON_CLI_BIN`/`ARCHON_PYTHON` for the wrapper,
+`ARCHON_CODEX_BIN`/`ARCHON_UV_BIN` for the nested codex/MCP). It almost always
+just works; pin paths only if it doesn't:
+
+```json
+{ "harnesses": { "codex": { "runner": "codex", "bin": "/abs/path/to/codex", "uv_bin": "/abs/path/to/uv" } } }
+```
+
+If you see *"archon CLI not found"*, ensure Archon is installed in the
+environment Codex runs in and re-run `archon init` so the project's
+`.claude/tools/archon-subagent.py` is current.
 
 ---
 

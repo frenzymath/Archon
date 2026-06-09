@@ -35,15 +35,10 @@ def default_config() -> dict[str, Any]:
     return {
         'loop': {
             '_model_help': (
-                "Model alias used by the plan / prover / review agents. "
-                "Anthropic aliases: 'opus', 'sonnet', 'haiku' or any full "
-                "model id. Non-Anthropic providers: 'kimi', 'deepseek', or "
-                "'openrouter' — these require the matching credentials in "
-                ".archon/.env (MOONSHOT_API_KEY, DEEPSEEK_API_KEY, "
-                "OPENROUTER_API_KEY + OPENROUTER_MODEL). For kimi/deepseek, "
-                "openrouter is also tried automatically as a fallback when "
-                "the direct key is absent. No settings file is written to "
-                "disk: env vars are injected into each subprocess only."
+                "Model for plan/prover/review. 'opus' (default), 'sonnet', "
+                "'haiku', or a full id; or 'kimi'/'deepseek'/'openrouter' "
+                "(need the matching key in .archon/.env). "
+                "See docs/CONFIGURATION.md §4."
             ),
             'max_iterations': 10,
             'parallel': True,
@@ -52,90 +47,52 @@ def default_config() -> dict[str, Any]:
             'verbose_logs': False,
             'no_review': False,
             '_debug_feedback_help': (
-                "Open a write-only feedback channel: each agent and "
-                "subagent is told (in its prompt) that it may append "
-                "short observations to "
-                ".archon/.debug-feedback/debug_feedback.md when it notices "
-                "a missing capability, a contradictory instruction, or "
-                "anything else the developer should fix. Agents are told "
-                "never to read the file. Off by default; flip to true "
-                "while you are iterating on Archon itself."
+                "If true, agents may append notes to "
+                ".archon/.debug-feedback/debug_feedback.md about missing "
+                "capabilities or contradictory instructions. For improving "
+                "Archon itself; off by default."
             ),
             'debug_feedback': False,
             '_claude_backend_help': (
-                "How 'claude -p' is invoked for headless runs. "
-                "'default': plain claude -p (no changes). "
-                "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode before "
-                "each claude subprocess, so the session is attributed to the "
-                "VS Code extension. "
-                "'desktop': same but with CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
-                "'claude-p': drive the Claude Code TUI headlessly via the "
-                "claude-p wrapper (subscription auth). "
-                "'interactive': run claude in the foreground for you to drive "
-                "by hand — the stable subscription fallback; forces serial "
-                "execution (parallel off, max_parallel 1) and disables multilane."
+                "How `claude` is launched: 'default' (claude -p) | 'vscode' | "
+                "'desktop' | 'claude-p' (headless TUI wrapper, subscription "
+                "auth) | 'interactive' (you drive it by hand; forces serial, "
+                "disables multilane). See docs/CONFIGURATION.md §1."
             ),
             'claude_backend': 'default',
             '_harness_help': (
-                "Global engine selector for EVERYTHING — all roles "
-                "(plan/prover/review) AND all subagents — in one line. Empty "
-                "(the default) means the built-in Claude Code engine "
-                "everywhere. Set it to a harness name defined under the "
-                "top-level `harnesses` block (e.g. \"codex\") to route the "
-                "whole loop through that engine; you do NOT need to set a "
-                "harness per subagent. Narrower overrides still win: "
-                "loop.roles.<plan|prover|review> for one role, "
-                "subagents.<name>.harness for one subagent. NOTE: multilane "
-                "lanes carry their own per-lane harness and are not affected "
-                "by this key. See docs/CONFIGURATION.md."
+                "One-line engine selector for ALL roles + subagents. Empty = "
+                "Claude Code. Set to a name from the `harnesses` block to "
+                "switch everything, e.g.  \"harness\": \"codex\". Narrower "
+                "overrides win: loop.roles.<role>, subagents.<name>.harness. "
+                "(Multilane lanes are unaffected.) See docs/CONFIGURATION.md §2."
             ),
             '_axiom_sweep_help': (
-                "Run a deterministic #print axioms sweep between the "
-                "prover and review phases (after \\leanok sync) to catch "
-                "'sorryAx laundering' — declarations that compile with no "
-                "sorry WARNING yet depend on sorryAx through a clean-"
-                "compiling delegate, which the warning-based sorry count "
-                "misses. Findings are written to "
-                ".archon/logs/iter-NNN/axiom-sweep.{md,json}; the phase "
-                "never blocks. OFF by default: it temporarily appends "
-                "#print axioms to each Lean file and recompiles, so it is "
-                "noticeably slower than the other deterministic checks. "
-                "Turn it on for soundness-critical projects."
+                "If true, run a `#print axioms` sweep between prover and "
+                "review to catch sorryAx laundering (declarations that compile "
+                "clean yet depend on sorryAx). Writes "
+                ".archon/logs/iter-NNN/axiom-sweep.{md,json}; never blocks. "
+                "Slower (recompiles); on for soundness-critical projects."
             ),
             'axiom_sweep': False,
             '_sync_leanok_timeout_sec_help': (
-                "Wall-clock budget (seconds) for the deterministic Phase-0 "
-                "\\leanok marker sync. The sync compile-checks each "
-                "blueprint-referenced Lean file (parallelised internally); a "
-                "very large blueprint (dozens of chapters / hundreds of "
-                "files) can exceed the default. Raise this if you see "
-                "'sync_leanok ... timed out'. Default 1800 (30 min)."
+                "Seconds for the deterministic \\leanok marker sync (it "
+                "compile-checks each blueprint-referenced Lean file). Raise if "
+                "you see 'sync_leanok ... timed out'. Default 1800 (30 min)."
             ),
             'sync_leanok_timeout_sec': 1800,
         },
         'subagents': {
             '_help': (
-                "Subagents are OFF by default to preserve the classic "
-                "single-agent loop. To turn one on, add its name to "
-                "`enabled` below (e.g. \"enabled\": [\"strategy-critic\", "
-                "\"blueprint-reviewer\"]). To enable every shipped "
-                "subagent, copy `_available` into `enabled`. Discovery: "
-                "Archon loads `.md` descriptors from `.archon/subagents/` "
-                "(project-local, overrides built-ins) and from the "
-                "shipped built-ins. Each named entry (e.g. "
-                "`subagents.refactor`) is an optional per-subagent "
-                "settings object; the only field consulted today is "
-                "`model` (a model alias overriding `loop.model` for "
-                "that subagent). For backward compat, a bare string "
-                "value is treated as the model alias."
+                "Subagents are OFF by default. Turn one on by adding its name "
+                "to `enabled`, e.g.  \"enabled\": [\"strategy-critic\"]  (names "
+                "are in `_available`). Per-subagent settings go under "
+                "subagents.<name>. See docs/CONFIGURATION.md §3."
             ),
             '_model_overrides_help': (
-                "Per-subagent model overrides: add any subagent name as a "
-                "key with a model alias (string) or a dict {\"model\": \"...\"} "
-                "to override loop.model for that specific subagent only. "
-                "Useful for running heavy critics on Opus while provers run "
-                "on a lighter model, or vice versa. The loop.model value is "
-                "used as fallback for any subagent not listed here."
+                "Override loop.model for one subagent: "
+                "subagents.<name> = \"opus\"  or  {\"model\": \"opus\"}. "
+                "Unlisted subagents use loop.model. Examples below."
             ),
             '_model_overrides_examples': {
                 "strategy-critic": "opus",
@@ -174,12 +131,9 @@ def default_config() -> dict[str, Any]:
         },
         'state': {
             '_help': (
-                "Per-iteration sidecar files capture each iter's plan + "
-                "review narrative under .archon/iter/iter-NNN/{plan,review,"
-                "objectives}.md so top-level files (STRATEGY.md, "
-                "PROJECT_STATUS.md, task_*.md) stay bounded across iters. "
-                "Set recent_iter_window to control how many recent "
-                "sidecars get injected into the plan/review prompt."
+                "recent_iter_window = how many recent per-iter sidecars "
+                "(.archon/iter/iter-NNN/{plan,review}.md) are injected into "
+                "the plan/review prompt. Larger = more memory, bigger prompt."
             ),
             # How many recent iter/iter-NNN/plan.md (and review.md) files
             # the plan/review prompts surface as context. The full
@@ -243,12 +197,11 @@ def default_config() -> dict[str, Any]:
         },
         'harnesses': {
             '_help': (
-                "A harness is the engine that runs a role (plan/prover/"
-                "review). Default is Claude Code: with no loop.harness / "
-                "loop.roles key, every role uses 'claude-code' and this "
-                "block is ignored. Route a role to codex by setting "
-                "loop.harness (all roles) or loop.roles.<role> (one role) "
-                "to a descriptor name below, e.g. 'codex'."
+                "Named engine descriptors. With no loop.harness/loop.roles "
+                "set, every role uses Claude Code and this block is ignored. "
+                "Route to one with, e.g.,  \"loop\": {\"harness\": \"codex\"}  "
+                "(all roles) or  \"loop\": {\"roles\": {\"prover\": \"codex\"}}  "
+                "(one role). 'codex' is built in. See docs/CONFIGURATION.md §2."
             ),
             'codex': {
                 'runner': 'codex',
