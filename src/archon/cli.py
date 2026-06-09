@@ -101,14 +101,17 @@ from archon.commands.dag.gaps_entry import dag_carve_plan, dag_gaps, dag_graph, 
 
 app.command()(init)
 app.command()(dag)
-app.command("dag-gaps")(dag_gaps)
-app.command("dag-graph")(dag_graph)
-app.command("dag-query")(dag_query)
-app.command("dag-carve-plan")(dag_carve_plan)
+# Agent/internal plumbing — invoked by prompts and the loop, not by humans.
+# Hidden from `archon --help` (still fully runnable + `<cmd> --help` works)
+# so the top-level surface stays focused on the user workflow.
+app.command("dag-gaps", hidden=True)(dag_gaps)
+app.command("dag-graph", hidden=True)(dag_graph)
+app.command("dag-query", hidden=True)(dag_query)
+app.command("dag-carve-plan", hidden=True)(dag_carve_plan)
 from archon.commands.loop.blueprint_doctor import blueprint_doctor_cli  # noqa: E402
 app.command("blueprint-doctor")(blueprint_doctor_cli)
 from archon.commands.tooling.protect import protect_check_cli  # noqa: E402
-app.command("protect-check")(protect_check_cli)
+app.command("protect-check", hidden=True)(protect_check_cli)
 app.command()(extract)
 app.command()(merge)
 app.command()(loop)
@@ -122,7 +125,7 @@ app.command("branch")(branch)
 app.command("log")(inner_log)
 app.command("version")(version_cmd)
 app.add_typer(refactor_app, name="refactor")
-app.command("subagent")(subagent_command)
+app.command("subagent", hidden=True)(subagent_command)
 app.add_typer(migrate_app, name="migrate")
 
 if __name__ == "__main__":
