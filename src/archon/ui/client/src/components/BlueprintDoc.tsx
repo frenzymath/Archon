@@ -163,6 +163,18 @@ function findEnvEnd(src: string, from: number, name: string): number {
   return -1;
 }
 
+const ACCENTS: Record<string, Record<string, string>> = {
+  "'": { 'a': 'á', 'e': 'é', 'i': 'í', 'o': 'ó', 'u': 'ú', 'y': 'ý', 'A': 'Á', 'E': 'É', 'I': 'Í', 'O': 'Ó', 'U': 'Ú', 'Y': 'Ý', 'c': 'ć', 'C': 'Ć' },
+  "`": { 'a': 'à', 'e': 'è', 'i': 'ì', 'o': 'ò', 'u': 'ù', 'A': 'À', 'E': 'È', 'I': 'Ì', 'O': 'Ò', 'U': 'Ù' },
+  "^": { 'a': 'â', 'e': 'ê', 'i': 'î', 'o': 'ô', 'u': 'û', 'A': 'Â', 'E': 'Ê', 'I': 'Î', 'O': 'Ô', 'U': 'Û', 'c': 'ĉ', 'C': 'Ĉ', 'g': 'ĝ', 'G': 'Ĝ', 'h': 'ĥ', 'H': 'Ĥ', 'j': 'ĵ', 'J': 'Ĵ', 's': 'ŝ', 'S': 'Ŝ', 'w': 'ŵ', 'W': 'Ŵ', 'y': 'ŷ', 'Y': 'Ŷ' },
+  "\"": { 'a': 'ä', 'e': 'ë', 'i': 'ï', 'o': 'ö', 'u': 'ü', 'y': 'ÿ', 'A': 'Ä', 'E': 'Ë', 'I': 'Ï', 'O': 'Ö', 'U': 'Ü', 'Y': 'Ÿ' },
+  "~": { 'a': 'ã', 'n': 'ñ', 'o': 'õ', 'A': 'Ã', 'N': 'Ñ', 'O': 'Õ' },
+  "c": { 'c': 'ç', 'C': 'Ç', 's': 'ş', 'S': 'Ş' },
+  "v": { 'c': 'č', 's': 'š', 'z': 'ž', 'C': 'Č', 'S': 'Š', 'Z': 'Ž', 'r': 'ř', 'R': 'Ř', 'n': 'ň', 'N': 'Ň' },
+  "u": { 'a': 'ă', 'e': 'ĕ', 'i': 'ĭ', 'o': 'ŏ', 'u': 'ŭ', 'A': 'Ă', 'E': 'Ĕ', 'I': 'Ĭ', 'O': 'Ŏ', 'U': 'Ŭ', 'g': 'ğ', 'G': 'Ğ' },
+  "H": { 'o': 'ő', 'u': 'ű', 'O': 'Ő', 'U': 'Ű' },
+};
+
 // ── inline parser ────────────────────────────────────────────────────────────
 function parseInline(src: string): Inline[] {
   const out: Inline[] = [];
@@ -216,6 +228,39 @@ function parseInline(src: string): Inline[] {
     if (esc) { push(esc[1]); i += 2; continue; }
     // unknown \cmd{...} → keep inner content
     if (src[i] === '\\') {
+      const tops = /^\\texorpdfstring\s*\{/.exec(src.slice(i));
+      if (tops) {
+        const bs = i + tops[0].length - 1, c = matchBrace(src, bs);
+        if (c !== -1) {
+          out.push(...parseInline(src.slice(bs + 1, c)));
+          i = c + 1;
+          const m2 = /^\s*\{/.exec(src.slice(i));
+          if (m2) {
+            const c2 = matchBrace(src, i + m2[0].length - 1);
+            if (c2 !== -1) i = c2 + 1;
+          }
+          continue;
+        }
+      }
+      // Accents. Symbol accents (' ` ^ " ~) never start a command name, so the
+      // tight form \'e is unambiguous. Letter accents (\c \v \u \H) DO collide
+      // with command names (\cite, \vspace, \underline, \Huge), so only treat
+      // them as accents when the letter is braced (\c{c}) or space-separated
+      // (\c c) — never \cc, which must stay a command.
+      const accSym = /^\\(['`^"~])\s*(?:\{([A-Za-z])\}|([A-Za-z]))/.exec(src.slice(i));
+      if (accSym) {
+        const char = accSym[2] || accSym[3];
+        push(ACCENTS[accSym[1]]?.[char] || char);
+        i += accSym[0].length;
+        continue;
+      }
+      const accLet = /^\\([cvuH])(?:\s*\{([A-Za-z])\}|\s+([A-Za-z]))/.exec(src.slice(i));
+      if (accLet) {
+        const char = accLet[2] || accLet[3];
+        push(ACCENTS[accLet[1]]?.[char] || char);
+        i += accLet[0].length;
+        continue;
+      }
       const m = /^\\([A-Za-z]+)\*?\s*/.exec(src.slice(i));
       if (m) {
         i += m[0].length;

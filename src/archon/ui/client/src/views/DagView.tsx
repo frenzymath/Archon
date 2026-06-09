@@ -621,7 +621,7 @@ export default function DagView() {
   const stats = useMemo(() => {
     const vals = [...allNodes.values()];
     const bp = vals.filter((n) => n.type !== 'lean_aux');
-    const proved = bp.filter((n) => n.proved).length;
+    const proved = bp.filter((n) => n.proved || n.mathlib_ok).length;
     const mathlib = bp.filter((n) => n.mathlib_ok).length;
     const sorry = vals.filter((n) => n.has_sorry).length;
     const ready = bp.filter((n) => !isDoneNode(n) && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d))).length;
@@ -750,7 +750,7 @@ export default function DagView() {
               <h4>Project</h4>
               <button className="dv-stats-toggle" title="Minimize" onClick={() => setStatsOpen(false)}>–</button>
             </div>
-            <div className="row"><span>Proved (leanok)</span><span className="v done">{stats.provedN}/{stats.bpN} · {stats.pct}%</span></div>
+            <div className="row"><span>Proved (\leanok)</span><span className="v done">{stats.provedN}/{stats.bpN} · {stats.pct}%</span></div>
             <div className="bar"><span style={{ width: `${stats.pct}%` }} /></div>
             {stats.mathlib > 0 && <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>}
             {qRow('With sorry', stats.sorry, 'sorry', stats.sorry ? 'inf' : '')}
