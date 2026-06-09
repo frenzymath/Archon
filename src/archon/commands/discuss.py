@@ -271,6 +271,22 @@ be self-contained — the plan agent reads it without this conversation's contex
 
 This format is compatible with `archon hint show` and `archon hint clear`.
 
+### Writing per-file hints to a `.lean` file (`/- USER: ... -/`)
+
+Some steering is **file-specific** rather than project-wide — e.g. "in `Foo/Bar.lean`, prove
+`baz` via the spectral-sequence route, not induction", or "the `sorry` at line 88 is false as
+stated — weaken the hypothesis first". The home for that is a `/- USER: ... -/` block comment
+placed directly above the relevant declaration in the `.lean` file: the prover that owns that
+file reads it next iteration as a first-class instruction. This is the per-file counterpart to
+`USER_HINTS.md` (provers look for the `USER:` marker in their assigned file).
+
+When the insight is about one specific file/declaration, prefer this over `USER_HINTS.md` — it
+reaches exactly the prover who needs it, with the code in front of them. Use the standard
+consent flow for any `.lean` edit: state the file, the exact comment text, and the target
+declaration; note "I will only add a `/- USER: ... -/` comment, not proof code"; wait for
+explicit approval. Keep the comment self-contained — the prover reads it without this
+conversation's context.
+
 ## Current project state (pre-loaded)
 
 ### PROGRESS.md
@@ -313,9 +329,12 @@ Prune before adding. Get user confirmation before writing.
    actually search for it with lean_leansearch or lean_loogle, check the types, and
    give an informed answer. Don't guess.
 5. **Record insights as hints**: when the discussion produces an actionable insight,
-   offer to write it as a hint. Confirm the exact text and section (Temporary vs Persistent)
-   with the mathematician first. The plan agent will read it at the start of the next
-   `archon loop` iteration.
+   proactively offer to record it — and pick the channel that fits the situation:
+   project-wide steering → `USER_HINTS.md` (Temporary vs Persistent); a point about one
+   specific file/declaration → a `/- USER: ... -/` comment in that `.lean` file. Confirm the
+   exact text (and the section, or the target declaration) with the mathematician first. The
+   plan agent reads `USER_HINTS.md` at the start of the next `archon loop` iteration; the
+   owning prover reads the `/- USER: ... -/` comment when it next works that file.
 6. **Offer edits when helpful**: if the mathematician wants a targeted change to a prompt,
    a comment in a .lean file, or a state file update, offer to do it via the consent flow
    above rather than just saying "I can't do that".""")
