@@ -33,6 +33,9 @@ See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
   normalised into Archon's JSONL for the dashboard), per-invocation lean-lsp MCP
   wiring, and a Codex-specific prompt variant. Define your own from the
   `_my_harness_example` template. See [CONFIGURATION.md](CONFIGURATION.md).
+  The harness router and Codex runner build on prior work by
+  [@surenny](https://github.com/surenny) in
+  [#25](https://github.com/frenzymath/Archon/pull/25).
 - **Claude backends** (`--claude-backend` / `loop.claude_backend`): `default`
   (plain `claude -p`), `vscode` / `desktop` (entrypoint attribution), `claude-p`
   (drives the interactive TUI headlessly via the
@@ -85,18 +88,13 @@ See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
   without touching your values.
 - Internal/agent CLI commands (`dag-query`, `subagent`, …) are hidden from
   `archon --help` (still runnable).
-- The blueprint dependency graph is provided by the
-  [leandag](https://github.com/AxelDlv00/LeanDAG) package, and `claude-p` is now
-  a dependency — both pinned to release tags.
-- Hardened `PROGRESS.md` stage detection (tolerates annotations after the stage
-  token).
+- Hardened `PROGRESS.md` stage detection (tolerates annotations after the stage token).
 
 ### Fixed
 
 - Dashboard binds IPv4 `0.0.0.0` under WSL2 so `localhost:PORT` is reachable from
   the Windows browser (was IPv6-only — `ERR_CONNECTION_REFUSED`).
-- `extract` parent-regression gate restricted to the agreed scope (no more false
-  positives from out-of-scope dependency Lean degrading to `lean_aux`).
+- Hardcoded #!/bin/bash shebangs were replaced with `#!/usr/bin/env bash` for better cross-platform compatibility.
 
 ## [0.2.0] — 2026-05
 
