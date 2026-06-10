@@ -4,17 +4,28 @@ All notable changes to Archon are documented here.
 
 ## [0.3.0] — 2026-06
 
-The headline is a **modular engine system**: every role and subagent can run on
-the built-in Claude Code engine or on **OpenAI Codex**, selected via named
+Two headlines. First, a **modular engine system**: every role and subagent can
+run on the built-in Claude Code engine or on **OpenAI Codex**, selected via named
 **harnesses**, and the Claude engine itself can be launched through several
-**backends**. Most of v0.3.0 is opt-in — the default single-lane Claude Code loop
-runs the same shape as before.
+**backends** (including the `claude-p` workaround for Anthropic's headless
+`claude -p` rate limits). Second, **DAG-grounded blueprints**: the new
+`archon dag` loop writes a coherent LeanBlueprint dependency graph, queried
+deterministically through [LeanDag](https://github.com/AxelDlv00/LeanDAG) instead
+of the LLM's fuzzy internal picture. Most of v0.3.0 is opt-in — the default
+single-lane Claude Code loop runs the same shape as before.
 
 Upgrading from v0.2.0? Run `archon update` (then `archon init` in each project).
 See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
 
 ### Added
 
+- **`archon dag` — blueprint-writing DAG loop.** A dedicated loop that builds a
+  coherent informal LeanBlueprint graph (definitions, theorems, chapter
+  structure, `\uses{...}` links, coverage annotations) before/around the main
+  proving loop, so the planner and provers share grounded context. Backed by the
+  [leandag](https://github.com/AxelDlv00/LeanDAG) API, which exposes the project's
+  real dependency DAG and a character-count effort estimate used to order the
+  proving queue and break down high-effort theorems.
 - **Harnesses (modular engines).** Route any role (`loop.harness` /
   `loop.roles.<role>`) or subagent (`subagents.<name>.harness`) to a named engine
   descriptor under `harnesses`. A built-in `codex` harness runs **OpenAI Codex**
@@ -45,8 +56,16 @@ See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
 - **Planner signals**: a loop-managed `AUTO_NOTES.md` feedback channel (separate
   from the user-authored `USER_HINTS.md`) and Lean↔blueprint coverage-debt
   injection.
-- `archon-protected.yaml` v2: tex protection, protection levels, glob patterns,
-  and a hard gate.
+- `archon-protected.yaml` v2: blueprint (`.tex`) protection alongside Lean,
+  protection levels (signature/statement vs. all), `fnmatch` glob patterns, and a
+  deterministic whole-file gate. `subagents.enabled` also accepts `"*"` to enable
+  every installed subagent.
+- **Per-file `/- USER: ... -/` Lean hints.** Inline comments in a `.lean` file are
+  read by the prover as persistent, file-specific guidance; `archon discuss` can
+  add them for you.
+- **New CLI commands**: `archon dag`, `archon extract`, `archon merge`,
+  `archon blueprint-doctor`, and `archon log` (inner-git commit graph). `archon
+  migrate` groups one-off migrations for legacy projects.
 
 ### Changed
 
@@ -107,12 +126,13 @@ Upgrading from v0.1.0? See [MIGRATION.md](MIGRATION.md#7-upgrading-from-v010-to-
   the lanes that did finish. See
   [MULTILANE.md](MULTILANE.md) for setup. Multilane is opt-in via `.archon/config.json`; the default is a
   single Anthropic lane.
-- **Refactor agent** + `archon refactor`: when the plan agent identifies
-  structural issues (wrong definitions, signature changes, file splits), it
-  writes a directive into `.archon/REFACTOR_DIRECTIVE.md`. The next loop
-  iteration picks it up and runs a refactor agent that may edit any `.lean`
-  file (subject to `archon-protected.yaml`). The plan agent then runs a
-  post-refactor verification pass.
+- **Refactor agent** + `archon refactor`: structural changes (wrong
+  definitions, signature changes, file splits) are handled by a dedicated
+  refactor agent that may edit any `.lean` file (subject to
+  `archon-protected.yaml`). In the autonomous loop the plan agent dispatches the
+  `refactor` subagent directly, passing the directive inline — nothing is staged
+  in a file. For hands-on use, `archon refactor draft` interviews you and writes
+  `.archon/REFACTOR_DIRECTIVE.md`, and `archon refactor run` then executes it.
 - **`archon-protected.yaml`** at the project root: declares signatures that
   are frozen by the mathematician. No agent may rename or re-sign listed
   declarations; the refactor agent may move them between files.

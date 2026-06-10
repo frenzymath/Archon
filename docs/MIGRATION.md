@@ -407,13 +407,18 @@ git so the whole team shares the protected surface.
 `archon init` writes an empty `archon-protected.yaml` if none exists; fill it
 in when you are ready.
 
+> **v0.3.0 extends this format.** The flat form above still works, but you can
+> now also protect blueprint (`.tex`) files and `\label{}` blocks, choose a
+> protection level (freeze the signature/statement vs. the whole declaration),
+> and use glob patterns. See the README's `archon-protected.yaml` section.
+
 ### 7.5 The CLI gained four commands
 
 | Command | What it does |
 |---------|--------------|
-| `archon refactor /path/to/project` | Run only the refactor phase against the current `REFACTOR_DIRECTIVE.md`. |
+| `archon refactor run /path/to/project` | Execute the refactor agent against the directive in `.archon/REFACTOR_DIRECTIVE.md`. Create that directive interactively first with `archon refactor draft /path/to/project`. |
 | `archon discuss /path/to/project` | Open Claude Code interactively with full Archon context loaded — for debugging or brainstorming without firing the loop. |
-| `archon branch <name> /path/to/project` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). |
+| `archon branch <name> /path/to/project --from <commit>` | Create a new branch in the inner git from a historical agent commit (e.g. before a bad refactor). Without `--from`, switches to an existing branch named `<name>`. |
 | `archon version /path/to/project` | Show the Archon CLI version and, in a project, the project version. |
 
 ### 7.6 Enabling subagents (optional)
@@ -475,26 +480,33 @@ starting the dashboard standalone.)
 
 | Flag | What it does |
 |------|--------------|
-| `--resume` | When a previous `archon loop` was interrupted mid-iteration, resume the in-flight iteration at its last completed phase. The phase is auto-detected from `.archon/iter/iter-NNN/meta.json`. |
+| `--resume` | When a previous `archon loop` was interrupted mid-iteration, resume the in-flight iteration at its last completed phase. The phase is auto-detected from `.archon/logs/iter-NNN/meta.json`. |
 
 ### 7.10 New blueprint-doctor phase
 
-Runs automatically at the top of each iteration. It scans `blueprint/src/`
-for orphan files, broken `\uses{...}` references, and missing
-`\lean{...}` blocks; the plan agent then sees the findings inline under
-`## Blueprint doctor — live structural findings`. No configuration is
-needed — it's silently included in every iteration.
+Runs automatically each iteration, between the prover and review phases
+(right after the deterministic `\leanok` sync). It scans `blueprint/src/`
+for orphan chapters, broken `\ref{...}` / `\uses{...}` / `\cref{...}`
+references, malformed (empty) annotations, stray `axiom` declarations, and
+`% archon:covers` integrity problems, writing a report to
+`.archon/logs/iter-NNN/blueprint-doctor.{md,json}`. The same iteration's
+review agent reads the report, and the next iteration's plan agent sees the
+findings inline under `## Blueprint doctor — live structural findings`. No
+configuration is needed — it's silently included in every iteration.
 
 ---
 
 ## 8. Upgrading to v0.3.0
 
 v0.3.0 adds a **modular engine system** (run roles/subagents on Claude Code or
-**OpenAI Codex** via named harnesses; pick a Claude **backend**), **prover
-modes**, `archon extract`/`merge`, new dashboard views, and more. Most of it is
-opt-in — the default single-lane Claude Code loop is unchanged. The full feature
-list is in [CHANGELOG.md](CHANGELOG.md); the steps below are everything you must
-*do* to upgrade (almost all automatic).
+**OpenAI Codex** via named harnesses; pick a Claude **backend**, including the
+`claude-p` workaround for Anthropic's headless `claude -p` rate limits), the
+**`archon dag`** blueprint-writing loop grounded in
+[LeanDag](https://github.com/AxelDlv00/LeanDAG), **prover modes**,
+`archon extract`/`merge`, new dashboard views, and more. Most of it is opt-in —
+the default single-lane Claude Code loop is unchanged. The full feature list is
+in [CHANGELOG.md](CHANGELOG.md); the steps below are everything you must *do* to
+upgrade (almost all automatic).
 
 ### 8.1 Reinstall the CLI
 
@@ -514,20 +526,33 @@ v0.3.0 makes the engine that runs each role/subagent configurable. Two knobs:
   `--claude-backend` or `loop.claude_backend`:
   - `default`: plain `claude -p`
   - `vscode` / `desktop`: sets `CLAUDE_CODE_ENTRYPOINT` accordingly
-  - `claude-p`: drives the Claude Code TUI headlessly (subscription auth)
+  - `claude-p`: drives the Claude Code TUI headlessly via the
+    [claude-p](https://github.com/AxelDlv00/claude-p) wrapper — the recommended
+    workaround now that Anthropic rate-limits headless `claude -p` on
+    subscription plans
   - `interactive`: foreground, human-driven (forces serial, disables multilane)
 
 The backend now also propagates to subagents automatically. See the full
 reference in **[docs/CONFIGURATION.md](CONFIGURATION.md)**.
 
-### 8.3 Hardened stage detection
+### 8.3 Blueprint DAG loop (`archon dag`)
+
+`archon dag` is a new, optional loop that writes a coherent LeanBlueprint
+dependency graph before (or partway through) the main proving loop. It grounds
+the planner and provers in the project's real DAG via the
+[leandag](https://github.com/AxelDlv00/LeanDAG) API rather than the LLM's fuzzy
+internal picture. **No action needed to upgrade**; run `archon dag <project>`
+when you want it (recommended at least once before `archon loop`, especially for
+projects starting from informal notes). See the README for details.
+
+### 8.4 Hardened stage detection
 
 Stage detection in `PROGRESS.md` is now more resilient. Human or agent
 annotations (e.g., dates or iteration numbers) appended after the stage token
 are ignored by the orchestrator, preventing the loop from stalling on
 unexpected input.
 
-### 8.4 `.archon/CLAUDE.md` renamed to `.archon/AGENTS.md`
+### 8.5 `.archon/CLAUDE.md` renamed to `.archon/AGENTS.md`
 
 The bundled agent role doc is now `AGENTS.md` — the cross-tool convention
 auto-loaded by both Claude Code and Codex (which Archon also references
@@ -536,7 +561,7 @@ update` removes the old `.archon/CLAUDE.md` and writes `.archon/AGENTS.md` for
 you. The file is a bundled reference, not a user-edited file, so nothing custom
 is lost. If you kept your own notes elsewhere, they're untouched.
 
-### 8.5 Automated validation notes moved out of `USER_HINTS.md`
+### 8.6 Automated validation notes moved out of `USER_HINTS.md`
 
 `USER_HINTS.md` is now strictly user-authored: the loop never writes to it.
 Automated plan-validation feedback (dropped/blocked/deferred objectives,

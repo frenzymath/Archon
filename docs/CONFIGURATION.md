@@ -16,6 +16,42 @@ All of this lives in `.archon/config.json`. With no `loop.harness` /
 `claude-code` harness on the `default` backend — i.e. plain `claude -p` — and
 nothing below applies.
 
+`archon init` writes a fully-commented `config.json`; the sections below are the
+reference for it. Every key is optional.
+
+## At a glance
+
+A typical hand-tuned `config.json` (comments shown for explanation — strip them
+for strict JSON):
+
+```jsonc
+{
+  "loop": {
+    "max_iterations": 10,          // stop after N iterations (default 10)
+    "parallel": true,
+    "max_parallel": 4,             // concurrent prover agents
+    "model": "opus",               // role model: opus (default) / sonnet / haiku / kimi / …
+
+    "claude_backend": "claude-p",  // how Claude Code is launched — see §1
+    "harness": "codex",            // engine for every role + subagent — see §2 (empty = Claude Code)
+    "roles": { "plan": "claude-code", "prover": "codex" }  // per-role override — see §2
+  },
+
+  "subagents": {
+    "enabled": "*",                // "*" = all installed, or a list of names — see §3
+    "strategy-critic": "opus"      // per-subagent model override
+  },
+
+  "multilane": {
+    "enabled": false,              // parallel multi-provider proving — see docs/MULTILANE.md
+    "lanes": [ { "lane_id": "anthropic", "provider": "anthropic", "model": "opus" } ]
+  }
+}
+```
+
+`harnesses` (named engine bundles) is the one block not shown here; `archon init`
+ships a ready-to-use `codex` harness, so you usually only reference it by name.
+
 ---
 
 ## 1. Backends (Claude launch strategy)
