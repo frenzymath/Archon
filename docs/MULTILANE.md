@@ -51,7 +51,7 @@ optional; only the API key is mandatory.
 
 ```bash
 MOONSHOT_API_KEY=sk-...
-# MOONSHOT_BASE_URL=https://api.moonshot.ai/anthropic     # default
+# MOONSHOT_BASE_URL=https://api.kimi.com/coding/          # default
 # MOONSHOT_MODEL=kimi-k2.6                                 # default
 ```
 
@@ -68,7 +68,7 @@ DEEPSEEK_API_KEY=sk-...
 ```bash
 OPENROUTER_API_KEY=sk-...
 OPENROUTER_MODEL=anthropic/claude-3.5-sonnet              # required: pick a model
-# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1        # default
+# OPENROUTER_BASE_URL=https://openrouter.ai/api           # default
 ```
 
 ## Example: run Anthropic + Kimi side by side

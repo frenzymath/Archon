@@ -53,7 +53,7 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 
 ## Install
 
-> **Security note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests, which Claude Code refuses when running as root on Linux. In our experiment, Opus or Sonnet never caused harm, but since there is still a risk, we recommend one of the following workarounds: 
+> **Security note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests, which Claude Code refuses when running as root on Linux. In our experiment, Opus or Sonnet never caused harm, but since there is still a risk, we recommend one of the following workarounds:
 > 1. **Use a dedicated non-root user** (RECOMMENDED) — e.g. create one with `adduser` — so you are not running with excessive root privileges.
 > 2. **Set `export IS_SANDBOX=1`** so Claude Code is allowed to start with this high-risk option.
 > 3. **Run inside a Docker container** or VM with no access to sensitive data or credentials
@@ -80,7 +80,7 @@ To update an existing install later:
 archon update
 ```
 
-`archon setup` also checks for API keys used by the informal agent (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY`) — at least one is recommended but **not required**. The API keys can also be set in `.archon/.env` at the project level. 
+`archon setup` also checks for API keys used by the informal agent (`OPENAI_API_KEY` or `GEMINI_API_KEY`) — at least one is recommended but **not required**. Provider keys for Kimi, DeepSeek, and OpenRouter live in `.archon/.env` for Claude-compatible lanes and model aliases.
 
 > The bundled informal agent is a simplified demonstration: a single API call
 > to an external model for proof sketches. Our internal implementation is more
@@ -123,7 +123,7 @@ archon init /path/to/your-lean-project
 ```
 
 Here `/path/to/your-lean-project` can either:
-- Be empty, in which case Archon creates a new project directory and will ask you what you want to formalize. 
+- Be empty, in which case Archon creates a new project directory and will ask you what you want to formalize.
 - Contain an existing Lean project, in which case Archon will use it as the basis for formalization.
 - Contain informal material (e.g. description of the problem, papers, blueprints, ...) in which case Archon will create the Lean project structure inside it and use the informal material to write the first objectives.
 
@@ -157,7 +157,7 @@ See [CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference. As a quick
 
     // Default engine for every role and subagent (Claude Code is the default).
     "harness": "codex",
-    "model": "gpt-5.5",
+    "model": "opus",
 
     // Override a specific role (plan / prover / review).
     "roles": { "plan": "claude-code", "prover": "codex" }
@@ -176,7 +176,7 @@ See [CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference. As a quick
 
 Anthropic [now rate-limits headless `claude -p`](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) on subscription plans — the engine Archon used by default. Since `v0.3.0` there are two ways around this.
 
-> Please, note that these solutions are experimental, using the default backend `claude -p` is highly recommended, but it is costly. `claude-p` wrapper (simulating `claude -p` through the Claude Agent SDK) works well in the current setup, but it might be fragile. The `interactive` backend is less convenient, because it requires manual interaction, but is a good fallback if the `claude-p` wrapper breaks and you are out of credits. `vscode`/`desktop` are based on reverse engineering and may not work or work very well. Using `Codex` harness instead of `Claude Code` is also a viable option since OpenAI hasn't imposed similar limits on their API. 
+> Please, note that these solutions are experimental, using the default backend `claude -p` is highly recommended, but it is costly. `claude-p` wrapper (simulating `claude -p` through the Claude Agent SDK) works well in the current setup, but it might be fragile. The `interactive` backend is less convenient, because it requires manual interaction, but is a good fallback if the `claude-p` wrapper breaks and you are out of credits. `vscode`/`desktop` are based on reverse engineering and may not work or work very well. Using `Codex` harness instead of `Claude Code` is also a viable option since OpenAI hasn't imposed similar limits on their API.
 
 **Switch the launch backend.** `loop.claude_backend` (or `--claude-backend`) changes *how* Claude Code is started, without changing the model:
 
@@ -187,7 +187,7 @@ Anthropic [now rate-limits headless `claude -p`](https://support.claude.com/en/a
 | `vscode` / `desktop` | Based on reverse engineering, if it works, it would attribute the session to the VS Code / Desktop entrypoint. |
 | `interactive` | Runs `claude` in the foreground for you to drive by hand (serial, no multilane). |
 
-**Switch harness to Codex.** Set `loop.harness: "codex"` to route every role and subagent through Codex (e.g. gpt-5.5) instead of Claude, or mix the two per role with `loop.roles`.
+**Switch harness to Codex.** Set `loop.harness: "codex"` to route every role and subagent through Codex instead of Claude, or mix the two per role with `loop.roles`. The built-in Codex harness lets the Codex CLI choose its configured/default model unless you add a `model` field to the harness descriptor.
 
 See [CONFIGURATION.md](docs/CONFIGURATION.md) for precedence rules and the `claude-p` login directory (`claude_p_config_dir`).
 
@@ -204,7 +204,7 @@ lean:
     - some_lemma                 # freeze the SIGNATURE
     - name: key_definition
       protect: all               # freeze the WHOLE declaration
-    - name: MyProject.Internal.* 
+    - name: MyProject.Internal.*
 
 # 2. Protect blueprint (.tex) content.
 blueprint:
@@ -297,10 +297,10 @@ There are three ways to influence Archon's behavior. Each serves a different pur
 Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfreer/lean4-skills), installed as `lean4@archon-local` (providing `/archon-lean4:prove`, `/archon-lean4:doctor`, etc.). Skills are sourced from the installed `archon` package and registered with Claude Code as a local plugin marketplace.
 
 **Modifying global skills**: Edit files under the installed package's
-`skills/lean4/` directory (the path might look like `/site-packages/archon/skills/lean4/`). `archon init` re-registers the marketplace at the correct path on each run, so your edits take effect after re-init.
+`.archon-src/skills/lean4/` directory inside the installed package (the path might look like `/site-packages/archon/.archon-src/skills/lean4/`). `archon init` re-registers the marketplace at the correct path on each run, so your edits take effect after re-init.
 
 **Adding new global skills**: Create a new directory under the bundled
-`skills/<your-skill-name>/` with a `SKILL.md` or `.claude-plugin/plugin.json` inside, and add it to `skills/.claude-plugin/marketplace.json`. Run `archon init` again on your project to pick up the new skill.
+`.archon-src/skills/<your-skill-name>/` with a `SKILL.md` or `.claude-plugin/plugin.json` inside, and add it to `.archon-src/skills/.claude-plugin/marketplace.json`. Run `archon init` again on your project to pick up the new skill.
 
 **We encourage you to customize.** If you notice the prover repeatedly making the same mistakes, or a proof strategy that consistently works for your project, codify it — add a skill or adjust a prompt. Archon improves as its skills and prompts accumulate lessons from your specific formalization work.
 
@@ -314,7 +314,7 @@ To check how the formalization is going, the easiest starting point is the **das
 <img src="docs/dashboard-logs.png" alt="Archon Dashboard — Logs view" width="800">
 </p>
 
-The **Logs** view groups logs by iteration with phase timing (plan → prover → review) and per-prover completion status. The subagents' logs can also be consulted. All of the logs are live-streamed. 
+The **Logs** view groups logs by iteration with phase timing (plan → prover → review) and per-prover completion status. The subagents' logs can also be consulted. All of the logs are live-streamed.
 
 The **DAG** view renders the blueprint dependency graph interactively — nodes are colour-coded by status (proved / Mathlib-backed / ∞-effort), and clicking one shows its Lean name, status, and shortcuts to focus its cone or open it in the Blueprint / Diffs views. A git-history scrubber along the bottom replays the graph at any past iteration.
 
@@ -343,7 +343,7 @@ These are updated automatically by the review agent after each iteration.
 If you disabled the auto-launched dashboard, or want to look at a project after the loop has finished and the terminal is gone:
 
 ```bash
-archon dashboard /path/to/your-lean-project -p <port> 
+archon dashboard /path/to/your-lean-project -p <port>
 ```
 
 #### Lean blueprint

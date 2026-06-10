@@ -149,7 +149,7 @@ This re-runs the installer against `main`.
 ### 2.3 Verify the install
 
 ```bash
-archon --help
+archon -h
 archon doctor
 ```
 
@@ -382,7 +382,7 @@ are never touched.
 | File | What it is | Edit? |
 |------|------------|------|
 | `.archon/git-dir/` | Inner git repo. Every agent phase commits here as `archon[NNN/phase]`. | No — managed by Archon. |
-| `.archon/config.json` | Per-project loop and multilane settings. Versioned with your project. | Yes — see [MULTILANE.md](https://github.com/frenzymath/Archon/blob/main/src/archon/.archon-src/archon-template/MULTILANE.md). |
+| `.archon/config.json` | Per-project loop and multilane settings. Versioned with your project. | Yes — see [MULTILANE.md](MULTILANE.md). |
 | `.archon/.env` | API keys for the informal agent and multilane providers. | Yes — gitignored, never commit. |
 | `.archon/REFACTOR_DIRECTIVE.md` | Where the plan agent writes refactor directives. Cleared after each refactor pass. | Plan agent writes; you can read for context. |
 | `.archon/STRATEGY.md` | Plan agent's living long-arc plan. | Plan agent owns; you can read. |

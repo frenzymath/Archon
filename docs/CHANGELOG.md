@@ -87,7 +87,7 @@ See [MIGRATION.md §8](MIGRATION.md#8-upgrading-to-v030).
   text and concrete examples; re-init refreshes help text and adds new keys
   without touching your values.
 - Internal/agent CLI commands (`dag-query`, `subagent`, …) are hidden from
-  `archon --help` (still runnable).
+  `archon -h` (still runnable with `--help`).
 - Hardened `PROGRESS.md` stage detection (tolerates annotations after the stage token).
 
 ### Fixed

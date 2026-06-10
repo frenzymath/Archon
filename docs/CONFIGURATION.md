@@ -199,7 +199,7 @@ just works; pin paths only if it doesn't:
 
 If you see *"archon CLI not found"*, ensure Archon is installed in the
 environment Codex runs in and re-run `archon init` so the project's
-`.claude/tools/archon-subagent.py` is current.
+`.claude/tools/archon-subagent.py` wrapper is current.
 
 ---
 
