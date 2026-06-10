@@ -86,8 +86,9 @@ def default_config() -> dict[str, Any]:
             '_help': (
                 "Subagents are OFF by default. Turn one on by adding its name "
                 "to `enabled`, e.g.  \"enabled\": [\"strategy-critic\"]  (names "
-                "are in `_available`). Per-subagent settings go under "
-                "subagents.<name>. See docs/CONFIGURATION.md §3."
+                "are in `_available`), or  \"enabled\": \"*\"  to enable all of "
+                "them. Per-subagent settings go under subagents.<name>. See "
+                "docs/CONFIGURATION.md §3."
             ),
             '_model_overrides_help': (
                 "Override loop.model for one subagent: "
@@ -765,16 +766,18 @@ def resolve_claude_backend(
     return ClaudeBackend()
 
 
-def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | None:
+def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | str | None:
     """Return the configured subagent allowlist, or ``None`` for "use defaults".
 
-    Schema: ``subagents.enabled`` is a list of subagent names. When
-    missing or null, the registry falls back to every descriptor whose
-    frontmatter has ``default_enabled: true``.
+    Schema: ``subagents.enabled`` is a list of subagent names, or the
+    string ``"*"`` as a shortcut for "enable every installed subagent".
+    When missing or null, the registry falls back to every descriptor
+    whose frontmatter has ``default_enabled: true``.
 
     Returning ``None`` (not ``[]``) is what tells :func:`build_registry`
-    to use the default-enabled fallback. An explicit empty list means
-    "no subagents available" and is honored as such.
+    to use the default-enabled fallback. Returning ``"*"`` tells it to
+    enable everything. An explicit empty list means "no subagents
+    available" and is honored as such.
     """
     section = cfg.raw.get('subagents')
     if not isinstance(section, dict):
@@ -782,6 +785,8 @@ def resolve_subagents_enabled(cfg: ProjectConfig) -> list[str] | None:
     val = section.get('enabled')
     if val is None:
         return None
+    if isinstance(val, str):
+        return "*" if val.strip() == "*" else None
     if not isinstance(val, list):
         return None
     return [str(x) for x in val if isinstance(x, (str, int, float))]
@@ -794,8 +799,8 @@ FORCE_SUBAGENTS_ENV = "ARCHON_FORCE_SUBAGENTS"
 
 
 def apply_forced_subagents(
-    project_path: Path, enabled: list[str] | None,
-) -> list[str] | None:
+    project_path: Path, enabled: list[str] | str | None,
+) -> list[str] | str | None:
     """Fold ``ARCHON_FORCE_SUBAGENTS`` names into a resolved allowlist.
 
     Some phases need a fixed set of subagents available regardless of
@@ -822,6 +827,9 @@ def apply_forced_subagents(
     forced = [n.strip() for n in raw.split(",") if n.strip()]
     if not forced:
         return enabled
+    if enabled == "*":
+        # Everything is already enabled; the forced names are a subset.
+        return "*"
     if enabled is None:
         from archon.subagents.registry import build_registry
         base = build_registry(project_path, enabled=None).names()

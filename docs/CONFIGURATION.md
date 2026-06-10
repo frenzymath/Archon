@@ -174,6 +174,16 @@ The shipped subagents are listed under `subagents._available` in the generated
 see `.archon/subagents/<name>.md` for each one's role, write-domain, and
 `default_enabled` status.
 
+`subagents.enabled` accepts either a list of names or the string `"*"`, which
+enables every installed subagent without having to list them:
+
+```json
+{ "subagents": { "enabled": "*" } }
+```
+
+An omitted or `null` `enabled` falls back to the `default_enabled` descriptors;
+an empty list `[]` means "no subagents".
+
 Per-subagent model override (no harness change, it inherits the parent harness !):
 
 ```json

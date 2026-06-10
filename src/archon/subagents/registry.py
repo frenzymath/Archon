@@ -219,7 +219,7 @@ def _builtin_dir() -> Path:
 def build_registry(
     project_path: Path,
     *,
-    enabled: list[str] | None = None,
+    enabled: list[str] | str | None = None,
     extra_dirs: list[Path] | None = None,
 ) -> SubagentRegistry:
     """Build a registry for ``project_path``.
@@ -234,6 +234,8 @@ def build_registry(
 
     * ``enabled is None`` → keep every descriptor whose
       ``default_enabled`` is True.
+    * ``enabled == "*"`` → keep every installed descriptor, regardless
+      of ``default_enabled`` (the "enable everything" shortcut).
     * ``enabled`` is a list → keep descriptors whose name appears
       there, regardless of ``default_enabled``.
     """
@@ -253,6 +255,8 @@ def build_registry(
 
     if enabled is None:
         kept = {n: d for n, d in merged.items() if d.default_enabled}
+    elif enabled == "*":
+        kept = dict(merged)
     else:
         wanted = set(enabled)
         kept = {n: d for n, d in merged.items() if n in wanted}

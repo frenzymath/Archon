@@ -62,25 +62,42 @@ _LABEL_LEVELS = ("statement", "all")
 
 _TEMPLATE_EMPTY = """\
 # archon-protected.yaml
-# Declarations whose signatures must not be modified by any agent.
-# The mathematician owns these; agents are read-only on them.
+# Your read-only surface: files and declarations that no Archon agent may
+# modify. The mathematician owns these; agents treat them as fixed context.
+# Committed to git so the whole team shares the same protected surface.
 #
-# Format:
-#   path/to/file.lean:
-#     - declaration_name
-#     - another_declaration
+# There are three kinds of rule. All are optional — mix and match what you
+# need, and delete the commented examples below (an empty file protects
+# nothing). Patterns are fnmatch globs (`*`, `?`, `[...]`), not full regex.
 #
-# Add entries as you decide which parts of the formalization are stable.
-# This file is committed to git so the whole team shares it.
+# 1. lean: — protect Lean declarations, per file.
 #
-# Example:
-#   DecouplingMomentCurve/Main.lean:
-#     - main_decoupling_theorem
-#     - decoupling_torsion_curve
+#   lean:
+#     Path/To/File.lean:
+#       - some_declaration             # freeze the SIGNATURE; agents may
+#                                      #   still fill its `sorry`
+#       - name: another_declaration
+#         protect: all                 # freeze the WHOLE declaration, body
+#                                      #   included — not even to close a sorry
+#       - name: MyNamespace.*          # globs match many declarations at once
 #
-#   DecouplingMomentCurve/Defs.lean:
-#     - HasFourierSupport
-#     - decouplingConstant
+# 2. blueprint: — protect blueprint (.tex) content.
+#
+#   blueprint:
+#     - file: blueprint/src/chapters/Intro_*.tex   # whole chapter(s) read-only
+#     - label: thm:main                # one \\label{} block: freeze the
+#                                      #   STATEMENT, the proof may still change
+#       protect: statement             #   (statement is the default)
+#     - label: lem:key*
+#       protect: all                   # freeze STATEMENT and proof
+#
+# 3. files: — protect arbitrary files by path glob (notes, scripts, data...).
+#
+#   files:
+#     - references/*
+#     - notes/*.md
+#
+# Run `archon protect-check` to see exactly what these rules resolve to.
 """
 
 

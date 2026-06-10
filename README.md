@@ -19,19 +19,14 @@ Archon is an agentic system that autonomously formalizes research-level mathemat
 
 Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. As such, single-problem benchmarks are not a specific optimization target. For model choice, **Opus 4.8 is strongly recommended**; Sonnet also works well but is less capable. Other models have not been tested — weaker models may struggle with the complex skills and prompt structures, in which case Archon's system design could hurt performance rather than help it. Since **v0.3.0**, codex is also available, gpt-5.5 can be a good alternative to Opus 4.8. Other models can be used through Claude Code harness (e.g., Deepseek and Kimi by using their Anthropic-compatible APIs, or any model compatible with OpenRouter since the later handles the API translation). 
 
-**Security note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions --permission-mode bypassPermissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests — all without asking for confirmation. This is necessary for unattended operation but carries real risk: a misbehaving model could delete files, overwrite code, or run unintended commands. **While Opus 4.8 NEVER caused harm across all of our experiments,** the following measures can further reduce exposure:
-
-- Run Archon under a **dedicated, low-privilege user** that only has access to the project directory
-- Run inside a **Docker container** or VM with no access to sensitive data or credentials
-- Avoid running as root or with access to production systems
-- Review `.archon/proof-journal/` after each run to audit what the agents did
-
 ## Table of Contents
 
 - [Install](#install)
 - [Usage](#usage)
   - [1. Initialize a project](#1-initialize-a-project)
-  - [2. Start the automated loop](#2-start-the-automated-loop)
+  - [2. Configure your preferences in `config.json`](#2-configure-your-preferences-in-configjson)
+  - [3. Write blueprints to constitute a consistent DAG](#3-write-blueprints-to-constitute-a-consistent-dag)
+  - [4. Start the automated loop](#4-start-the-automated-loop)
     - [The plan agent's expanded role](#the-plan-agents-expanded-role)
     - [Per-project config: `.archon/config.json` and `.archon/.env`](#per-project-config-archonconfigjson-and-archonenv)
     - [Multi-lane proving (optional)](#multi-lane-proving-optional)
@@ -49,9 +44,10 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 
 ## Install
 
-> **Note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions`, which Claude Code refuses when running as root on Linux. Two workarounds:
-> 1. **Use a non-root account** (RECOMMENDED) — e.g. create one with `adduser` — so you are not running with excessive root privileges.
+> **Security note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests, which Claude Code refuses when running as root on Linux. In our experiment, Opus or Sonnet never caused harm, but since there is still a risk, we recommend one of the following workarounds: 
+> 1. **Use a dedicated non-root user** (RECOMMENDED) — e.g. create one with `adduser` — so you are not running with excessive root privileges.
 > 2. **Set `export IS_SANDBOX=1`** so Claude Code is allowed to start with this high-risk option.
+> 3. **Run inside a Docker container** or VM with no access to sensitive data or credentials
 
 > Note: It is recommended, but not required, to run inside a Python virtual environment (e.g., with `python=3.11`).
 
@@ -61,7 +57,7 @@ To install the CLI tools and system dependencies, run the following command in y
 curl -sSL https://raw.githubusercontent.com/frenzymath/Archon/refs/heads/main/install.sh | bash
 ```
 
-If prefer manual installation, [`install.sh`](./install.sh) fetches the repository, runs `pip install .`, and executes `archon setup` to install system-level dependencies (uv, Claude Code, ...) and verify your Lean toolchain. *The installation process might be slow the first time.*
+You can also install manually if you prefer. [`install.sh`](./install.sh) fetches the repository, runs `pip install .`, and executes `archon setup` to install system-level dependencies (uv, Claude Code, ...) and verify your Lean toolchain. *The installation process might be slow the first time.*
 
 You should now be able to verify the installation and be guided on its usage with:
 
@@ -87,25 +83,29 @@ archon update
 
 | Command | Description |
 |---------|-------------|
-| `archon init` | Initialize a new Archon project (or reconcile an existing one). |
-| `archon loop` | Run the automated plan → (refactor) → prove → review loop. |
-| `archon dashboard` | Start the web monitoring interface (auto-launched by `loop` by default). |
-| `archon doctor` | Verify the full Archon setup and health. |
-| `archon prove` | Directly prove an inline statement. |
-| `archon refactor` | Run only the refactor agent against the current `REFACTOR_DIRECTIVE.md`. |
-| `archon discuss` | Open Claude Code interactively in the project with full Archon context — for debugging or brainstorming without firing the loop. |
-| `archon branch` | Create a branch in the inner git (`.archon/git-dir/`) from any historical agent commit. |
+| `archon init` | Initialize a new Archon project. |
+| `archon dag` | Elaborate a full informal blueprint (dependency graph) for the project. |
+| `archon blueprint-doctor` | Lint blueprint structure, references, macros, axioms, and coverage annotations. |
+| `archon extract` | Extract a dependency-cone subproject from an Archon project. |
+| `archon merge` | Merge two Archon projects via the DAG, keeping the best shared proofs. |
+| `archon loop` | Run the automated plan → prove → review loop. |
+| `archon doctor` | Verify the full Archon setup. |
+| `archon dashboard` | Start the web monitoring interface. |
+| `archon prove` | Launch a proof loop for a given statement. |
+| `archon setup` | Install system-level dependencies. |
+| `archon update` | Update Archon to the latest version. |
+| `archon discuss` | Start an interactive discussion about the project. |
+| `archon branch` | Switch to an existing inner-git branch, or fork a new one. |
+| `archon log` | Show the inner-git commit graph. |
 | `archon version` | Show the Archon CLI version and, inside a project, the project version. |
-| `archon setup` | Install required system dependencies. |
-| `archon update` | Update Archon to the latest published version. |
+| `archon refactor` | Draft or run a refactor directive. |
+| `archon migrate` | Run one-off migrations for legacy Archon projects. |
 
-Run `archon --help` or `archon <command> --help` for details.
+Run `archon -h` or `archon <command> -h` for details.
 
 ## Usage
 
 ### 1. Initialize a project
-
-The project path must point to the directory containing your `lakefile.lean` or `lakefile.toml` — this is what defines a Lean project. Otherwise, it can contain informal content (papers, blueprints, notes) that Archon will use to initialize the project structure and write the first objectives.
 
 To initialize:
 
@@ -113,38 +113,102 @@ To initialize:
 archon init /path/to/your-lean-project
 ```
 
-If no path is given, `init` prompts you for a project name and creates it.
+Here `/path/to/your-lean-project` can either:
+- Be empty, in which case Archon creates a new project directory and will ask you what you want to formalize. 
+- Contain an existing Lean project, in which case Archon will use it as the basis for formalization.
+- Contain informal material (e.g. description of the problem, papers, blueprints, ...) in which case Archon will create the Lean project structure inside it and use the informal material to write the first objectives.
 
 `archon init` does the following inside your project:
-- Creates `.archon/` with runtime state files and a **copy** of Archon's prompts
-  (previous versions symlinked — see [MIGRATION.md](docs/MIGRATION.md))
+- Creates `.archon/` with runtime state files and a **copy** of Archon's prompts, copies the python scripts that agents can use
 - Installs Archon's lean4 skills as the `lean4@archon-local` plugin at project scope
-- Copies the informal agent into `.claude/tools/archon-informal-agent.py`
-- Installs Archon's lean-lsp MCP server as `archon-lean-lsp` at project scope
-- Detects and disables any conflicting global `lean4-skills` / `lean-lsp` MCP
-  (see [Existing lean4-skills and lean-lsp MCP installations](#existing-lean4-skills-and-lean-lsp-mcp-installations))
-- Launches Claude Code interactively to detect project state, set up
-  lakefile/Mathlib if needed, and write initial objectives
+- Installs Archon's lean-lsp MCP server as `archon-lean-lsp` at project scope. Detects and disables any conflicting global `lean4-skills` / `lean-lsp` MCP
+- Configures `leanblueprint`, `git`, `lake`, and installs the lastest version of mathlib if there are none yet
+- Launches Claude Code interactively to detect project state and write initial objectives
 
-If the project has already been initialized, it might use a different version of Archon or you might have modified the prompts/skills manually, `init` offers four choices:
+If the project has already been initialized, `init` should be re-run after updating Archon to pull in the latest bundled prompts and skills, it will preserve your local edits and config, and propose you to keep, merge or overwrite prompts with the new versions.
 
-- **keep** — leave your existing setup alone; refresh MCP/plugin registrations only
-- **merge** (recommended) — launch Claude Code in a focused diff session and reconcile each prompt / `AGENTS.md` file interactively
-- **overwrite** — replace all Archon files with the bundled versions (discards local edits)
-- **abort** — cancel without changes
+### 2. Configure your preferences
 
-Init automatically runs `/archon-lean4:doctor` at the end to verify the full setup (Lean environment, MCP, skills, state files). See [MIGRATION.md](docs/MIGRATION.md) for details on upgrading an older project.
+#### `.archon/config.json` and `.archon/.env`
 
-### 2. Start the automated loop
+Since `v0.2.0`, `.archon/config.json` lets you store project preferences so you do not have to repeat the same CLI options every time. It is the recommended place to configure harnesses and models, Claude launch backends, enabled subagents, multi-lane proving, and loop defaults.
 
-The default parameters may not be suited for your project (e.g., subagents are off by default). You can either add options to the CLI command or edit `.archon/config.json` (recommended). 
+See [CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference. As a quick overview, a typical `.archon/config.json` looks like this:
 
+```jsonc
+{
+  "loop": {
+    "max_iterations": 2,
+    "parallel": true,
+    "max_parallel": 4,
+
+    // Use another launch backend than plain `claude -p`, whose billing became limited (e.g. "claude-p", "vscode", "desktop", "interactive").
+    "claude_backend": "claude-p",
+
+    // Default engine for every role and subagent
+    "harness": "codex", // Claude Code is default 
+    "model": "gpt-5.5",
+
+    // Override a specific role (plan / prover / review).
+    "roles": { "plan": "claude-code", "prover": "codex" }
+  },
+
+  // Opt into focused helper agents. List names, or use "*" to enable every
+  // installed subagent (recommended for best results).
+  "subagents": {
+    "enabled": ["strategy-critic", "blueprint-reviewer", "lean-auditor"]
+    // "enabled": "*"   // ← shortcut: turn them all on
+  }
+}
+```
+
+#### `./archon-protected.yaml`
+
+Depending on the project, you might want to avoid Archon overwriting some of your contributions. Therefore `archon-protected.yaml` lets you declare files or declarations that Archon should not modify (e.g. not touch the body, not touch the signature, ...) whether in the blueprints or in the Lean files.
+
+Since `v0.3.0` the file supports three kinds of rule, all optional — you mix and match what your project needs. Patterns are `fnmatch` globs (`*`, `?`, `[...]`), so a single rule can cover many files or declarations at once:
+
+```yaml
+# 1. Protect Lean declarations, per file.
+lean:
+  MyProject/Core.lean:
+    - some_lemma                 # freeze the SIGNATURE
+    - name: key_definition
+      protect: all               # freeze the WHOLE declaration
+    - name: MyProject.Internal.* 
+
+# 2. Protect blueprint (.tex) content.
+blueprint:
+  - file: blueprint/src/chapters/Intro_*.tex  # whole chapter(s) read-only
+  - label: thm:main              # freeze the STATEMENT, the proof may still change
+  - label: lem:key*
+    protect: all                 # freeze STATEMENT and proof
+
+# 3. Protect arbitrary files by path glob (notes, scripts, data, ...).
+files:
+  - references/*
+  - notes/*.md
+```
+
+### 3. Write blueprints to constitute a consistent DAG
+
+Since `v0.3.0`, `archon dag` launches a blueprint-writing loop. This loop can be ran before the main loop or in the middle. It uses [`LeanDag`](https://github.com/AxelDlv00/LeanDAG) to avoid only relying on the LLM's internal representation of the dependencies. 
+
+```bash
+archon dag /path/to/your-lean-project
+```
+
+This step is optional but recommended, we recommend running it at least once before the main loop, so that the blueprint is in place before the agents start writing Lean code. 
+
+### 4. Start the automated loop
+
+The main work of Archon is here, `archon loop` alternates plan/prover/review agents through iterations, with optional subagents (see [Subagents (optional but highly recommended)](#subagents-optional)), to formalize the project in Lean. 
 
 ```bash
 archon loop /path/to/your-lean-project
 ```
 
-The loop alternates plan/prover/review agents through stages, with optional subagents that you can enable in `.archon/config.json` (see [Subagents (optional)](#subagents-optional)). 
+The loop's high-lever flow is `autoformalize` → `prover` → `polish` → `COMPLETE`, the longest phase is `prover`:
 
 | Stage | What happens |
 |-------|-------------|
@@ -152,65 +216,66 @@ The loop alternates plan/prover/review agents through stages, with optional suba
 | `prover` | Proving — fill `sorry` placeholders with verified proofs |
 | `polish` | Verification and polish — golf, refactor, extract reusable lemmas |
 
-Every phase commits its output to an inner git at `.archon/git-dir/` as `archon[NNN/phase]: …`, so the dashboard's git tree shows the per-phase history independently of your project's outer git. Use `archon branch` to fork a branch from any historical agent commit if a run goes sideways.
+Every phase commits its output to an inner git at `.archon/git-dir/` as `archon[NNN/phase]: …`, so the dashboard's git tree shows the per-phase history independently of your project's outer git. Use `archon branch` to fork a branch from any historical agent commit if a run goes sideways. Using `.archon/git-dir/` allows you to work with your own `.git` without interference with Archon's versioning of its work.
 
-By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL. The dashboard keeps running after the loop finishes so you can review results; stop it with Ctrl-C or by closing the terminal. Disable it with `--no-dashboard`, or open a browser automatically with `--open`.
+By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL.
 
-#### Subagents (optional)
+#### Subagents (optional but highly recommended)
 
-By default the loop runs one plan agent and prover agents. v0.2.0 adds an **opt-in subagent system**: descriptor-driven helpers the plan / review agent can dispatch when it needs a focused, fresh-context check. Each subagent is a `.md` file under the bundled `subagents/` directory with YAML frontmatter (`name`, `description`, `write_domain`, `read_only`, `mandatory: [<phase>]`, …) plus a prompt body. This makes it easy to add new custom ones. 
+For backward compatibility purposes, **we chose to disable subagents by default**, everything will work without them. Nevertheless, our experiments show that they significantly improve performance and reliability of Archon.
 
-Some subagents are included in the distribution but disabled by default (`blueprint-reviewer`, `strategy-critic`, `progress-critic`, `lean-auditor`, `lean-vs-blueprint-checker`, `mathlib-analogist`, `refactor`, `blueprint-writer`, and `reference-retriever`). Turn them on by listing names under `subagents.enabled` in `.archon/config.json`:
+What are these subagents? The planner and reviewer can dispatch them in parallel, they have a focused scope and a fresh context, instead of being overwhelmed by the full project context and hundreds lines of intructions (like the plan and review agents). Some of these subagents, whose work is mechanical, can run with Sonnet instead of Opus (by editing `config.json`) without performance drop.
+
+Another advantage of subagents is that you can easily add yours, specific to your project, all it requires is writing a `.md` file with YAML frontmatter in the `subagents/` directory, and then listing its name in `config.json`.
+
+You can include all of our subagents with:
 
 ```json
-"subagents": {
-  "enabled": ["strategy-critic", "blueprint-reviewer", "progress-critic"]
+"loop" : {
+  "subagents": { "enabled": "*" }
+  // Or 
+  "subagents": { "enabled": "enabled": [
+      "blueprint-reviewer",
+      "strategy-critic",
+      "progress-critic",
+      "lean-auditor",
+      "lean-vs-blueprint-checker",
+      "mathlib-analogist",
+      "refactor",
+      "blueprint-writer",
+      "reference-retriever",
+      "blueprint-clean",
+      "lean-scaffolder",
+      "strategy-auditor",
+      "dag-walker",
+      "effort-breaker"
+  ] },
+  "strategy-critic": "opus",
+  "refactor": "sonnet",
+  // ... 
 }
 ```
-
-A recommended set for the plan phase is `blueprint-reviewer`, `blueprint-writer`, `refactor`, `strategy-critic`; for the review phase, `lean-auditor`, `lean-vs-blueprint-checker`. These subagents adress common failure modes we observed in early experiments by constantly reviewing Archon's work with a fresh perspective.
 
 #### Multi-lane proving (optional)
 
 By default `archon loop` runs a single Anthropic lane. v0.2.0 adds **multi-lane** proving: parallel prover lanes that run different LLM providers (Anthropic, Moonshot/Kimi, DeepSeek) on the same Lean files in isolated worktrees under `.archon/lanes/<lane>/`. The first lane to finish a file cleanly wins; other lanes get a 10-minute grace period, are then cancelled, and a per-file merge agent picks the best proof per declaration across whichever lanes did finish. To enable it, edit `.archon/config.json` (`multilane.enabled: true` plus a `lanes` list) and put provider keys in `.archon/.env`. See [MULTILANE.md](src/archon/.archon-src/archon-template/MULTILANE.md) for the full setup.
 
-#### Frozen signatures: `archon-protected.yaml`
+### The human's role? 
 
-v0.2.0 introduces an `archon-protected.yaml` at the project root to declare signatures that the mathematician owns and doesn't want to be modified by any agent. Listed declarations cannot be renamed or re-signed by any agent. 
+Archon is designed to run fully autonomously, it is able to find alternative proof strategies when it gets stuck, and it has good abilities to self-critique and find its own mistakes. However, guiding it with your expertise will speed it up, align it with your preferred proof style, and help it overcome mathematical and Lean challenges.
 
-The loop exits automatically when the stage reaches `COMPLETE`. You can run `archon loop` on multiple projects in parallel from separate terminals — each project's state is independent.
+First, there are several means to understand Archon's work:
+- `archon discuss` launches an interactive terminal discussion with Archon, so that you can directly communicate with it. Moreover, Archon will propose you to add guidance for the next iteration using `USER_HINTS.md`. 
+-  The dasboard allows you to monitor the agents' work, summaries are made at the end of each step. Archon can also flag information to user using `TO_USER.md` which is shown in a red banner in the dashboard (e.g. environment setup issue, bug in the code, asking for reference that it cannot retrieve, critical change in the strategy, etc). 
 
-### Guiding agents
-
-Archon runs fully autonomously, but guiding it with your expertise will speed it up, align it with your preferred proof style, and help it overcome mathematical and Lean challenges.
 
 There are three ways to influence Archon's behavior. Each serves a different purpose:
 
 | Mechanism | When to use | Lifetime | Who reads it |
 |-----------|-------------|----------|-------------|
-| **USER_HINTS.md** | Mid-run course corrections | One-shot — cleared after each plan cycle | Plan agent |
+| **USER_HINTS.md** | This is the easiest way to provide guidance | You can choose between short-lived and permanent hints | Plan agent |
 | **/- USER: ... -/ comments** | File-specific proof guidance | Persistent — stays in the `.lean` file | Prover agent |
-| **Prompts and skills** | Change how agents think and operate | Permanent — applies every iteration | All agents |
-
-**USER_HINTS.md** — for things that change between iterations. Examples: "prioritize theorem X next", "stop trying approach Y, it's a dead end". The plan agent reads this once, acts on it, and clears the file. Don't put permanent instructions here — they'll be lost.
-
-**/- USER: ... -/ comments** — for proof-level guidance tied to a specific `.lean` file. Examples: "try using Finset.sum_comm here", "this sorry depends on the helper lemma above". These persist in the source file and are visible to whichever prover agent owns that file.
-
-**Prompts and skills** — for changing how agents behave across all iterations. Edit prompts when you want to change the plan agent's strategy, the prover's proof style, or the review agent's analysis. Create or extend skills for reusable workflows in specific situations. For a deeper treatment — including which changes are short-lived vs. permanent, how skills and prompts differ, the recommended order of adjustments, and how to evolve them as you encounter recurring issues.
-
-Archon has two layers — local overrides global:
-
-| Layer | Location | Scope |
-|-------|----------|-------|
-| **Global** | Bundled inside the installed `archon` package | All projects (template source) |
-| **Local** | `<project>/.archon/prompts/*.md` | One project only |
-
-Starting with v0.1.0, local prompts are **copies** of the bundled templates rather than symlinks. This means:
-
-- You can edit `<project>/.archon/prompts/*.md` freely without affecting other projects.
-- Template updates do **not** automatically propagate. To pull in newer versions of the bundled prompts, run `archon init` again in that project and choose **merge** (recommended) or **overwrite**.
-
-If you're coming from a version that used symlinks, see [MIGRATION.md](docs/MIGRATION.md) for the one-time migration flow.
+| **Prompts, skills, custom subagents** | Change how agents think and operate | Permanent — applies every iteration | All agents |
 
 ### Customizing skills
 
@@ -228,13 +293,13 @@ Archon ships with a modified fork of [lean4-skills](https://github.com/cameronfr
 
 ### Monitoring progress
 
-To check how the formalization is going, the easiest starting point is the **dashboard** (auto-launched by `archon loop` — visit the URL printed in the terminal, e.g. `http://localhost:8080`). It shows iteration progress, parallel prover status, a file-centric Diffs view backed by recorded code snapshots, agent logs with live streaming, and proof journal milestones.
+To check how the formalization is going, the easiest starting point is the **dashboard** (auto-launched by `archon loop` — visit the URL printed in the terminal, e.g. `http://localhost:8080`). It shows iteration progress, parallel prover status, a file-centric Diffs view backed by recorded code snapshots, agent logs with live streaming, a DAG view, blueprints reader, and proof journal milestones.
 
 <p align="center">
 <img src="docs/dashboard-logs.png" alt="Archon Dashboard — Logs view" width="800">
 </p>
 
-The **Logs** view groups logs by iteration with phase timing (plan → prover → review) and per-prover completion status.
+The **Logs** view groups logs by iteration with phase timing (plan → prover → review) and per-prover completion status. The subagents' logs can also be consulted. All of the logs are live-streamed. 
 
 The **DAG** view renders the blueprint dependency graph interactively — nodes are colour-coded by status (proved / Mathlib-backed / ∞-effort), and clicking one shows its Lean name, status, and shortcuts to focus its cone or open it in the Blueprint / Diffs views. A git-history scrubber along the bottom replays the graph at any past iteration.
 
@@ -263,14 +328,20 @@ These are updated automatically by the review agent after each iteration.
 If you disabled the auto-launched dashboard, or want to look at a project after the loop has finished and the terminal is gone:
 
 ```bash
-archon dashboard /path/to/your-lean-project
+archon dashboard /path/to/your-lean-project -p <port> 
 ```
 
 #### Lean blueprint 
 
 The planner is now responsible for maintaining blueprints (using [leanblueprint](https://github.com/PatrickMassot/leanblueprint) that is installed and configured when `archon setup` and `archon init` are run). You can read [Terence Tao's blog post](https://terrytao.wordpress.com/2023/11/18/formalizing-the-proof-of-pfr-in-lean4-using-blueprint-a-short-tour/) to understand how blueprints work and why they are helpful. 
 
-In pratice, this means that Archon writes informal `tex` files before writing the corresponding `lean` files, in order to guide its formalization. You can run `leanblueprint serve` in the project directory to launch a server that renders the blueprints in HTML. 
+In pratice, this means that Archon writes informal `tex` files before writing the corresponding `lean` files, in order to guide its formalization. You can run `leanblueprint serve` in the project directory to launch a server that renders the blueprints in HTML.
+
+#### LeanDag 
+
+We developed [LeanDag](https://github.com/AxelDlv00/LeanDAG) in a seperate repository, as it might be useful outside of Archon. It is a very simple API to query the DAG structure of a Lean project. 
+
+Why added it to Archon? We noticed that LLMs tend to simplify dependencies in their internal representation of the project, having a deterministic structure to query and rely on grounds Archon's work in the real DAG. This is also helpful to have a clear picture of the difficulty of each component of the project, for this, it gives an estimation of the effort by counting the number of characters in the informal proofs, recursively summing the effort of the dependencies when they are not proven yet. While this estimation is rough, it is only used to sort the proving queue, and potentially breaking down high-effort theorems into smaller lemmas.  
 
 ### Existing lean4-skills and lean-lsp MCP installations
 
@@ -285,10 +356,11 @@ claude mcp add lean-lsp -s project -- uvx lean-lsp-mcp  # re-enable standard MCP
 
 ## Supplying informal material
 
-Formalization quality improves materially when the agents have access to the original informal mathematics. Supply as much source material as you can — place files in the repository root or a clearly documented top-level folder (e.g. `references/`):
+Formalization quality improves materially when the agents have access to the original informal mathematics. The current trajectory of Archon is grounding more and more of its work in reference material (v0.2.0 introduced the retriever agent, v0.3.0 introduced the blueprint-writing DAG loop that forces Archon to specify the source and quoting it in the blueprints). 
 
-1. **Papers and manuscripts** — the primary text being formalized (PDF, LaTeX source, or both). This is the single most important input after the Lean project itself.
-2. **Blueprints** — if you have a [LeanBlueprint](https://github.com/PatrickMassot/leanblueprint) or similar dependency graph, include it. Blueprints give the agents a clear picture of the logical structure and what depends on what.
-3. **Key definitions and lemma references** — for important definitions or lemmas, note where they first appear (e.g. "Definition 3.2 in [Author, Year]" or "Lemma 2 of arXiv:XXXX.XXXXX"). If the main paper cites important theorems whose proofs appear elsewhere, include those papers too — either add them yourself or ask Claude Code to fetch them. This helps the agents choose correct formalizations and find existing Mathlib content instead of reinventing it.
+Archon is already able to retrieve reference, if it doesn't, consider adding a permanent hint in `USER_HINTS.md` to ask it to do so and rely heavily on them. However, there is a limitation, it cannot retrieve papers behind paywalls, or textbooks that are not free access. 
 
-Even rough or incomplete material is valuable — partial references are far better than none. The more context the agents have, the better they can disambiguate notation, pick appropriate Mathlib abstractions, and produce proofs that match the mathematical intent.
+There are several ways for you to supply such material to Archon:
+1. **Papers and manuscripts** — You can provide PDF or LaTeX files in `/references`. 
+2. **Blueprints** — Archon natively works with blueprints, you can edit them or add your own chapters, archon will use them (don't forget to freeze the parts you don't want it to change with `archon-protected.yaml`).
+3. **Informal notes** — You can also provide notes in the format you want (e.g. markdown files), for instance in a `/notes` directory or in `/references`, don't forget to freeze them if you don't want Archon to edit them, and add a hint in `USER_HINTS.md` to make Archon aware of them and use them.
