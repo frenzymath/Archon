@@ -14,7 +14,7 @@
 
 </div>
 
-> ✨✨✨ **Archon v0.3.0.** Adds more harnesses (currently Codex and Claude Code) and workarounds for [Anthropic's new rate limits on `claude -p`](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) (Codex, a headless Claude TUI, and more). Archon grounds its work in a DAG via [LeanDag](https://github.com/AxelDlv00/LeanDAG), a custom API for querying the Lean blueprint graph. The dashboard is richer — blueprints are rendered, the DAG is navigable. Provers can run in different modes (fine-grained, mathlib-build, …), and subprojects can be extracted from the DAG with `archon extract` to work on separately, then merged back with `archon merge`.
+> ✨✨✨ **Archon v0.3.0.** Adds more harnesses (currently Codex and Claude Code) and workarounds for [Anthropic's new rate limits on `claude -p`](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) (Codex, a headless Claude TUI, and more). Archon grounds its work in a DAG via [LeanDag](https://github.com/AxelDlv00/LeanDAG), a custom API for querying the Lean blueprint graph. The dashboard is richer — blueprints are rendered, the DAG is navigable. Provers can run in different modes (fine-grained, mathlib-build, …), and subprojects can be extracted from the DAG with `archon extract` to work on separately, then merged back with `archon merge`. Adds `peers.yaml` to allow archon to read other projects' dags and reuse their proofs.
 
 > ✨ **Archon v0.2.0.** Adds **multi-lane parallel proving** (Anthropic + Moonshot + DeepSeek side by side), **inner-git versioning** of agent work, a frozen-signature surface (`archon-protected.yaml`), an **opt-in subagent system** (blueprint review, strategy critique, Mathlib design advice, and more), etc.
 
@@ -26,7 +26,7 @@
 
 Archon is an agentic system that autonomously formalizes research-level mathematics in Lean 4. A **plan agent** provides strategic guidance while **prover agents** write and verify proofs — separating analysis from execution to avoid context explosion. The system handles repository-scale formalization through three phases: scaffolding, proving, and polish. By default, built on Claude Code and Claude Opus 4.8, with a modified fork of [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) and [lean4-skills](https://github.com/cameronfreer/lean4-skills). Archon originated from orchestrating Claude Code with OpenClaw. See also our [blog](https://frenzymath.com/blog/archon-firstproof/) and [announcement](https://frenzymath.com/news/archon-firstproof/).
 
-Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. Single-problem benchmarks are therefore not a specific optimization target. For model choice, **Opus 4.8 is strongly recommended**; Sonnet also works well but is less capable. Other models are untested — weaker ones may struggle with Archon's complex skills and prompt structures, in which case the system design could hurt performance rather than help it. Since **v0.3.0**, Codex is also available, and gpt-5.5 can be a good alternative to Opus 4.8. Further models can run through the Claude Code harness — e.g. DeepSeek and Kimi via their Anthropic-compatible APIs, or any OpenRouter model (OpenRouter handles the API translation).
+Archon is designed and optimized for **project-level formalization** — multi-file repositories with interdependent theorems, not isolated competition problems. Single-problem benchmarks are therefore not a specific optimization target. For model choice, **Opus 4.8 is strongly recommended** ; Fable 5 seems very promising on our experiments ; Sonnet also works well but is less capable. Other models are untested — weaker ones may struggle with Archon's complex skills and prompt structures, in which case the system design could hurt performance rather than help it. Since **v0.3.0**, Codex is also available, and gpt-5.5 can be a good alternative to Opus 4.8. Further models can run through the Claude Code harness — e.g. DeepSeek and Kimi via their Anthropic-compatible APIs, or any OpenRouter model (OpenRouter handles the API translation).
 
 ## Table of Contents
 
@@ -38,6 +38,7 @@ Archon is designed and optimized for **project-level formalization** — multi-f
     - [2.1 `.archon/config.json` and `.archon/.env`](#21-archonconfigjson-and-archonenv)
     - [2.2 Backends and the new Claude rate limits](#22-backends-and-the-new-claude-rate-limits)
     - [2.3 `./archon-protected.yaml`](#23-archon-protectedyaml)
+    - [2.4 Configure peer projects in `.archon/peers.yaml`](#24-configure-peer-projects-in-archonpeersyaml)
   - [3. Write blueprints to constitute a consistent DAG](#3-write-blueprints-to-constitute-a-consistent-dag)
   - [4. Start the automated loop](#4-start-the-automated-loop)
     - [4.1 Subagents (optional but highly recommended)](#41-subagents-optional-but-highly-recommended)
@@ -176,7 +177,7 @@ See [CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference. As a quick
 
 Anthropic [now rate-limits headless `claude -p`](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) on subscription plans — the engine Archon used by default. Since `v0.3.0` there are two ways around this.
 
-> Please, note that these solutions are experimental, using the default backend `claude -p` is highly recommended, but it is costly. `claude-p` wrapper (simulating `claude -p` through the Claude Agent SDK) works well in the current setup, but it might be fragile. The `interactive` backend is less convenient, because it requires manual interaction, but is a good fallback if the `claude-p` wrapper breaks and you are out of credits. `vscode`/`desktop` are based on reverse engineering and may not work or work very well. Using `Codex` harness instead of `Claude Code` is also a viable option since OpenAI hasn't imposed similar limits on their API.
+> Please, note that these solutions are experimental, using the default backend `claude -p` is highly recommended, but it is costly. `claude-p` wrapper (simulating `claude -p` through the Claude Agent SDK) works well in the current setup, but it might be fragile, the logs of subagents might not be displayed. The `interactive` backend is less convenient, because it requires manual interaction, but is a good fallback if the `claude-p` wrapper breaks and you are out of credits. `vscode`/`desktop` are based on reverse engineering and may not work, but if they work, it would work exactly as `claude -p` except for the billing. Using `Codex` harness instead of `Claude Code` is also a viable option, probably the most stable, since OpenAI hasn't imposed similar limits on their API. Of course, if you use `claude -p` with you api key, there is no reason to change the backend.
 
 **Switch the launch backend.** `loop.claude_backend` (or `--claude-backend`) changes *how* Claude Code is started, without changing the model:
 
@@ -218,6 +219,12 @@ files:
   - references/*
   - notes/*.md
 ```
+
+#### 2.4 Configure peer projects in `.archon/peers.yaml`
+
+Please note that the next version of Archon may push this functionality further, or choose a different approach. The implementation is currently very basic, if it doesn't work as expected, keeping this file empty disables this feature.
+
+`peers.yaml` is a file where you can list other Archon projects whose DAGs Archon can read and reuse proofs from. For instance, if you are working on projects which require the same infrastructure to be built, or if you have divided your project into smaller subprojects, this can prevent work to be done multiple times. Besides, instead of launching several local dashboard, the dashboard gives you the possibility to switch between the dashboards of each project, display the merged DAG, etc.  
 
 ### 3. Write blueprints to constitute a consistent DAG
 
