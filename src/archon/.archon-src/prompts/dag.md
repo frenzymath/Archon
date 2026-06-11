@@ -113,7 +113,11 @@ python3 .claude/tools/archon-subagent.py --name blueprint-writer --slug b … &
 wait
 ```
 
-`wait` blocks the single call until every subagent finishes (the semaphore caps real concurrency at `loop.max_parallel`; extras queue) — the whole wave as one blocking dispatch. **Do NOT fire them as separate background Bash calls and do NOT use `Monitor`** — that ends your turn before they finish and is the usual reason a planned set of writers collapses to one. The *only* exception is **walkers/writers that edit the same chapter file: those MUST be serialized** — separate sequential calls — or they clobber each other's edits. Group by target file: same-file → sequential, different-file → one parallel `& … & wait`.
+`wait` blocks the single call until every subagent finishes (the semaphore caps real concurrency at `loop.max_parallel`; extras queue) — the whole wave as one blocking dispatch. **Do NOT fire them as separate background Bash calls and do NOT use `Monitor`** — that ends your turn before they finish.
+
+**Hard Rule: Never speculative-read.** You MUST NOT attempt to `Read` a subagent's output file or check its results in the same turn you dispatch it (even after a `wait`). Once you issue a parallel `& ... & wait` wave, **your turn is over**. Your LAST action in that turn must be the dispatch call (plus optional final summaries); do not attempt to "verify" the output file exists or read it until your NEXT turn. This prevents race conditions where you read an uninitialized or partial output file before the child process has finished writing.
+
+The *only* exception is **walkers/writers that edit the same chapter file: those MUST be serialized** — separate sequential calls — or they clobber each other's edits. Group by target file: same-file → sequential, different-file → one parallel `& … & wait`.
 
 ### Step 4 — Update content.tex
 

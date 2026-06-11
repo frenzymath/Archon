@@ -186,6 +186,20 @@ python3 .claude/tools/archon-subagent.py \
   --write-domain 'task_results/**'
 ```
 
+**A dispatch is a BLOCKING Bash call — you wait by staying inside it, not by watching it.** `archon-subagent.py` is synchronous: the Bash call returns only once the child finishes and its report is written. A long dispatch may be auto-backgrounded with a task ID — that's fine; **you wait for that task's result before doing anything else.** The wait is the dispatch call itself. **Do NOT use the `Monitor` tool to wait** — `Monitor` is non-blocking (it returns immediately telling you to "keep working"), so your turn ends and the subagents are abandoned mid-run. **Do NOT use foreground `sleep` or `until … ; do sleep … ; done`** — the harness blocks `sleep`. Never read a report or end your turn as if a still-running dispatch had returned.
+
+**Parallelism — one blocking Bash call that runs the whole wave with `& … & wait`.** To run independent subagents concurrently, put **all** their dispatches in a **single Bash call**, each backgrounded with `&`, and end with `wait`:
+
+```
+python3 .claude/tools/archon-subagent.py --name A --slug … --directive-file … &
+python3 .claude/tools/archon-subagent.py --name B --slug … --directive-file … &
+wait
+```
+
+`wait` makes the one Bash call **block until every subagent has finished** (the semaphore caps real concurrency at `loop.max_parallel`; extras queue). This is the whole wave as a *single* blocking dispatch — you wait for it exactly like one dispatch, and only proceed once it returns. **Do NOT fire them as separate background Bash calls and do NOT use `Monitor`** — that ends your turn before they finish.
+
+**Hard Rule: Never speculative-read.** You MUST NOT attempt to `Read` a subagent's output file or check its results in the same turn you dispatch it (even after a `wait`). Once you issue a parallel `& ... & wait` wave, **your turn is over**. Your LAST action in that turn must be the dispatch call (plus optional final summaries); do not attempt to "verify" the output file exists or read it until your NEXT turn. This prevents race conditions where you read an uninitialized or partial output file before the child process has finished writing.
+
 Directives must be fully self-contained — the subagent reads only what the directive names. Reports auto-archive to `logs/iter-NNN/`.
 
 **When NOT to dispatch**:
