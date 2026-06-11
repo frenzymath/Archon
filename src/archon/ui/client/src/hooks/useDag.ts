@@ -70,6 +70,34 @@ export function useDag(commit?: string | null) {
   });
 }
 
+/** One project's DAG within a union fetch. */
+export interface UnionDagEntry {
+  path: string;
+  resp: DagGraphResponse;
+}
+
+/**
+ * Fetch several projects' DAGs in parallel for the Meta (union) view. Each is
+ * the same `/api/dag` endpoint scoped with an explicit `?project=<path>` — no
+ * server-side merge happens; the union is assembled client-side. Paths must be
+ * in the dashboard's peer scope (the server rejects anything else with 403).
+ */
+export function useUnionDags(paths: string[]) {
+  // Sort so the query key (and thus the cache entry) is order-independent.
+  const key = [...paths].sort();
+  return useQuery({
+    queryKey: ['unionDag', key],
+    queryFn: async (): Promise<UnionDagEntry[]> => Promise.all(
+      key.map(async (p) => ({
+        path: p,
+        resp: await fetchJson<DagGraphResponse>(`/api/dag?project=${encodeURIComponent(p)}`),
+      })),
+    ),
+    enabled: key.length > 0,
+    staleTime: 30_000,
+  });
+}
+
 /** Last archon commit that touched each project file (inner git). */
 export interface FileMod {
   sha: string;

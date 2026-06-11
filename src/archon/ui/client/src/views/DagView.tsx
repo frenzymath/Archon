@@ -23,62 +23,18 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
 import 'katex/dist/katex.min.css';
-import { useDag, useDagLastModified, type DagNode, type FileMod } from '../hooks/useDag';
+import { useDag, useUnionDags, useDagLastModified, type DagNode, type FileMod } from '../hooks/useDag';
 import { useGitLog, useBlueprintChapters, type GitCommit } from '../hooks/useGitLog';
 import { GitTimeline } from '../components/GitTimeline';
 import { buildBlueprintModel, TexFragment } from '../components/BlueprintDoc';
+// Effort/status colour scale (mirrors leandag.exporters) + per-project encoding
+// for the multi-project union overlay.
+import {
+  DONE_FILL, MATHLIB_FILL, MATHLIB_BORDER, INF_FILL,
+  effortColor, statusGlyphs, projectStyle,
+} from '../lib/dagColors';
 
-// ── Effort colour scale (mirrors leandag.exporters) ─────────────────────────
-const DONE_FILL = '#22c55e', DONE_BORDER = '#15803d'; // effort 0 — formalised
-const MATHLIB_FILL = '#3b82f6', MATHLIB_BORDER = '#1d4ed8'; // \mathlibok — in mathlib (blue)
-const INF_FILL = '#ef4444', INF_BORDER = '#7f1d1d';   // effort ∞ — no estimate
-const GRAD_HUE_HI = 52; // yellow (smallest finite effort)
-const GRAD_HUE_LO = 24; // orange (largest finite effort)
-
-function hslHex(hue: number, sat: number, light: number): string {
-  // Match Python colorsys.hls_to_rgb(h, l, s).
-  const h = hue / 360;
-  const hue2rgb = (p: number, q: number, t: number) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  let r: number, g: number, b: number;
-  if (sat === 0) { r = g = b = light; }
-  else {
-    const q = light < 0.5 ? light * (1 + sat) : light + sat - light * sat;
-    const p = 2 * light - q;
-    r = hue2rgb(p, q, h + 1 / 3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3);
-  }
-  const hex = (v: number) => Math.round(v * 255).toString(16).padStart(2, '0');
-  return `#${hex(r)}${hex(g)}${hex(b)}`;
-}
-
-function effortColor(effort: number | null | undefined, maxEffort: number): { background: string; border: string } {
-  if (effort === null || effort === undefined) return { background: INF_FILL, border: INF_BORDER };
-  if (effort <= 0) return { background: DONE_FILL, border: DONE_BORDER };
-  const t = maxEffort > 0 ? Math.min(1, Math.sqrt(effort) / Math.sqrt(maxEffort)) : 0;
-  const hue = GRAD_HUE_HI - (GRAD_HUE_HI - GRAD_HUE_LO) * t;
-  return { background: hslHex(hue, 0.72, 0.55), border: hslHex(hue, 0.6, 0.38) };
-}
-
-function statusGlyphs(n: DagNode): string {
-  const hasLean = !!n.lean_source || n.type === 'lean_aux';
-  let leanG = '';
-  if (n.has_sorry) leanG = '⚠';
-  else if (n.proof_size_lean != null) leanG = '✓';
-  else if (n.mathlib_ok) leanG = 'ⓜ';
-  else if (hasLean) leanG = 'λ';
-  let texG = '';
-  if (n.proof_size_tex != null) texG = '★';
-  else if (n.type !== 'lean_aux') texG = '§';
-  return leanG + texG;
-}
+interface ProjectInfo { name: string; path: string; colorIdx: number; }
 
 function visNode(n: DagNode, maxEffort: number) {
   const isAux = n.type === 'lean_aux';
@@ -98,6 +54,52 @@ function visNode(n: DagNode, maxEffort: number) {
     borderWidth: 2,
     font: { size: 11, multi: false, face: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: '#334155' },
     shapeProperties: isAux ? { borderDashes: [3, 3] } : {},
+  };
+}
+
+// Union-mode node: a status-fill disc plus an N-segment ring (one arc per
+// project the declaration belongs to), drawn on a canvas via vis-network's
+// custom shape. `dimRef` lets the cone/highlight machinery grey out nodes
+// outside the active set on redraw (custom shapes ignore DataSet colour
+// updates, so dimming is read live from the ref instead).
+function unionVisNode(n: DagNode, maxEffort: number, ringColors: string[], dimRef: { current: Set<string> | null }) {
+  const base = visNode(n, maxEffort);
+  const fill = (base.color as { background: string }).background;
+  const isInf = n.effort_local === null || n.effort_local === undefined;
+  const r = isInf ? 14 : 10;
+  const short = n.id.split(':').pop()!;
+  const glyphs = statusGlyphs(n);
+  const ring = ringColors.length ? ringColors : ['#94a3b8'];
+  return {
+    id: n.id,
+    shape: 'custom',
+    // ctxRenderer fully owns drawing; nodeDimensions backs hit-testing/layout.
+    ctxRenderer: ({ ctx, x, y, state }: { ctx: CanvasRenderingContext2D; x: number; y: number; state: { selected: boolean } }) => ({
+      drawNode: () => {
+        const dim = dimRef.current ? !dimRef.current.has(n.id) : false;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI);
+        ctx.fillStyle = dim ? '#e5e7eb' : fill; ctx.fill();
+        const m = ring.length;
+        const gap = m > 1 ? 0.16 : 0; // small wedge gap so segments read as distinct
+        ctx.lineWidth = m > 1 ? 4 : 3;
+        for (let i = 0; i < m; i++) {
+          const a0 = -Math.PI / 2 + (i / m) * 2 * Math.PI + gap / 2;
+          const a1 = -Math.PI / 2 + ((i + 1) / m) * 2 * Math.PI - gap / 2;
+          ctx.beginPath(); ctx.strokeStyle = dim ? '#d1d5db' : ring[i];
+          ctx.arc(x, y, r, a0, a1); ctx.stroke();
+        }
+        if (state.selected) {
+          ctx.lineWidth = 2.5; ctx.strokeStyle = '#0f172a';
+          ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 2 * Math.PI); ctx.stroke();
+        }
+        ctx.fillStyle = dim ? '#cbd5e1' : '#334155';
+        ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillText(short, x, y + r + 2);
+        if (glyphs) ctx.fillText(glyphs, x, y + r + 15);
+      },
+      nodeDimensions: { width: 2 * r, height: 2 * r },
+    }),
   };
 }
 
@@ -184,6 +186,37 @@ export default function DagView() {
   const commits = gitData?.commits ?? [];
   const navigate = useNavigate();
 
+  // ── Multi-project union overlay ───────────────────────────────────────────
+  // The base view (above) is the current project. Optionally overlay peer
+  // projects (from .archon/peers.yaml) onto the same canvas: their nodes are
+  // namespaced so ids never collide, fill still encodes proof status, and the
+  // border colour + shape encode which project a node belongs to. With no peer
+  // selected the overlay is inert and the view is identical to single-project.
+  const [allProjects, setAllProjects] = useState<ProjectInfo[]>([]);
+  const [unionPaths, setUnionPaths] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    fetch('/api/peer-projects')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { current: { name: string; path: string }; peers: { name: string; path: string }[] } | null) => {
+        if (!d) return;
+        setAllProjects([
+          { name: d.current.name, path: d.current.path, colorIdx: 0 },
+          ...d.peers.map((p, i) => ({ name: p.name, path: p.path, colorIdx: i + 1 })),
+        ]);
+      })
+      .catch(() => { /* single-project: no overlay offered */ });
+  }, []);
+  const unionPathList = useMemo(() => [...unionPaths], [unionPaths]);
+  const { data: unionData } = useUnionDags(unionPathList);
+  const unionActive = unionPaths.size > 0;
+  const toggleUnion = useCallback((path: string) => {
+    setUnionPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }, []);
+
   // The blueprint label map (cheap numbering pass over all chapters) so the
   // node panel renders statements/proofs exactly like the Blueprint page —
   // \cref{} resolved — and can deep-link into it. Same commit as the graph.
@@ -216,6 +249,9 @@ export default function DagView() {
   const edgesDSRef = useRef<DataSet<any> | null>(null);
   const boundsRef = useRef<{ left: number; right: number; top: number; bottom: number } | null>(null);
   const zoomMinRef = useRef(0.05);
+  // Union mode: the set of currently-undimmed node ids (cone/highlight). The
+  // custom node renderer reads this live so a redraw greys out the rest.
+  const dimRef = useRef<Set<string> | null>(null);
   const cbRef = useRef<{ click: (p: any) => void; dbl: (p: any) => void; wheel: (e: WheelEvent) => void; settled: () => void }>({
     click: () => {}, dbl: () => {}, wheel: () => {}, settled: () => {},
   });
@@ -244,12 +280,105 @@ export default function DagView() {
   // ── Derived graph structures ──────────────────────────────────────────────
   const macros = useMemo(() => (data?.meta?.macros ?? {}) as Record<string, string>, [data]);
 
+  // Merge the base project (current view) with any selected peer projects into a
+  // single union graph. Declarations that are *the same* across projects (same
+  // fully-qualified Lean name, else same statement) collapse to ONE node carrying
+  // every project it appears in (nodeProjects) — so the graph genuinely merges
+  // rather than stacking N disjoint DAGs. Edges and `uses` are remapped onto the
+  // merged ids and deduped; degree counts are recomputed to match. Base nodes
+  // keep their original id (so blueprint/deep-link/last-modified still resolve);
+  // peer-only nodes use a namespaced id.
+  const merged = useMemo(() => {
+    const active = unionActive && !!unionData;
+    interface Src { gid: string; idx: number; n: DagNode; }
+    const sources: Src[] = [];
+    const srcEdges: { from: string; to: string }[] = [];
+    for (const n of (data?.nodes ?? [])) sources.push({ gid: n.id, idx: 0, n });
+    for (const e of (data?.edges ?? [])) srcEdges.push({ from: e.from, to: e.to });
+    if (active) {
+      for (const { path, resp } of unionData!) {
+        const info = allProjects.find((p) => p.path === path);
+        if (!info || resp.error) continue;
+        const ns = (id: string) => `P${info.colorIdx}::${id}`;
+        for (const n of (resp.nodes ?? [])) {
+          sources.push({ gid: ns(n.id), idx: info.colorIdx, n: { ...n, id: ns(n.id), uses: (n.uses ?? []).map(ns) } });
+        }
+        for (const e of (resp.edges ?? [])) srcEdges.push({ from: ns(e.from), to: ns(e.to) });
+      }
+    }
+
+    // Identity for cross-project merging: same FQ Lean name(s), else same
+    // (whitespace-normalised) statement. Anything else never merges.
+    const identityKey = (n: DagNode): string | null => {
+      if (n.lean_name && n.lean_name.trim()) {
+        return 'L:' + n.lean_name.split(',').map((s) => s.trim()).filter(Boolean).sort().join(',');
+      }
+      const st = (n.statement || '').replace(/\s+/g, ' ').trim();
+      return st ? 'S:' + st : null;
+    };
+
+    // Group sources; unkeyed nodes (and the whole non-union case) stay singletons.
+    const groupOf = new Map<string, Src[]>();
+    const keyByGid = new Map<string, string>();
+    for (const s of sources) {
+      const key = (active ? identityKey(s.n) : null) ?? `@${s.gid}`;
+      keyByGid.set(s.gid, key);
+      (groupOf.get(key) ?? groupOf.set(key, []).get(key)!).push(s);
+    }
+    // Canonical merged id per group: prefer a base member, else lowest project idx.
+    const mergedIdOf = new Map<string, string>();
+    for (const [key, grp] of groupOf) {
+      const pick = grp.find((s) => s.idx === 0) ?? [...grp].sort((a, b) => a.idx - b.idx)[0];
+      mergedIdOf.set(key, pick.gid);
+    }
+    const toMerged = (gid: string) => mergedIdOf.get(keyByGid.get(gid) ?? `@${gid}`) ?? gid;
+
+    const nodes: DagNode[] = [];
+    const nodeProjects = new Map<string, number[]>();
+    const memberStatus = new Map<string, { idx: number; proved: boolean }[]>();
+    for (const [key, grp] of groupOf) {
+      const id = mergedIdOf.get(key)!;
+      const rep = (grp.find((s) => s.idx === 0) ?? [...grp].sort((a, b) => a.idx - b.idx)[0]).n;
+      const efforts = grp.map((s) => s.n.effort_local);
+      const minEffort = efforts.some((e) => e === 0) ? 0
+        : efforts.every((e) => e == null) ? null
+        : Math.min(...efforts.filter((e): e is number => e != null));
+      const uses = [...new Set(grp.flatMap((s) => (s.n.uses ?? []).map(toMerged)))].filter((u) => u !== id);
+      nodeProjects.set(id, [...new Set(grp.map((s) => s.idx))].sort((a, b) => a - b));
+      memberStatus.set(id, grp.map((s) => ({ idx: s.idx, proved: !!(s.n.proved || s.n.mathlib_ok) })).sort((a, b) => a.idx - b.idx));
+      nodes.push({
+        ...rep, id, uses,
+        proved: grp.some((s) => s.n.proved),
+        mathlib_ok: grp.some((s) => s.n.mathlib_ok),
+        has_sorry: grp.some((s) => s.n.has_sorry),
+        effort_local: minEffort,
+      });
+    }
+
+    // Remap edges (preserving direction), dedupe, drop self-loops; recompute deg.
+    const edgeSet = new Set<string>();
+    const edges: { from: string; to: string }[] = [];
+    for (const e of srcEdges) {
+      const from = toMerged(e.from), to = toMerged(e.to);
+      if (from === to) continue;
+      const k = from + ' ' + to;
+      if (edgeSet.has(k)) continue;
+      edgeSet.add(k);
+      edges.push({ from, to });
+    }
+    const rdep = new Map<string, number>();
+    for (const n of nodes) for (const u of n.uses) rdep.set(u, (rdep.get(u) ?? 0) + 1);
+    for (const n of nodes) { n.dep_count = n.uses.length; n.rdep_count = rdep.get(n.id) ?? 0; }
+
+    return { nodes, edges, nodeProjects, memberStatus, active };
+  }, [data, unionData, unionActive, allProjects]);
+
   // Dedupe nodes by id (duplicate \label{} would crash vis-network's DataSet).
   const uniqueNodes = useMemo(() => {
     const seen = new Set<string>(); const out: DagNode[] = [];
-    for (const n of data?.nodes ?? []) { if (seen.has(n.id)) continue; seen.add(n.id); out.push(n); }
+    for (const n of merged.nodes) { if (seen.has(n.id)) continue; seen.add(n.id); out.push(n); }
     return out;
-  }, [data]);
+  }, [merged]);
 
   const allNodes = useMemo(() => {
     const m = new Map<string, DagNode>();
@@ -257,7 +386,7 @@ export default function DagView() {
     return m;
   }, [uniqueNodes]);
 
-  const edges = useMemo(() => (data?.edges ?? []).filter((e) => allNodes.has(e.from) && allNodes.has(e.to)), [data, allNodes]);
+  const edges = useMemo(() => merged.edges.filter((e) => allNodes.has(e.from) && allNodes.has(e.to)), [merged, allNodes]);
 
   const maxEffort = useMemo(() => {
     let mx = 1;
@@ -266,7 +395,15 @@ export default function DagView() {
   }, [uniqueNodes]);
 
   // Base vis nodes (full styling) — used to add and to restore after highlight.
-  const baseVisNodes = useMemo(() => uniqueNodes.map((n) => visNode(n, maxEffort)), [uniqueNodes, maxEffort]);
+  // In union mode each node is custom-rendered with an N-segment ring (one arc
+  // per project it belongs to); fill still encodes proof status.
+  const baseVisNodes = useMemo(() => uniqueNodes.map((n) => {
+    if (merged.active) {
+      const ring = (merged.nodeProjects.get(n.id) ?? [0]).map((idx) => projectStyle(idx).border);
+      return unionVisNode(n, maxEffort, ring, dimRef);
+    }
+    return visNode(n, maxEffort);
+  }), [uniqueNodes, maxEffort, merged.active, merged.nodeProjects]);
   const baseVisById = useMemo(() => {
     const m = new Map<string, any>();
     for (const vn of baseVisNodes) m.set(vn.id as string, vn);
@@ -316,6 +453,14 @@ export default function DagView() {
   const effMax = useMemo(() => uniqueNodes.reduce((mx, n) => (n.effort_total != null ? Math.max(mx, n.effort_total) : mx), 0), [uniqueNodes]);
   const files = useMemo(() => [...new Set(uniqueNodes.map(fileOf).filter(Boolean))].sort(), [uniqueNodes, fileOf]);
   const types = useMemo(() => [...new Set(uniqueNodes.map((n) => n.type).filter(Boolean))].sort(), [uniqueNodes]);
+
+  // Union helpers: project lookup by colour index, and a Lean-name → node-ids
+  // index so the sidebar can flag a declaration that also exists in a peer.
+  const projectByIdx = useMemo(() => {
+    const m = new Map<number, ProjectInfo>();
+    for (const p of allProjects) m.set(p.colorIdx, p);
+    return m;
+  }, [allProjects]);
 
   // Cone (ancestors ∪ descendants ∪ self) and ancestors-only walkers.
   const coneOf = useCallback((id: string) => {
@@ -435,14 +580,17 @@ export default function DagView() {
     const nodesDS = nodesDSRef.current, edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS) return;
     const cone = coneOf(id);
-    nodesDS.update((nodesDS.getIds() as string[]).map((nid) =>
+    // Custom (union) nodes ignore DataSet colour updates — dim via the ref +
+    // redraw; standard nodes dim by colour-swapping as before.
+    if (merged.active) { dimRef.current = cone; netRef.current?.redraw(); }
+    else nodesDS.update((nodesDS.getIds() as string[]).map((nid) =>
       cone.has(nid) ? baseVisById.get(nid)
         : { id: nid, color: { background: '#e5e7eb', border: '#d1d5db' }, font: { color: '#cbd5e1' } }));
     edgesDS.update((edgesDS.get() as any[]).map((e) => {
       const on = cone.has(e.from) && cone.has(e.to);
       return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2.5 : 1 };
     }));
-  }, [coneOf, baseVisById]);
+  }, [coneOf, baseVisById, merged.active]);
 
   // Base skin (no node cone selected): honour the highlight overlay if one is
   // active (dim non-matches but keep them on canvas), else full colour.
@@ -450,6 +598,18 @@ export default function DagView() {
     const nodesDS = nodesDSRef.current, edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS) return;
     const hl = highlightSet;
+    // Union mode: nodes are custom-rendered, so dim through the ref + redraw
+    // (hl null ⇒ nothing dimmed). Edges still skin via the DataSet.
+    if (merged.active) {
+      dimRef.current = hl;
+      netRef.current?.redraw();
+      edgesDS.update((edgesDS.get() as any[]).map((e) => {
+        if (!hl) return { id: e.id, color: { color: '#cbd5e1', highlight: '#64748b' }, width: 1 };
+        const on = hl.has(e.from) && hl.has(e.to);
+        return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2 : 1 };
+      }));
+      return;
+    }
     if (!hl) {
       nodesDS.update((nodesDS.getIds() as string[]).map((nid) => baseVisById.get(nid)).filter(Boolean));
       edgesDS.update((edgesDS.get() as any[]).map((e) => ({ id: e.id, color: { color: '#cbd5e1', highlight: '#64748b' }, width: 1 })));
@@ -462,7 +622,7 @@ export default function DagView() {
       const on = hl.has(e.from) && hl.has(e.to);
       return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2 : 1 };
     }));
-  }, [baseVisById, highlightSet]);
+  }, [baseVisById, highlightSet, merged.active]);
   const clearHighlight = applyBaseStyling;
   const applyBaseRef = useRef(applyBaseStyling);
   applyBaseRef.current = applyBaseStyling;
@@ -641,6 +801,11 @@ export default function DagView() {
   }, [allNodes, isDoneNode, doneIds]);
 
   const sel = selId ? allNodes.get(selId) : undefined;
+  // Union extra for the sidebar: every project this (merged) declaration belongs
+  // to, with whether it is proved there — so a node shared across projects shows
+  // who has it done and who still needs it.
+  const selPresence = (merged.active ? (merged.memberStatus.get(selId) ?? []) : [])
+    .map((ms) => ({ name: projectByIdx.get(ms.idx)?.name ?? '?', border: projectStyle(ms.idx).border, proved: ms.proved }));
 
   if (isLoading) return <div style={pad}>Loading blueprint DAG…</div>;
   if (error) return <div style={pad}>Failed to load the DAG. Is the dashboard server running?</div>;
@@ -683,6 +848,18 @@ export default function DagView() {
           <span className="leg-txt">✓ Lean proof</span><span className="leg-txt">⚠ sorry</span><span className="leg-txt">ⓜ mathlib</span>
           <span className="leg-txt">λ Lean decl</span><span className="leg-txt">★ LaTeX proof</span><span className="leg-txt">§ statement</span>
         </span>
+        {merged.active && (
+          <span className="dv-legend dv-proj-legend" title="Node ring colour = project; a split (multi-colour) ring marks a declaration shared across projects">
+            {allProjects.filter((p) => p.colorIdx === 0 || unionPaths.has(p.path)).map((p) => (
+              <span key={p.path} className="leg-proj" title={p.path}>
+                <span className="leg-ring" style={{ borderColor: projectStyle(p.colorIdx).border }} />{p.name}
+              </span>
+            ))}
+            <span className="leg-proj" title="A declaration that exists in more than one project merges into one node with a split ring">
+              <span className="leg-ring leg-ring-split" />shared
+            </span>
+          </span>
+        )}
         {dups.length > 0 && (
           <span className="dv-warn" title={dups.join('\n')}>⚠ {dups.length} duplicate label{dups.length > 1 ? 's' : ''}</span>
         )}
@@ -694,6 +871,22 @@ export default function DagView() {
         <input className="dv-input" type="text" list="dv-node-ids" placeholder="Search node id…" autoComplete="off" spellCheck={false}
           value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') commitSearch(); }} onBlur={commitSearch} />
         <datalist id="dv-node-ids">{[...allNodes.keys()].sort().map((id) => <option key={id} value={id} />)}</datalist>
+        {allProjects.length > 1 && (
+          <details className="dv-union">
+            <summary className={`dv-select ${unionActive ? 'dv-select-on' : ''}`} title="Overlay peer projects' DAGs (.archon/peers.yaml)">
+              Projects{unionActive ? ` · +${unionPaths.size}` : ''}
+            </summary>
+            <div className="dv-union-panel">
+              {allProjects.filter((p) => p.colorIdx !== 0).map((p) => (
+                <label key={p.path} className="dv-union-row" title={p.path}>
+                  <input type="checkbox" checked={unionPaths.has(p.path)} onChange={() => toggleUnion(p.path)} />
+                  <span className="dv-union-sw" style={{ borderColor: projectStyle(p.colorIdx).border }} />
+                  <span className="dv-union-name">{p.name}</span>
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
         <select className="dv-select" value={nodeset} onChange={(e) => { setNodeset(e.target.value as NodeSet); setFocus(null); }} title="Which declarations to include">
           <option value="union">All declarations</option>
           <option value="blueprint">Blueprint only</option>
@@ -783,6 +976,7 @@ export default function DagView() {
           ) : (
             <NodePanel n={sel} ancestors={ancestorsOf(selId)} macros={macros} focused={focus === selId}
               labels={bpLabels} lastMod={lastMod}
+              presence={selPresence}
               onGoTo={goTo} onToggleFocus={() => (focus === selId ? setFocus(null) : (setFocus(selId), setSelId(selId)))}
               onOpenBlueprint={(label) => navigate(`/blueprint?focus=${encodeURIComponent(label)}`)}
               onOpenBlueprintAt={(slug, anchor) => navigate(`/blueprint?slug=${encodeURIComponent(slug)}&anchor=${encodeURIComponent(anchor)}`)}
@@ -858,10 +1052,11 @@ function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onG
   );
 }
 
-function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onToggleFocus, onOpenBlueprint, onOpenBlueprintAt, onOpenLogs, onOpenDiffs, onOpenDiffsFile }: {
+function NodePanel({ n, ancestors, macros, focused, labels, lastMod, presence, onGoTo, onToggleFocus, onOpenBlueprint, onOpenBlueprintAt, onOpenLogs, onOpenDiffs, onOpenDiffsFile }: {
   n: DagNode; ancestors: Set<string>; macros: Record<string, string>; focused: boolean;
   labels: ReturnType<typeof buildBlueprintModel>['labels'];
   lastMod: Record<string, FileMod> | undefined;
+  presence?: { name: string; border: string; proved: boolean }[];
   onGoTo: (id: string) => void; onToggleFocus: () => void;
   onOpenBlueprint: (label: string) => void;
   onOpenBlueprintAt: (slug: string, anchor: string) => void;
@@ -886,6 +1081,22 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, onGoTo, onT
   return (
     <div className="dv-sidebar-content">
       <div className="card">
+        {presence && presence.length > 0 && (
+          presence.length === 1 ? (
+            <div className="dv-proj-tag" style={{ borderColor: presence[0].border }} title="Project this declaration belongs to">{presence[0].name}</div>
+          ) : (
+            <div className="dv-shared">
+              <div className="dv-shared-h">Shared across {presence.length} projects</div>
+              {presence.map((s, i) => (
+                <div key={i} className="dv-shared-row" title="Project this declaration appears in">
+                  <span className="dv-shared-sw" style={{ borderColor: s.border }} />
+                  <span className="dv-shared-name">{s.name}</span>
+                  <span className={s.proved ? 'dv-shared-ok' : 'dv-shared-todo'}>{s.proved ? '✓ proved' : 'unproved'}</span>
+                </div>
+              ))}
+            </div>
+          )
+        )}
         <div className="node-badges"><span className="badge badge-type">{n.type.toUpperCase()}</span>{statusBadge}</div>
         <div className="node-title">{n.title || n.id}</div>
         <div className="node-id">{n.id}</div>
@@ -1107,4 +1318,26 @@ const DV_CSS = `
 .dv-range-lbl { font-size:11px; color:var(--text-muted); font-weight:600; text-transform:lowercase; }
 .dv-range .dv-slider { width:60px; accent-color:#3b82f6; cursor:pointer; height:14px; }
 .dv-range-val { font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); min-width:48px; text-align:right; }
+/* Multi-project union overlay */
+.dv-union { position:relative; }
+.dv-union > summary { list-style:none; cursor:pointer; user-select:none; }
+.dv-union > summary::-webkit-details-marker { display:none; }
+.dv-union-panel { position:absolute; z-index:20; top:calc(100% + 4px); left:0; min-width:200px; max-height:280px; overflow-y:auto; background:var(--bg-primary); border:1px solid var(--border); border-radius:7px; box-shadow:0 6px 20px rgba(15,23,42,.14); padding:6px; display:flex; flex-direction:column; gap:1px; }
+.dv-union-row { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:5px; font-size:12px; color:var(--text-secondary); cursor:pointer; }
+.dv-union-row:hover { background:var(--bg-tertiary); }
+.dv-union-row input { margin:0; cursor:pointer; }
+.dv-union-sw { width:12px; height:12px; border:3px solid #999; border-radius:50%; flex-shrink:0; }
+.dv-union-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dv-proj-legend { padding-left:10px; margin-left:4px; border-left:1px solid var(--border); gap:8px; }
+.dv-proj-legend .leg-proj { display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:600; color:var(--text-muted); }
+.dv-proj-legend .leg-ring { width:10px; height:10px; border:3px solid #999; border-radius:50%; display:inline-block; box-sizing:border-box; }
+.dv-proj-legend .leg-ring-split { border-color:#7c3aed #0891b2 #db2777 #b45309; }
+.dv-root .dv-proj-tag { display:inline-block; font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-secondary); border-left:4px solid #999; padding-left:7px; margin-bottom:8px; }
+.dv-root .dv-shared { margin-top:10px; border-top:1px solid var(--border); padding-top:9px; }
+.dv-root .dv-shared-h { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); margin-bottom:5px; }
+.dv-root .dv-shared-row { display:flex; align-items:center; gap:7px; width:100%; padding:4px 6px; border:1px solid var(--border); border-radius:5px; background:var(--bg-tertiary); font-size:12px; color:var(--text-secondary); margin-bottom:4px; text-align:left; }
+.dv-root .dv-shared-sw { width:11px; height:11px; border:2px solid #999; border-radius:50%; flex-shrink:0; }
+.dv-root .dv-shared-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dv-root .dv-shared-ok { font-size:10px; color:var(--green); font-weight:600; }
+.dv-root .dv-shared-todo { font-size:10px; color:var(--text-muted); }
 `;
