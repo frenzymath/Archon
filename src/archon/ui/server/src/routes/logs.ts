@@ -146,12 +146,13 @@ function resolveLogPath(logsPath: string, logPath: string, archonPath?: string):
   return candidate;  // missing — let the caller's existsSync return the 404
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath, archonPath, projectPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths resolved per-request (base project or an allowed peer via `?project=`).
 
   // Tree-structured log listing
-  fastify.get('/api/logs', async () => {
+  fastify.get('/api/logs', async (req) => {
+    const { logsPath, archonPath, projectPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(logsPath)) return { flat: [], groups: [] };
 
     const phaseByIter = mapIterToPhaseCommits(gitDir, projectPath);
@@ -484,6 +485,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   // role, slug, parentSlug, write-domain, status, duration, and the
   // log/report paths so the client can deep-link.
   fastify.get('/api/logs/:iter/tree', async (req, reply) => {
+    const { logsPath, archonPath } = req.paths;
     const iterId = (req.params as Record<string, string>).iter;
     if (!iterId || !/^iter-\d{3,}$/.test(iterId)) {
       return reply.status(400).send({ error: 'Invalid iter id' });
@@ -538,6 +540,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   // children dispatched by a coordinator (Workstream A). Paths returned
   // by /api/logs/:iter/tree are relative to this root.
   fastify.get('/api/task-results/*', async (req, reply) => {
+    const { archonPath } = req.paths;
     const subpath = (req.params as Record<string, string>)['*'];
     if (!subpath) return reply.status(400).send({ error: 'Missing path' });
 
@@ -573,6 +576,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // Wildcard log content — supports both .jsonl (parsed) and .md (raw).
   fastify.get('/api/logs/*', async (req, reply) => {
+    const { logsPath, archonPath } = req.paths;
     const subpath = (req.params as Record<string, string>)['*'];
     if (!subpath) return reply.status(400).send({ error: 'Missing path' });
     const filePath = resolveLogPath(logsPath, subpath, archonPath);
@@ -595,6 +599,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // WebSocket streaming (JSONL only; .md files are static artifacts).
   fastify.get('/api/log-stream/*', { websocket: true }, (socket, req) => {
+    const { logsPath, archonPath } = req.paths;
     const subpath = (req.params as Record<string, string>)['*'] || '';
     const filePath = resolveLogPath(logsPath, subpath, archonPath);
     if (!filePath || !fs.existsSync(filePath) || !filePath.endsWith('.jsonl')) {

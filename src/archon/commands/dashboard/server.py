@@ -9,9 +9,12 @@ Handles:
 from __future__ import annotations
 
 import atexit
+import os
 import platform
+import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -24,6 +27,23 @@ from .process import signal_pid_or_group, wait_for_exit
 
 
 _MAX_PORT_ATTEMPTS = 8
+
+
+def _resolve_archon_bin() -> str:
+    """Absolute path to the `archon` CLI for the Node server to shell out to.
+
+    The server calls `archon peers` / `archon dag-graph`; if it is launched via
+    an explicit path (e.g. `.venv/bin/archon dashboard`) the venv's bin dir may
+    not be on PATH, so a bare `archon` from Node would fail. Prefer PATH, then
+    the console script sitting next to the running interpreter, then fall back
+    to a bare name (Node resolves it via its own PATH)."""
+    found = shutil.which("archon")
+    if found:
+        return found
+    sibling = Path(sys.executable).parent / "archon"
+    if sibling.exists():
+        return str(sibling)
+    return "archon"
 
 
 class ServerProcess:
@@ -58,7 +78,10 @@ class ServerProcess:
             "node", "--import", "tsx",
             "src/index.ts", "--project", str(self.project_path), "--port", str(port),
         ]
-        return subprocess.Popen(cmd, **self._spawn_kwargs)
+        # Hand the Node server an absolute path to the archon CLI it shells out
+        # to (peers / dag-graph), so it works even when archon isn't on PATH.
+        env = {**os.environ, "ARCHON_BIN": _resolve_archon_bin()}
+        return subprocess.Popen(cmd, env=env, **self._spawn_kwargs)
 
     def shutdown(self, term_timeout: float = 5.0) -> None:
         """Bring down the server cleanly: SIGTERM, wait, SIGKILL."""

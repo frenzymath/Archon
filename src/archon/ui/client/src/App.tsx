@@ -6,6 +6,7 @@ import Journal from './views/Journal';
 import DiffPlayback from './views/DiffPlayback';
 import DagView from './views/DagView';
 import Blueprint from './views/Blueprint';
+import { ProjectSwitcher } from './components/ProjectSwitcher';
 // Vite's resolveJsonModule (enabled by default) lets us import the
 // version from package.json so the badge stays in sync with releases
 // without manual updates. If you move package.json or the build setup
@@ -36,6 +37,7 @@ export default function App() {
           v{APP_VERSION}
         </span>
         {project && <span className="project-badge" title={project.path}>{project.name}</span>}
+        <ProjectSwitcher />
         <nav className="header-nav">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>

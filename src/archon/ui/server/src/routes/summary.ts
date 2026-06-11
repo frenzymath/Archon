@@ -29,10 +29,9 @@ function calculateStats(logs: LogEntry[]): AggregatedStats {
   return { totalCost, totalDuration, totalTokensIn, totalTokensOut, sessionCount: sessions.length, sessions };
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath } = paths;
-
-  fastify.get('/api/summary', async () => {
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  fastify.get('/api/summary', async (req) => {
+    const { logsPath } = req.paths;
     if (!fs.existsSync(logsPath)) return { totalCost: 0, totalDuration: 0, totalTokensIn: 0, totalTokensOut: 0, sessionCount: 0, sessions: [] };
     let allLogs: LogEntry[] = [];
     function walkJsonl(dir: string) {

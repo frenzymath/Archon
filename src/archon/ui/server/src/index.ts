@@ -24,7 +24,9 @@ import { register as registerGit } from './routes/git.js';
 import { register as registerMultilane } from './routes/multilane.js';
 import { register as registerDag } from './routes/dag.js';
 import { register as registerBlueprint } from './routes/blueprint.js';
+import { register as registerPeers } from './routes/peers.js';
 import type { ProjectPaths } from './routes/project.js';
+import { makePaths, loadPeers, allowedRoots } from './paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,11 +61,15 @@ function isWsl(): boolean {
 export async function createServer(options: { projectPath: string; port: number }) {
   const { projectPath, port } = options;
 
-  const paths: ProjectPaths = {
-    projectPath,
-    archonPath: path.join(projectPath, '.archon'),
-    logsPath: path.join(projectPath, '.archon', 'logs'),
-  };
+  const paths: ProjectPaths = makePaths(projectPath);
+
+  // Project switching: a request may target the base project or any peer it
+  // declares (`.archon/peers.yaml`), via `?project=<path>`. The allowlist is
+  // resolved once at boot (peers rarely change mid-session). Every request gets
+  // a `request.paths` — the base paths, or the validated peer's. Anything
+  // outside the allowlist is rejected, so the server can never be pointed at an
+  // arbitrary directory.
+  const allowed = allowedRoots(projectPath, loadPeers(projectPath));
 
   // `forceCloseConnections: true` makes `fastify.close()` destroy any
   // open keep-alive / websocket connections immediately instead of
@@ -74,6 +80,22 @@ export async function createServer(options: { projectPath: string; port: number 
   const fastify = Fastify({ logger: false, forceCloseConnections: true });
   await fastify.register(cors);
   await fastify.register(websocket);
+
+  // Resolve each request's project root (base, or an allowed peer via
+  // `?project=`). Routes read `request.paths` rather than the boot-time paths.
+  fastify.decorateRequest('paths', null);
+  fastify.addHook('onRequest', async (request, reply) => {
+    const requested = (request.query as { project?: string } | undefined)?.project;
+    if (requested) {
+      const root = path.resolve(requested);
+      if (!allowed.has(root)) {
+        return reply.status(403).send({ error: 'Project not in scope' });
+      }
+      request.paths = makePaths(root);
+    } else {
+      request.paths = paths;
+    }
+  });
 
   // Serve built client (SPA)
   const clientBuildPath = path.join(__dirname, '../../client/dist');
@@ -97,6 +119,7 @@ export async function createServer(options: { projectPath: string; port: number 
   registerMultilane(fastify, paths);
   registerDag(fastify, paths);
   registerBlueprint(fastify, paths);
+  registerPeers(fastify, paths);
 
   // Host selection.
   //   Native Linux/macOS → dual-stack `::` (IPV6_V6ONLY=0 accepts IPv4 too).

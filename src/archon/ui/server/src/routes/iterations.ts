@@ -91,8 +91,8 @@ function listTaskResultsArchive(iterPath: string): { name: string; size: number 
   return files;
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath, archonPath } = paths;
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths resolved per-request (base project or an allowed peer via `?project=`).
   // We deduplicate when symlinks happen to share the same slug as the
   // multilane fall-back enumeration — the symlink (if it exists) wins.
   function mergeProverFiles(
@@ -103,7 +103,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     return [...primary, ...extra.filter(e => !seen.has(e.slug))];
   }
 
-  fastify.get('/api/iterations', async () => {
+  fastify.get('/api/iterations', async (req) => {
+    const { logsPath } = req.paths;
     return listIterDirs(logsPath).map(d => {
       const meta = readMeta(logsPath, d);
       const iterPath = path.join(logsPath, d);
@@ -119,6 +120,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   });
 
   fastify.get<{ Params: { id: string } }>('/api/iterations/:id', async (req, reply) => {
+    const { logsPath, archonPath } = req.paths;
     const iterDir = req.params.id;
     if (!iterDir.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
     const meta = readMeta(logsPath, iterDir);
@@ -154,6 +156,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   });
 
   fastify.get<{ Params: { id: string; file: string } }>('/api/iterations/:id/provers/:file', async (req, reply) => {
+    const { logsPath, archonPath } = req.paths;
     const { id, file } = req.params;
     if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
     const slug = file.endsWith('.jsonl') ? file.replace(/\.jsonl$/, '') : file;
@@ -183,7 +186,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string } }>('/api/iterations/:id/refactor-directive', async (req, reply) => {
     const { id } = req.params;
     if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
-    const filePath = path.join(logsPath, id, 'refactor-directive.md');
+    const filePath = path.join(req.paths.logsPath, id, 'refactor-directive.md');
     if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'No refactor directive for this iteration' });
     return { content: readFileOr(filePath, '') };
   });
@@ -191,7 +194,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string } }>('/api/iterations/:id/refactor-report', async (req, reply) => {
     const { id } = req.params;
     if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
-    const filePath = path.join(logsPath, id, 'refactor-report.md');
+    const filePath = path.join(req.paths.logsPath, id, 'refactor-report.md');
     if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'No refactor report for this iteration' });
     return { content: readFileOr(filePath, '') };
   });
@@ -206,7 +209,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       // Sanitize: no path traversal
       const safeFile = path.basename(file);
       if (!safeFile.endsWith('.md')) return reply.status(400).send({ error: 'Only .md files supported' });
-      const filePath = path.join(logsPath, id, 'task_results-archive', safeFile);
+      const filePath = path.join(req.paths.logsPath, id, 'task_results-archive', safeFile);
       if (!fs.existsSync(filePath)) return reply.status(404).send({ error: 'Not found' });
       return { name: safeFile, content: readFileOr(filePath, '') };
     },
@@ -214,8 +217,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // ── User Alerts ─────────────────────────────────────────────────────
 
-  fastify.get('/api/to-user', async (_, reply) => {
-    const alertPath = path.join(archonPath, 'TO_USER.md');
+  fastify.get('/api/to-user', async (req) => {
+    const alertPath = path.join(req.paths.archonPath, 'TO_USER.md');
     if (!fs.existsSync(alertPath)) return { content: null };
     
     const content = fs.readFileSync(alertPath, 'utf-8').trim();

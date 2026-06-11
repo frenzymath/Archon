@@ -174,12 +174,13 @@ function readPhaseLog(logsPath: string, iteration: string, phase: string): unkno
   return entries;
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath, archonPath, logsPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths resolved per-request (base project or an allowed peer via `?project=`).
 
   /** Full commit log from the inner archon git repo */
-  fastify.get('/api/git/log', async (_, reply) => {
+  fastify.get('/api/git/log', async (req, reply) => {
+    const { projectPath, archonPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(gitDir)) return reply.status(404).send({ commits: [] });
 
     // %x01 = field separator (SOH), %x02 = record separator (STX)
@@ -415,7 +416,9 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
    * Returns { commit: null } when no inner git exists (legacy projects) — never 404s,
    * so the UI can render unconditionally without branching on status codes.
    */
-  fastify.get('/api/git/head', async () => {
+  fastify.get('/api/git/head', async (req) => {
+    const { projectPath, archonPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(gitDir)) return { commit: null };
     const raw = runGit(gitDir, projectPath, [
       'log', '-1', '--format=%H%x01%h%x01%s%x01%ai%x01%D',
@@ -440,7 +443,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     async (req, reply) => {
       const { iteration, phase } = req.params;
       if (!iteration.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration' });
-      const entries = readPhaseLog(logsPath, iteration, phase);
+      const entries = readPhaseLog(req.paths.logsPath, iteration, phase);
       return { entries };
     }
   );
@@ -458,6 +461,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Querystring: { file?: string; name?: string } }>(
     '/api/blueprint',
     async (req, reply) => {
+      const { projectPath } = req.paths;
       const { file, name } = req.query;
       if (!file || !name) return reply.status(400).send({ error: 'Missing file or name' });
 

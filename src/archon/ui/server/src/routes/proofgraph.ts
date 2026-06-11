@@ -328,11 +328,10 @@ function fileToSlug(file: string): string {
   return file.replace(/\.lean$/, '').replace(/\//g, '_');
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath: pp, archonPath: ap, logsPath: lp } = paths;
-  const gitDir = path.join(ap, 'git-dir');
-
-  fastify.get('/api/proofgraph/declarations', async () => {
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths resolved per-request (base project or an allowed peer via `?project=`).
+  fastify.get('/api/proofgraph/declarations', async (req) => {
+    const { projectPath: pp, archonPath: ap } = req.paths;
     const allD: LD[] = [];
     (function walk(dir: string) { try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) { if (!['_lake','.lake','.archon','node_modules','.git'].includes(e.name)) walk(f); } else if (e.isFile() && e.name.endsWith('.lean')) allD.push(...parseFile(f, path.relative(pp, f))); } } catch { /* */ } })(pp);
     const ed = edges(allD); const ms = getAllMilestones(ap);
@@ -353,14 +352,20 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     };
   });
 
-  fastify.get('/api/proofgraph/timeline', async () => buildTimeline(lp, pp, gitDir));
+  fastify.get('/api/proofgraph/timeline', async (req) => {
+    const { projectPath: pp, archonPath: ap, logsPath: lp } = req.paths;
+    return buildTimeline(lp, pp, path.join(ap, 'git-dir'));
+  });
 
   fastify.get<{ Params: { iteration: string } }>('/api/proofgraph/snapshot/:iteration', async (req, reply) => {
+    const { projectPath: pp, archonPath: ap, logsPath: lp } = req.paths;
     if (!req.params.iteration.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid' });
-    return buildGraphAt(lp, pp, gitDir, req.params.iteration);
+    return buildGraphAt(lp, pp, path.join(ap, 'git-dir'), req.params.iteration);
   });
 
   fastify.get<{ Params: { file: string; name: string }; Querystring: { iteration?: string } }>('/api/proofgraph/node/:file/:name', async (req) => {
+    const { projectPath: pp, archonPath: ap, logsPath: lp } = req.paths;
+    const gitDir = path.join(ap, 'git-dir');
     const file = decodeURIComponent(req.params.file), { name } = req.params, iter = req.query.iteration;
     const decl = iter ? findDeclAt(lp, pp, gitDir, iter, file, name) : parseFile(path.join(pp, file), file).find(d => d.name === name);
     return {
@@ -371,6 +376,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // ── Prover log endpoint ───────────────────────────────────────────
   fastify.get<{ Params: { file: string; iteration: string } }>('/api/proofgraph/logs/:file/:iteration', async (req, reply) => {
+    const { logsPath: lp } = req.paths;
     const file = decodeURIComponent(req.params.file);
     const iteration = req.params.iteration;
     if (!iteration.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration' });

@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectPaths } from './project.js';
+import { ARCHON_BIN } from '../paths.js';
 import { runGit, parseIter } from './git.js';
 
 interface DagNode {
@@ -35,7 +36,7 @@ function computeViaCli(projectPath: string, commit?: string): DagGraph | null {
   // Historical builds run in-memory and never write .leandag/ — see the
   // Python build_graph_at_commit; this keeps a running loop's live graph intact.
   if (commit) args.push('--commit', commit);
-  const r = spawnSync('archon', args, {
+  const r = spawnSync(ARCHON_BIN, args, {
     cwd: projectPath,
     encoding: 'utf-8',
     timeout: 60000,
@@ -69,21 +70,22 @@ export interface FileMod {
   phase?: string;
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath, archonPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
-
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
   // Per-file "last modified by which archon iteration" map, derived from the
   // inner git in one `log --name-only` walk (newest-first; first appearance
   // wins). Backs the DAG node panel's clickable iter-NNN chips. Cached per
-  // HEAD — the inner git only moves between iterations.
-  let lastModCache: { head: string; files: Record<string, FileMod> } | null = null;
+  // (project, HEAD) — the inner git only moves between iterations, and the
+  // request may target a peer project via `?project=`.
+  let lastModCache: { key: string; files: Record<string, FileMod> } | null = null;
 
-  fastify.get('/api/dag/last-modified', async () => {
+  fastify.get('/api/dag/last-modified', async (req) => {
+    const { projectPath, archonPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(gitDir)) return { files: {} };
     const head = runGit(gitDir, projectPath, ['rev-parse', 'HEAD']).trim();
     if (!head) return { files: {} };
-    if (lastModCache?.head === head) return { files: lastModCache.files };
+    const key = `${projectPath}@${head}`;
+    if (lastModCache?.key === key) return { files: lastModCache.files };
 
     // \x01 marks commit headers so file lines can't be confused with them.
     const out = runGit(gitDir, projectPath, [
@@ -100,11 +102,12 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
         files[line] = cur;
       }
     }
-    lastModCache = { head, files };
+    lastModCache = { key, files };
     return { files };
   });
 
   fastify.get<{ Querystring: { commit?: string } }>('/api/dag', async (req) => {
+    const { projectPath } = req.paths;
     const commit = req.query.commit?.trim();
     if (commit) {
       // Time-travel view: build the DAG at this commit fresh, in-memory. Do NOT

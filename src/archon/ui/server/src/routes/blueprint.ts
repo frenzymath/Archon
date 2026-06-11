@@ -67,13 +67,12 @@ function stripHeading(tex: string): string {
   return tex.replace(/\\(?:chapter|section)\*?\s*\{[^{}]*\}\s*/, '');
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath, archonPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
-
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
   fastify.get<{ Querystring: { commit?: string } }>(
     '/api/blueprint/chapters',
     async (req) => {
+      const { projectPath, archonPath } = req.paths;
+      const gitDir = path.join(archonPath, 'git-dir');
       const commit = req.query.commit?.trim() || null;
       const empty: BlueprintChaptersResponse = {
         chapters: [], macros: {}, docTitle: null, docAuthor: null,

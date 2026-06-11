@@ -172,9 +172,10 @@ interface FileSnapshotSummary {
   totalSteps: number;
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath, archonPath, projectPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths are resolved per-request from `req.paths` (set by the onRequest hook
+  // in index.ts from the `?project=` scope), so every handler reads the
+  // currently-selected peer project rather than the boot-time base project.
 
   /** Sanitize URL params to prevent path traversal */
   const safe = (s: string) => path.basename(s);
@@ -188,7 +189,9 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
    * (even those without a snapshots/<slug> dir) so the timeline can later
    * gap-fill from git or synthesise empty snapshots.
    */
-  fastify.get('/api/snapshot-files', async () => {
+  fastify.get('/api/snapshot-files', async (req) => {
+    const { logsPath, archonPath, projectPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(logsPath)) return [];
 
     const iterDirs = fs.readdirSync(logsPath)
@@ -288,6 +291,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { slug: string } }>(
     '/api/snapshot-files/:slug/timeline',
     async (req, reply) => {
+      const { logsPath, archonPath, projectPath } = req.paths;
+      const gitDir = path.join(archonPath, 'git-dir');
       const { slug } = req.params;
       if (!fs.existsSync(logsPath)) return [];
       const safeSlug = safe(slug);
@@ -437,6 +442,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { slug: string; iteration: string; file: string } }>(
     '/api/snapshot-files/:slug/:iteration/:file',
     async (req, reply) => {
+      const { logsPath, archonPath, projectPath } = req.paths;
+      const gitDir = path.join(archonPath, 'git-dir');
       const { slug, iteration, file: fileName } = req.params;
       const safeSlug = safe(slug);
       const safeIter = safe(iteration);
@@ -488,6 +495,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string } }>(
     '/api/iterations/:id/snapshots',
     async (req, reply) => {
+      const { logsPath } = req.paths;
       const { id } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -523,6 +531,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string; prover: string } }>(
     '/api/iterations/:id/snapshots/:prover',
     async (req, reply) => {
+      const { logsPath } = req.paths;
       const { id, prover } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -542,6 +551,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string; prover: string; file: string } }>(
     '/api/iterations/:id/snapshots/:prover/:file',
     async (req, reply) => {
+      const { logsPath } = req.paths;
       const { id, prover, file: fileName } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -557,6 +567,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string; prover: string; step: string } }>(
     '/api/iterations/:id/snapshots/:prover/diff/:step',
     async (req, reply) => {
+      const { logsPath } = req.paths;
       const { id, prover, step: stepStr } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -595,6 +606,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string; prover: string } }>(
     '/api/iterations/:id/snapshots/:prover/diff-all',
     async (req, reply) => {
+      const { logsPath } = req.paths;
       const { id, prover } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -669,6 +681,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { id: string; prover: string } }>(
     '/api/iterations/:id/snapshots/:prover/meta-summary',
     async (req, reply) => {
+      const { logsPath, archonPath, projectPath } = req.paths;
+      const gitDir = path.join(archonPath, 'git-dir');
       const { id, prover } = req.params;
       if (!id.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration id' });
 
@@ -809,6 +823,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Params: { slug: string } }>(
     '/api/snapshot-files/:slug/metrics-history',
     async (req) => {
+      const { logsPath } = req.paths;
       const slug = safe(req.params.slug);
       if (!fs.existsSync(logsPath)) return [];
 
