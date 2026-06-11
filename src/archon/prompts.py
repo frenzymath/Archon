@@ -1181,6 +1181,96 @@ def _prover_dag_hint_block(project_path: Path) -> str:
         """)
 
 
+def _peers_block(project_path: Path) -> str:
+    """Inject read-only awareness of peer projects (``.archon/peers.yaml``).
+
+    Lists peer Archon projects in scope and, when their DAGs are built,
+    surfaces declarations this project still needs that a peer already proved
+    (matched by fully-qualified Lean name). Purely read-only: nothing is merged.
+    Degrades to an empty string when no peers are configured. Best-effort —
+    never raises into the prompt.
+    """
+    try:
+        from archon.commands.tooling import peers as peers_mod
+        peers = peers_mod.resolve_peers(project_path)
+    except Exception:
+        return ""
+    if not peers:
+        return ""
+
+    # What this project still needs (its own DAG, read-only — no rebuild).
+    own_dag = peers_mod.read_peer_dag(str(project_path))
+    needed = peers_mod.needed_lean_names(own_dag) if own_dag else set()
+
+    lines = [
+        "",
+        "## Peer projects (read-only awareness)",
+        "",
+        f"{len(peers)} peer project(s) are in scope (declared in "
+        "`.archon/peers.yaml`). You may **read** their graphs to reuse "
+        "infrastructure and avoid duplicating work — never edit them:",
+        "",
+    ]
+    for p in peers:
+        tag = "" if p.has_dag else "  *(DAG not built yet)*"
+        lines.append(f"- **{p.name}** — `{p.path}`{tag}")
+    lines += [
+        "",
+        "**Walk a peer's graph read-only** with `archon dag-query <verb> "
+        "--project-path <peer> [--json]`. It reads the peer's cached "
+        "`.leandag/dag.json` — it never rebuilds or writes anything in the peer. "
+        "Verbs: `frontier, node, ancestors, cone, interface, overlap, unproved, "
+        "sorry, gaps, needs-leanok, needs-lean, unmatched, leaves, roots, all`. "
+        "E.g.:",
+        "```bash",
+        "archon dag-query node      --node <label> --project-path <peer> --json  # one decl: statement, proof, deps, status",
+        "archon dag-query interface --node <label> --project-path <peer> --json  # the API a decl exposes to its users",
+        "archon dag-query cone      --node <label> --project-path <peer> --json  # its full dependency closure",
+        "```",
+        "**Read their source directly (read-only)** once a query points you at a "
+        "file: open the peer's `*.lean` for the Lean proof and "
+        "`blueprint/src/**.tex` for the informal write-up, then port it here. "
+        "Reuse the *strategy / structure*; the proof must still compile in THIS "
+        "project (different imports, Mathlib pin, namespaces).",
+        "",
+        "**Read-only, always.** You may read any peer file and query its cached "
+        "graph — nothing more. Never write to a peer path, and never run a "
+        "graph-mutating command (`leandag build`, `archon dag-graph`) against a "
+        "peer (it would touch their `.leandag/`). Writes outside this project "
+        "are rejected anyway.",
+    ]
+
+    # Cross-project matches: declarations you still need, already proved next door.
+    _CAP = 20
+    any_match = False
+    for p in peers:
+        if not p.has_dag or not needed:
+            continue
+        dag = peers_mod.read_peer_dag(p.path)
+        if not dag:
+            continue
+        hits = sorted(peers_mod.available_lean_names(dag) & needed)
+        if not hits:
+            continue
+        if not any_match:
+            lines += [
+                "",
+                "**Already available from peers** — declarations you still need "
+                "that a peer has already proved (by Lean name). Prefer reusing or "
+                "adapting their approach (read their blueprint/proof via "
+                "`dag-query`) over re-deriving from scratch. Verify the statement "
+                "matches before relying on it — same name can hide a different "
+                "definition:",
+                "",
+            ]
+            any_match = True
+        shown = hits[:_CAP]
+        extra = f" … (+{len(hits) - _CAP} more)" if len(hits) > _CAP else ""
+        lines.append(f"- from **{p.name}**: " + ", ".join(f"`{h}`" for h in shown) + extra)
+
+    return "\n".join(lines) + "\n"
+
+
 def build_plan_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int,
@@ -1249,6 +1339,7 @@ def build_plan_prompt(
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
     frontier_block = _blueprint_frontier_block(project_path)
+    peers_block = _peers_block(project_path)
     memory_block = _archon_memory_block(state_dir, writable=True)
     protected_block = _protected_block(project_path)
 
@@ -1265,7 +1356,7 @@ def build_plan_prompt(
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
         - Automated validation notes from the previous iter's plan-validate (dropped/blocked/deferred objectives, format corrections) are injected below under `## Automated validation notes` when there were any. These are loop-generated, NOT user input — the user-authored `USER_HINTS.md` never carries them.
         - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
-        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs, Lean ↔ blueprint coverage debt) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + auto_notes_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs, Lean ↔ blueprint coverage debt) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + auto_notes_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + peers_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
 
 
 def _lean_files_block(project_path: Path) -> str:
@@ -1447,6 +1538,7 @@ def build_dag_prompt(
     # place to seed durable cross-iteration knowledge (Mathlib gaps, dead
     # ends, protected invariants) that the later plan agent reads.
     memory_block = _archon_memory_block(state_dir, writable=True)
+    peers_block = _peers_block(project_path)
 
     return dedent(f"""\
         You are the DAG elaboration agent for project '{project_name}'.
@@ -1463,7 +1555,7 @@ def build_dag_prompt(
         - The blueprint-doctor findings from the prior iter are injected below (when present).
         - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
         - The current DAG_STATUS.md is injected below.
-        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + memory_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + _protected_block(project_path) + sidecar_block + catalog_block
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + memory_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + peers_block + _protected_block(project_path) + sidecar_block + catalog_block
 
 
 def build_prover_prompt(
@@ -1487,7 +1579,7 @@ def build_prover_prompt(
             Project state directory: {state_dir}
             Read {state_dir}/AGENTS.md for your role, then read {state_dir}/PROGRESS.md.
             All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-            + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + mode_block \
+            + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
     stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
@@ -1497,7 +1589,7 @@ def build_prover_prompt(
         Project state directory: {state_dir}
         Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
-        + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+        + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
@@ -1544,7 +1636,7 @@ def build_parallel_prover_prompt(
             - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
             - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
             - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-            + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + mode_block \
+            + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + mode_block \
             + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
     stage_path = normalize_stage_for_prompt_path(stage)
@@ -1562,7 +1654,7 @@ def build_parallel_prover_prompt(
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
         - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
-        + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+        + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(
