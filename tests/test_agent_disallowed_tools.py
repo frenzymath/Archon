@@ -49,6 +49,11 @@ class DisallowedToolsTest(unittest.TestCase):
         self.assertIn("Agent", DISALLOWED_NATIVE_TOOLS)
         self.assertIn("ScheduleWakeup", DISALLOWED_NATIVE_TOOLS)
         self.assertIn("Task", DISALLOWED_NATIVE_TOOLS)
+        # Monitor must stay AVAILABLE: dag.md/plan.md use a blocking Monitor
+        # until-loop as the in-turn wait for auto-backgrounded dispatches
+        # (foreground sleep is harness-blocked). Disallowing it broke claude-p
+        # + subagents — guard against re-adding it.
+        self.assertNotIn("Monitor", DISALLOWED_NATIVE_TOOLS)
 
     def test_build_flags_includes_disallowed(self) -> None:
         flags = ClaudeAgent(model="opus")._build_flags("opus")

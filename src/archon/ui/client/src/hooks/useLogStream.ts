@@ -8,6 +8,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { LogEntry } from '../types';
+import { getProjectScope } from '../lib/projectScope';
 
 const POLL_INTERVAL = 3000;
 
@@ -74,7 +75,11 @@ export function useLogStream(selectedFile: string): UseLogStreamResult {
     }
 
     // --- WebSocket ---
-    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/log-stream/${selectedFile}`;
+    // Scope the stream to the selected peer project (the fetch wrapper only
+    // covers REST calls, not WebSocket URLs).
+    const scope = getProjectScope();
+    const scopeQ = scope ? `?project=${encodeURIComponent(scope)}` : '';
+    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/log-stream/${selectedFile}${scopeQ}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
