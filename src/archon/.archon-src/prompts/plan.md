@@ -243,13 +243,22 @@ python3 .claude/tools/archon-subagent.py \
 
 `ARCHON_ITER_NUM` is set by the loop (no `--iter-num` needed). The wrapper prints a one-line status and exits 0 on success.
 
-**Treat each dispatch as blocking.** Don't deliberately pass `run_in_background: true`. The wrapper is genuinely synchronous (it returns only once the child finishes and its report is written), but a dispatch is long-running, so the harness may auto-background it and hand you a task ID — that's expected. Either way, await the task / poll for `.archon/task_results/<name>-<slug>.md` before acting; never continue planning as if a still-running dispatch had returned.
+**A dispatch is a BLOCKING Bash call — you wait by staying inside it, not by watching it.** `archon-subagent.py` is synchronous: the Bash call returns only once the child finishes and its report is written. A long dispatch may be auto-backgrounded with a task ID — that's fine; **you wait for that task's result before doing anything else.** The wait is the dispatch call itself. **Do NOT use the `Monitor` tool to wait** — `Monitor` is non-blocking (it returns immediately telling you to "keep working"), so your turn ends and the subagents are abandoned mid-run. **Do NOT use foreground `sleep` or `until … ; do sleep … ; done`** — the harness blocks `sleep`. Never read a report, start the next phase, or end your turn as if a still-running dispatch had returned.
 
 **Directives must be fully self-contained** — subagents don't read `PROGRESS.md` / `STRATEGY.md` / phase-agent state, only what you tell them (each descriptor documents its directive format).
 
 **Write-domain** globs constrain what the subagent (and any descendants) may modify — e.g. `'Algebra/**'`, `'Algebra/WLocal.lean'`, `'task_results/**'` for read-only subagents; children's declared domains must be a subset of yours.
 
-**Parallelism:** dispatch multiple subagents concurrently by issuing multiple Bash calls in one message (the semaphore caps concurrency at `loop.max_parallel`). You may invoke a subagent multiple times per iter (distinct slugs) when justified.
+**Parallelism — one blocking Bash call that runs the whole wave with `& … & wait`.** To run independent subagents concurrently, put **all** their dispatches in a **single Bash call**, each backgrounded with `&`, and end with `wait`:
+
+```
+python3 .claude/tools/archon-subagent.py --name A --slug … --directive-file … &
+python3 .claude/tools/archon-subagent.py --name B --slug … --directive-file … &
+python3 .claude/tools/archon-subagent.py --name C --slug … --directive-file … &
+wait
+```
+
+`wait` makes the one Bash call **block until every subagent has finished** (the semaphore caps real concurrency at `loop.max_parallel`; extras queue). This is the whole wave as a *single* blocking dispatch — you wait for it exactly like one dispatch, and only proceed once it returns. **Do NOT fire them as separate background Bash calls and do NOT use `Monitor`** — that ends your turn before they finish (the usual reason "four in parallel" abandons the wave). The *only* subagents you serialize are ones that **write the same file**: put those in separate, sequential `& … & wait` calls (or plain sequential calls) so they don't clobber each other. You may invoke a subagent multiple times per iter (distinct slugs) when justified.
 
 **After each returns** (report at `task_results/<name>-<slug>.md`, or `.../<parent-slug>/<name>-<slug>.md` when nested; auto-archived to `logs/iter-NNN/`): (1) read the full report (the stdout summary is compressed); (2) spot-check load-bearing claims (routine sorry-count/compile checks are already done by the loop); (3) update `STRATEGY.md` if findings change the arc; (4) update `PROGRESS.md` with newly-enabled objectives.
 

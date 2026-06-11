@@ -83,6 +83,20 @@ DEFAULT_MODEL = "opus"
 # (The stream parser already *detects* this as ``[session ended
 # mid-dispatch]``; blocking the tools is what *prevents* it.)
 #
+# ``Monitor`` is deliberately NOT disallowed. Under claude-p a long dispatch
+# auto-backgrounds, so the agent MUST wait in-turn for the report files — and
+# ``prompts/dag.md`` / ``prompts/plan.md`` direct it to do exactly that with a
+# blocking ``Monitor`` until-loop over ``.archon/task_results/…`` (foreground
+# ``sleep`` is harness-blocked, so Monitor is the only sanctioned in-turn wait).
+# Blocking Monitor removes that primitive and forces a *worse* improvisation —
+# a background bash waiter that returns immediately and lets the turn end — so
+# disallowing it BREAKS claude-p + subagents rather than fixing it. The genuine
+# turn-enders are ``Agent``/``Task`` (spawn-and-return) and ``ScheduleWakeup``
+# (async wakeup with no blocking mode); those stay banned. The earlier
+# fable-5 failure was Monitor used in its async event-watch mode + ending the
+# turn anyway — a prompt-discipline problem ("never end your turn until the
+# reports exist"), not a reason to remove the blocking wait everything relies on.
+#
 # ``Task`` is included defensively to cover CLI builds that name the
 # spawner ``Task`` rather than ``Agent``; archon never relies on a native
 # task-checklist tool, so disallowing it is harmless. Bash/Read/Write/
@@ -828,6 +842,15 @@ class ClaudePBackend(ClaudeBackend):
         # so a stock-upstream build without it still runs.
         if _claude_p_supports("--trust-workspace"):
             cmd.append("--trust-workspace")
+        # Give each claude-p its own throwaway CLAUDE_CONFIG_DIR (symlinking the
+        # base's auth/plugins/caches, but a fresh session store). Without this,
+        # two claude-p TUIs sharing one config dir — a dispatcher and the
+        # subagents it spawns — clash: the non-first session never persists, so
+        # --stream-session-events stays empty and the dashboard shows no
+        # subagent logs (the run itself still completes). Feature-detected so an
+        # older claude-p without the flag still runs.
+        if _claude_p_supports("--isolate-config-dir"):
+            cmd.append("--isolate-config-dir")
         # Full live logging: tail Claude Code's session JSONL and re-emit
         # real assistant/user events (text + tool calls + results) in
         # stream-json, which our parser already understands. Prefer it over
@@ -1494,6 +1517,24 @@ class ClaudeAgent:
         session_end = read_last_session_end(jsonl)
         if session_end_indicates_success(session_end):
             return RunOutcome.SUCCESS
+        # A negative returncode means the process was killed by a signal
+        # (Popen reports -N; a shell wrapper would surface 128+N, e.g. 137 for
+        # SIGKILL). That's an *external* kill — OOM, a parent/loop watchdog
+        # cascade, or a manual stop — not the agent failing on its own. Call it
+        # out so "exit 137 with no report" isn't mistaken for a crash.
+        if result.returncode is not None and result.returncode < 0:
+            sig_num = -result.returncode
+            try:
+                sig_name = signal.Signals(sig_num).name
+            except ValueError:
+                sig_name = f"signal {sig_num}"
+            log.warn(
+                f"agent killed by {sig_name} (exit {128 + sig_num}) on attempt "
+                f"{attempt} with no success marker — an external kill (OOM, a "
+                f"parent/loop watchdog cascade, or a manual stop), not a clean "
+                f"failure. Check the .claude-p-raw.log / output files: the run "
+                f"may have produced its result before the kill."
+            )
         # Refine the failure so the retry loop can act on it.
         kind = session_end_failure_kind(session_end)
         if kind == 'overloaded':
@@ -1665,8 +1706,12 @@ def supervise_streamed_run(
                 elif time.monotonic() - last_activity > idle_timeout_s:
                     idle_timeout_hit = True
                     log.warn(
-                        f"No JSONL activity for {idle_timeout_s}s on "
-                        f"attempt {attempt}; terminating agent."
+                        f"idle-timeout (watchdog kill, NOT a crash): the agent "
+                        f"produced no JSONL output for {idle_timeout_s}s on "
+                        f"attempt {attempt} — killing it. Under claude-p the "
+                        f"structured stream can stall even while the run makes "
+                        f"progress; check the .claude-p-raw.log for the live "
+                        f"screen before treating this as a real failure."
                     )
                     if on_idle_timeout is not None:
                         on_idle_timeout(idle_timeout_s, attempt)

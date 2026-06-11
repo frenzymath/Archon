@@ -12,7 +12,7 @@ dependencies = [
     "pydantic",
     "PyYAML",
     "leandag @ git+https://github.com/AxelDlv00/LeanDAG.git@v0.1.0",
-    "claude-p @ git+https://github.com/AxelDlv00/claude-p.git@v0.1.4",
+    "claude-p @ git+https://github.com/AxelDlv00/claude-p.git@v0.1.5",
 ]
 
 [project.scripts]
