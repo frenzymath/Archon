@@ -34,7 +34,7 @@ for strict JSON):
 
     "claude_backend": "claude-p",  // how Claude Code is launched — see §1
     "harness": "codex",            // engine for every role + subagent — see §2 (empty = Claude Code)
-    "roles": { "plan": "claude-code", "prover": "codex" }  // per-role override — see §2
+    "roles": { "plan": "claude-code", "prover": "codex" }  // per-role harness override — see §2
   },
 
   "subagents": {
@@ -137,6 +137,34 @@ A built-in `codex` harness ships, so you can route to Codex without defining one
 yourself. To customize (or make a claude-code variant), copy the
 `_my_harness_example` block in `.archon/config.json`, rename it, and reference it.
 
+### Harness model selection
+
+The `model` field belongs on the harness when you want a role to use a
+specific model. For Claude Code harnesses, this is the model alias or full model
+id passed to Claude Code. For Codex harnesses, it is the Codex/gateway model id.
+
+For example, to run only the prover role on Anthropic Fable while leaving plan
+and review on the loop default:
+
+```json
+{
+  "loop": {
+    "model": "opus",
+    "roles": { "prover": "fable-prover" }
+  },
+  "harnesses": {
+    "fable-prover": {
+      "runner": "claude-code",
+      "model": "fable"
+    }
+  }
+}
+```
+
+Do **not** write `"roles": { "prover": "fable" }` unless you have also defined
+a harness named `fable`. A bare string under `loop.roles.<role>` is always a
+**harness name**, not a model alias.
+
 ### One-line global default (everything uses codex)
 
 To make **every** role *and* every subagent use one engine, set a single key —
@@ -168,6 +196,20 @@ per-lane harness and are not affected by `loop.harness`.)
 
 **Subagent precedence:** `subagents.<name>.harness` > `loop.harness` >
 the subagent's own frontmatter `harness:` > `claude-code`.
+
+> ⚠️ **Gotcha — role strings are harness names.** A *bare string* under
+> `loop.roles.<role>` selects a harness. It does not select a model. To use a
+> different model for one role, define a harness with that `model`, then point
+> the role at the harness:
+>
+> ```json
+> {
+>   "loop": { "roles": { "prover": "fable-prover" } },
+>   "harnesses": {
+>     "fable-prover": { "runner": "claude-code", "model": "fable" }
+>   }
+> }
+> ```
 
 > ⚠️ **Gotcha — object form for harnesses.** A *bare string* under
 > `subagents.<name>` is interpreted as a **model alias**, not a harness:

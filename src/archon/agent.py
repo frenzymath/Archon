@@ -83,19 +83,24 @@ DEFAULT_MODEL = "opus"
 # (The stream parser already *detects* this as ``[session ended
 # mid-dispatch]``; blocking the tools is what *prevents* it.)
 #
-# ``Monitor`` is deliberately NOT disallowed. Under claude-p a long dispatch
-# auto-backgrounds, so the agent MUST wait in-turn for the report files — and
-# ``prompts/dag.md`` / ``prompts/plan.md`` direct it to do exactly that with a
-# blocking ``Monitor`` until-loop over ``.archon/task_results/…`` (foreground
-# ``sleep`` is harness-blocked, so Monitor is the only sanctioned in-turn wait).
-# Blocking Monitor removes that primitive and forces a *worse* improvisation —
-# a background bash waiter that returns immediately and lets the turn end — so
-# disallowing it BREAKS claude-p + subagents rather than fixing it. The genuine
-# turn-enders are ``Agent``/``Task`` (spawn-and-return) and ``ScheduleWakeup``
-# (async wakeup with no blocking mode); those stay banned. The earlier
-# fable-5 failure was Monitor used in its async event-watch mode + ending the
-# turn anyway — a prompt-discipline problem ("never end your turn until the
-# reports exist"), not a reason to remove the blocking wait everything relies on.
+# The actual in-turn wait is *staying inside the blocking foreground dispatch
+# Bash call*: ``archon-subagent.py`` is synchronous (``subprocess.run``), and
+# ``BASH_FOREGROUND_TIMEOUT_MS`` (below) raises the auto-background ceiling to
+# 30 min so a normal dispatch — including a ``& … & wait`` wave — stays
+# foreground and holds the turn open until every child has written its report.
+# ``prompts/{plan,dag,review}.md`` direct the agent to that pattern and to read
+# the reports only *after* the call returns, all in the one-shot turn (there is
+# no resume runtime / "next turn").
+#
+# ``Monitor`` is NOT a wait primitive here: it streams events and returns
+# control immediately ("keep working"), so an agent that "waits" with Monitor
+# ends its turn with the dispatch still in flight — the historical fable-5
+# failure. The prompts therefore forbid using it to wait. It is left out of the
+# disallow list only because nothing in the loop relies on it and the real
+# primitives (Bash/Read/Write/Edit) are unaffected; if prompt discipline ever
+# proves insufficient, adding ``Monitor`` here is a safe further hardening.
+# The genuine turn-enders are ``Agent``/``Task`` (spawn-and-return) and
+# ``ScheduleWakeup`` (async wakeup with no blocking mode); those stay banned.
 #
 # ``Task`` is included defensively to cover CLI builds that name the
 # spawner ``Task`` rather than ``Agent``; archon never relies on a native

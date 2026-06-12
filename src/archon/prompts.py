@@ -1325,7 +1325,7 @@ def build_plan_prompt(
 
         HARD RULE — refactors:
         - You MUST NOT write to {state_dir}/REFACTOR_DIRECTIVE.md. That file is a leftover from an older Archon flow and is only used by the interactive `archon refactor draft` command the mathematician runs by hand.
-        - The autonomous loop's way to refactor is to invoke the `refactor` subagent via the Agent tool, passing the directive INLINE in the prompt (see prompts/plan.md § "Subagent delegation"). The directive is never staged in a file.
+        - The autonomous loop's way to refactor is to dispatch the `refactor` subagent the same way as any other subagent: write its directive to `.archon/logs/iter-NNN/refactor-<slug>-directive.md`, then run the blocking `python3 .claude/tools/archon-subagent.py --name refactor --slug <slug> --directive-file … --write-domain '<glob>'` Bash call (see prompts/plan.md § "Subagent delegation"). The native `Agent`/`Task` tool is disabled — do NOT try to invoke the subagent through it. The per-iter `logs/iter-NNN/` directive file is correct; the standalone `REFACTOR_DIRECTIVE.md` is the deprecated flow to avoid.
         - If the existing {state_dir}/REFACTOR_DIRECTIVE.md, STRATEGY.md, task_pending.md, or PROGRESS.md contain references to the old REFACTOR_DIRECTIVE.md flow (e.g. "write the directive then the refactor agent will pick it up"), treat those as historical noise: prune them when you rewrite those files, and do NOT reproduce that pattern this iteration.""")
 
     sidecar_block = _iter_sidecar_context_block(
