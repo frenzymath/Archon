@@ -10,7 +10,11 @@ export interface LeanMetrics {
   axioms: number;        // axiom declarations
 }
 
-/** Count various metrics from Lean source text in a single pass. */
+/** Count various metrics from Lean source text.
+ *
+ * `sorry` occurrences are counted via `countSorryInLean`, so this performs
+ * an extra scan over the content before the line-metrics pass.
+ */
 export function countLeanMetrics(content: string): LeanMetrics {
   const sorries = countSorryInLean(content).length;
 

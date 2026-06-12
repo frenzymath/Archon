@@ -216,6 +216,12 @@ class BuildRegistryTest(unittest.TestCase):
         self.assertIn("on", r)
         self.assertIn("off", r)
 
+    def test_enabled_rejects_non_star_string(self):
+        """Avoid treating an accidental string as a character allowlist."""
+        _write_descriptor(self.project_subdir, "oops", {"name": "oops"})
+        with self.assertRaises(TypeError):
+            build_registry(self.project, enabled="oops")
+
     def test_registry_interface(self):
         _write_descriptor(self.project_subdir, "x", {"name": "x"})
         _write_descriptor(self.project_subdir, "y", {"name": "y"})

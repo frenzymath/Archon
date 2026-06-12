@@ -32,7 +32,7 @@ This module catches the case deterministically:
    dispatch + the file-level locking the loop already does.
 
 The intent is identical to the dispatch cap: warn the planner loudly,
-queue the deferred files into ``USER_HINTS.md`` so the next plan agent
+queue the deferred files into ``AUTO_NOTES.md`` so the next plan agent
 re-prioritizes from a clean slate, and slice the dispatch list at the
 runner as a deterministic safety net.
 """
@@ -253,7 +253,7 @@ def filter_objectives_for_blocked_deps(
     for graph lookup.
 
     ``drop`` is ``[(dropped_file, [blocked_deps...])]`` so the caller
-    can render a useful USER_HINTS message ("Foo.lean dropped because
+    can render a useful AUTO_NOTES message ("Foo.lean dropped because
     it imports Bar.lean which doesn't compile").
 
     A blocked file that's *itself* an objective is presumed-being-fixed

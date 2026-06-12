@@ -308,7 +308,7 @@ def auto_fix_objectives(
     parse if the heading were right, rename the heading in place. Any
     case the rewrites can't fix falls through with an empty
     ``objectives`` list so the caller (``validate_plan_output``) can log
-    a corrective hint for the next plan agent and skip prover dispatch.
+    a corrective auto-note for the next plan agent and skip prover dispatch.
     """
     objectives = parse_objective_files(progress_file, project_path)
     if objectives or not progress_file.exists():
@@ -318,7 +318,7 @@ def auto_fix_objectives(
 
     # If the canonical heading already exists but produced no
     # objectives, no rename will help — the issue is content, not
-    # heading. Fall through to caller's USER_HINTS feedback path.
+    # heading. Fall through to caller's AUTO_NOTES feedback path.
     if "## Current Objectives" in text:
         return [], []
 

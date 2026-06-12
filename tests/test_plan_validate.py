@@ -5,8 +5,8 @@ Covers:
 * The intentional no-prover skip marker is recognized inside
   ``## Current Objectives`` and treated as a legitimate state.
 * Without the marker (and no parseable objectives), the validator
-  appends a discuss-format hint and returns False.
-* The hint format is single-line, discuss-compatible.
+  appends a discuss-format auto-note and returns False.
+* The auto-note format is single-line, discuss-compatible.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 
 from archon.commands.loop.plan_validate import (
-    _append_hint,
-    _append_overcap_hint,
+    _append_parse_failure_auto_note,
+    _append_overcap_auto_note,
     _has_intentional_skip_marker,
     _INTENTIONAL_SKIP_RE,
     _rel_to_project,
@@ -103,12 +103,12 @@ class IntentionalSkipRegexTest(unittest.TestCase):
             )
 
 
-class AppendHintFormatTest(unittest.TestCase):
-    def test_hint_is_discuss_format_single_line(self):
+class AppendAutoNoteFormatTest(unittest.TestCase):
+    def test_auto_note_is_discuss_format_single_line(self):
         with tempfile.TemporaryDirectory() as d:
-            hints = Path(d) / "USER_HINTS.md"
-            _append_hint(hints)
-            body = hints.read_text(encoding="utf-8")
+            notes = Path(d) / "AUTO_NOTES.md"
+            _append_parse_failure_auto_note(notes)
+            body = notes.read_text(encoding="utf-8")
             # Should contain a single discuss-format line `- [ts] ...`.
             lines = [
                 line for line in body.splitlines()
@@ -123,30 +123,30 @@ class AppendHintFormatTest(unittest.TestCase):
             # And carries the archon[plan-validate] tag for discovery.
             self.assertIn("archon[plan-validate]", lines[0])
 
-    def test_hint_appends_to_existing_content(self):
+    def test_auto_note_appends_to_existing_content(self):
         with tempfile.TemporaryDirectory() as d:
-            hints = Path(d) / "USER_HINTS.md"
-            hints.write_text("# User Hints\n\n", encoding="utf-8")
-            _append_hint(hints)
-            body = hints.read_text(encoding="utf-8")
-            self.assertTrue(body.startswith("# User Hints"))
+            notes = Path(d) / "AUTO_NOTES.md"
+            notes.write_text("# Auto Notes\n\n", encoding="utf-8")
+            _append_parse_failure_auto_note(notes)
+            body = notes.read_text(encoding="utf-8")
+            self.assertTrue(body.startswith("# Auto Notes"))
             self.assertIn("archon[plan-validate]", body)
 
 
-class AppendOvercapHintFormatTest(unittest.TestCase):
-    """The over-cap hint must list every deferred file so the next plan
+class AppendOvercapAutoNoteFormatTest(unittest.TestCase):
+    """The over-cap auto-note must list every deferred file so the next plan
     agent can re-prioritize without round-tripping through meta.json."""
 
-    def test_hint_lists_deferred_files(self):
+    def test_auto_note_lists_deferred_files(self):
         with tempfile.TemporaryDirectory() as d:
-            hints = Path(d) / "USER_HINTS.md"
-            _append_overcap_hint(
-                hints,
+            notes = Path(d) / "AUTO_NOTES.md"
+            _append_overcap_auto_note(
+                notes,
                 cap=10,
                 proposed=13,
                 deferred_rels=["Foo.lean", "Bar/Baz.lean", "Quux.lean"],
             )
-            body = hints.read_text(encoding="utf-8")
+            body = notes.read_text(encoding="utf-8")
             self.assertIn("over the dispatch cap of 10", body)
             self.assertIn("13 objectives", body)
             self.assertIn("- Foo.lean", body)
@@ -160,15 +160,15 @@ class AppendOvercapHintFormatTest(unittest.TestCase):
                 r"archon\[plan-validate\]:",
             )
 
-    def test_hint_appends_to_existing_content(self):
+    def test_auto_note_appends_to_existing_content(self):
         with tempfile.TemporaryDirectory() as d:
-            hints = Path(d) / "USER_HINTS.md"
-            hints.write_text("# User Hints\n\nprior content\n", encoding="utf-8")
-            _append_overcap_hint(
-                hints, cap=10, proposed=11, deferred_rels=["Foo.lean"],
+            notes = Path(d) / "AUTO_NOTES.md"
+            notes.write_text("# Auto Notes\n\nprior content\n", encoding="utf-8")
+            _append_overcap_auto_note(
+                notes, cap=10, proposed=11, deferred_rels=["Foo.lean"],
             )
-            body = hints.read_text(encoding="utf-8")
-            self.assertTrue(body.startswith("# User Hints"))
+            body = notes.read_text(encoding="utf-8")
+            self.assertTrue(body.startswith("# Auto Notes"))
             self.assertIn("prior content", body)
             self.assertIn("Foo.lean", body)
 
@@ -195,7 +195,7 @@ class RelToProjectTest(unittest.TestCase):
 
 
 class ValidatePlanOutputOvercapTest(unittest.TestCase):
-    """Integration: validate_plan_output truncates dispatch + hints on overcap."""
+    """Integration: validate_plan_output truncates dispatch + auto-notes on overcap."""
 
     def _make_ctx(
         self,
@@ -232,7 +232,7 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
             ),
         )
 
-    def test_overcap_truncates_and_hints(self):
+    def test_overcap_truncates_and_writes_auto_notes(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d).resolve()
             state = root / ".archon"
@@ -255,17 +255,17 @@ class ValidatePlanOutputOvercapTest(unittest.TestCase):
             result = validate_plan_output(ctx)
 
             self.assertTrue(result)
-            # The hint file lists the 3 deferred files.
-            hints_body = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
-            self.assertIn("over the dispatch cap of 10", hints_body)
-            self.assertIn("13 objectives", hints_body)
+            # The auto-note file lists the 3 deferred files.
+            notes_body = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
+            self.assertIn("over the dispatch cap of 10", notes_body)
+            self.assertIn("13 objectives", notes_body)
             for deferred_name in files[10:]:
-                self.assertIn(deferred_name, hints_body)
-            # The first-10 files are NOT in the hint.
+                self.assertIn(deferred_name, notes_body)
+            # The first-10 files are NOT in the auto-note.
             for kept_name in files[:10]:
-                self.assertNotIn(f"  - {kept_name}", hints_body)
+                self.assertNotIn(f"  - {kept_name}", notes_body)
 
-    def test_within_cap_no_hint(self):
+    def test_within_cap_no_auto_note(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d).resolve()
             state = root / ".archon"
@@ -338,9 +338,9 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             result = validate_plan_output(ctx)
             # Every objective was dropped → False (no prover this iter).
             self.assertFalse(result)
-            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
-            self.assertIn("Downstream.lean", hints)
-            self.assertIn("Upstream.lean", hints)
+            notes = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
+            self.assertIn("Downstream.lean", notes)
+            self.assertIn("Upstream.lean", notes)
 
     def test_downstream_kept_when_upstream_also_objective(self):
         with tempfile.TemporaryDirectory() as d:
@@ -376,7 +376,7 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             self.assertTrue(result)
             self.assertFalse((state / "AUTO_NOTES.md").exists())
 
-    def test_partial_filter_keeps_unblocked_and_hints_dropped(self):
+    def test_partial_filter_keeps_unblocked_and_notes_dropped(self):
         # Mix: one objective is downstream-of-blocked (drop), one is
         # independent (keep). The iter proceeds with the independent one.
         with tempfile.TemporaryDirectory() as d:
@@ -396,9 +396,9 @@ class ValidatePlanOutputBlockedDepsTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)
-            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
-            self.assertIn("Downstream.lean", hints)
-            self.assertNotIn("Independent.lean", hints)
+            notes = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
+            self.assertIn("Downstream.lean", notes)
+            self.assertNotIn("Independent.lean", notes)
 
 
 class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
@@ -441,11 +441,11 @@ class ValidatePlanOutputNoopFilterTest(unittest.TestCase):
             ctx = self._make_ctx(root, state)
             result = validate_plan_output(ctx)
             self.assertTrue(result)  # Work.lean survives → dispatch proceeds
-            hints = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
-            self.assertIn("Done.lean", hints)
-            self.assertIn("open sorries", hints)
-            self.assertNotIn("Work.lean", hints)
-            # The user-authored hint file must NEVER be written automatically.
+            notes = (state / "AUTO_NOTES.md").read_text(encoding="utf-8")
+            self.assertIn("Done.lean", notes)
+            self.assertIn("open sorries", notes)
+            self.assertNotIn("Work.lean", notes)
+            # The user-authored hints file must NEVER be written automatically.
             self.assertFalse((state / "USER_HINTS.md").exists())
 
     def test_scaffold_dispatch_is_exempt(self):

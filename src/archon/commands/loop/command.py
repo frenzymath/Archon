@@ -264,8 +264,8 @@ class LoopCommand:
         # Phase 1b — Validate the plan's PROGRESS.md output.
         # Deterministic regex rewrites first (catch heading drift like
         # ``## Strategy`` → ``## Current Objectives``); if still no
-        # parseable objectives, append a corrective hint to
-        # USER_HINTS.md and skip prover/review for this iteration. This
+        # parseable objectives, append a corrective auto-note to
+        # AUTO_NOTES.md and skip prover/review for this iteration. This
         # short-circuits the silent-loop failure where the orchestrator
         # parser rejects PROGRESS.md, prover dispatches nothing, and
         # review misdiagnoses the empty round as a mathematical dead
@@ -273,7 +273,7 @@ class LoopCommand:
         if not plan_validate.validate_plan_output(ctx):
             log.warn(
                 f"Iteration {i + 1}: skipping prover/review — plan-validate "
-                f"failed. Next plan agent will see USER_HINTS.md."
+                f"failed. Next plan agent will see AUTO_NOTES.md."
             )
             iter_secs = int(time.monotonic() - iter_start)
             if not ctx.dry_run and ctx.iter_meta is not None:

@@ -15,7 +15,7 @@ Recognizes an *intentional* no-prover-this-iter marker in PROGRESS.md
 — when the planner correctly skips provers for a MECHANICAL hard gate
 (no ready sorries, every objective blocked by a failed upstream build,
 blueprint-completeness gate failed) and writes the marker, validate
-returns True, no corrective hint fires, and the iter completes cleanly.
+returns True, no corrective auto-note fires, and the iter completes cleanly.
 A skip is NOT legitimate just because a strategy decision is pending:
 per the plan prompt, the planner decides such forks itself and still
 dispatches provers — it never idles an iter waiting on the user.
@@ -87,7 +87,7 @@ _TEX_THM_RE = re.compile(r"\\begin\{(theorem|lemma|proof|definition)\}")
 # The no-op filter (existing objective file with zero open sorries → a
 # prover that quits immediately with no work) lives in
 # ``sorry_count.filter_noop_objectives`` so the prover runner can enforce
-# it too. plan_validate runs it here to warn + hint the planner; the
+# it too. plan_validate runs it here to warn + auto-note the planner; the
 # runner runs it again at dispatch time (mirrors the blocked-deps split).
 
 
@@ -100,7 +100,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
     * On rewrites: PROGRESS.md is updated in place and an inner-git
       commit ``archon[NNN/plan-fixup]`` records what changed.
     * On parse failure with no intentional-skip marker: a discuss-format
-      corrective note is appended to ``AUTO_NOTES.md`` and
+      corrective auto-note is appended to ``AUTO_NOTES.md`` and
       ``planValidate.status=failed`` is stamped into the iteration's
       ``meta.json``.
     * On intentional skip: ``planValidate.status=ok_intentional_skip``
@@ -159,7 +159,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"fail to load the file. See planValidate."
                 f"objectivesBlocked in meta.json for details."
             )
-            _append_blocked_hint(
+            _append_blocked_auto_note(
                 ctx.state_dir / AUTO_NOTES_FILENAME, blocked_meta,
             )
 
@@ -201,7 +201,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"a prover on them would quit immediately with no work. See "
                 f"planValidate.objectivesNoop in meta.json for details."
             )
-            _append_noop_hint(ctx.state_dir / AUTO_NOTES_FILENAME, noop_rels)
+            _append_noop_auto_note(ctx.state_dir / AUTO_NOTES_FILENAME, noop_rels)
 
         if not objectives:
             # Every surviving objective was a no-op. Skip prover rather
@@ -242,7 +242,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
                 f"This guards against runaway fan-out (e.g. 27 provers "
                 f"launched in one iter)."
             )
-            _append_overcap_hint(
+            _append_overcap_auto_note(
                 ctx.state_dir / AUTO_NOTES_FILENAME,
                 cap=cap, proposed=proposed, deferred_rels=deferred_rels,
             )
@@ -267,7 +267,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
         log.info(
             "plan-validate: PROGRESS.md flagged as intentional no-prover "
             "this iter (mechanical hard gate). Proceeding "
-            "without prover dispatch; no corrective hint appended."
+            "without prover dispatch; no corrective auto-note appended."
         )
         write_meta(ctx.iter_meta, **{
             "planValidate.status": "ok_intentional_skip",
@@ -281,7 +281,7 @@ def validate_plan_output(ctx: LoopContext) -> bool:
         "iteration; appended a corrective note to AUTO_NOTES.md so the "
         "next plan agent can self-correct."
     )
-    _append_hint(ctx.state_dir / AUTO_NOTES_FILENAME)
+    _append_parse_failure_auto_note(ctx.state_dir / AUTO_NOTES_FILENAME)
     write_meta(ctx.iter_meta, **{
         "planValidate.status": "failed",
         "planValidate.objectives": 0,
@@ -402,8 +402,8 @@ def _apply_blocked_deps_filter(
     )
 
 
-def _append_noop_hint(hints_file: Path, noop_rels: list[str]) -> None:
-    """Append a hint listing files dropped as guaranteed no-op dispatches.
+def _append_noop_auto_note(notes_file: Path, noop_rels: list[str]) -> None:
+    """Append an automated note listing guaranteed no-op dispatches.
 
     The next plan agent reads-then-clears AUTO_NOTES, so this lands in
     front of the planner exactly once. It tells the planner these files
@@ -412,7 +412,7 @@ def _append_noop_hint(hints_file: Path, noop_rels: list[str]) -> None:
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     listing = "\n".join(f"  - {r}" for r in noop_rels) or "  - (none)"
-    hint = (
+    note = (
         f"\n- [{ts}] archon[plan-validate]: dropped {len(noop_rels)} "
         f"objective(s) that name an existing `.lean` file with ZERO open "
         f"sorries — a prover on them would quit immediately with no work. "
@@ -421,21 +421,21 @@ def _append_noop_hint(hints_file: Path, noop_rels: list[str]) -> None:
         f"declarations into it, say so explicitly (\"scaffold …\"). Files:\n"
         f"{listing}\n"
     )
-    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    notes_file.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
-    if hints_file.exists():
+    if notes_file.exists():
         try:
-            existing = hints_file.read_text()
+            existing = notes_file.read_text()
         except OSError:
             pass
-    hints_file.write_text(existing + hint)
+    notes_file.write_text(existing + note)
 
 
-def _append_blocked_hint(
-    hints_file: Path,
+def _append_blocked_auto_note(
+    notes_file: Path,
     blocked_meta: list[dict],
 ) -> None:
-    """Append a hint listing files dropped because their imports don't compile.
+    """Append an automated note listing files whose imports don't compile.
 
     The next plan agent reads-then-clears AUTO_NOTES, so this lands
     in front of the planner exactly once. Listing the specific
@@ -452,15 +452,15 @@ def _append_blocked_hint(
     for entry in blocked_meta:
         deps = ", ".join(entry["blockedDeps"]) or "(none)"
         lines.append(f"  - {entry['file']} — blocked by: {deps}")
-    hint = "\n".join(lines) + "\n"
-    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    note = "\n".join(lines) + "\n"
+    notes_file.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
-    if hints_file.exists():
+    if notes_file.exists():
         try:
-            existing = hints_file.read_text()
+            existing = notes_file.read_text()
         except OSError:
             pass
-    hints_file.write_text(existing + hint)
+    notes_file.write_text(existing + note)
 
 
 def _rel_to_project(path: Path, project_path: Path) -> str:
@@ -471,14 +471,14 @@ def _rel_to_project(path: Path, project_path: Path) -> str:
         return str(path)
 
 
-def _append_overcap_hint(
-    hints_file: Path,
+def _append_overcap_auto_note(
+    notes_file: Path,
     *,
     cap: int,
     proposed: int,
     deferred_rels: list[str],
 ) -> None:
-    """Append a hint listing the files deferred by the dispatch cap.
+    """Append an automated note listing files deferred by the dispatch cap.
 
     The next plan agent reads-then-clears AUTO_NOTES each iter, so the
     listing lands in front of the planner exactly once. Including the
@@ -487,7 +487,7 @@ def _append_overcap_hint(
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     deferred_block = "\n".join(f"  - {r}" for r in deferred_rels) or "  - (none)"
-    hint = (
+    note = (
         f"\n- [{ts}] archon[plan-validate]: previous iter's PROGRESS.md "
         f"listed {proposed} objectives — over the dispatch cap of {cap}. "
         f"The first {cap} were dispatched; the {len(deferred_rels)} below "
@@ -495,36 +495,36 @@ def _append_overcap_hint(
         f"iter (still within the cap), defer or drop the rest.\n"
         f"{deferred_block}\n"
     )
-    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    notes_file.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
-    if hints_file.exists():
+    if notes_file.exists():
         try:
-            existing = hints_file.read_text()
+            existing = notes_file.read_text()
         except OSError:
             pass
-    hints_file.write_text(existing + hint)
+    notes_file.write_text(existing + note)
 
 
-def _append_hint(hints_file: Path) -> None:
-    """Append a one-line discuss-format corrective hint.
+def _append_parse_failure_auto_note(notes_file: Path) -> None:
+    """Append a one-line discuss-format corrective auto-note.
 
     Discuss-format keeps AUTO_NOTES.md as a uniform list of timestamped
     one-liners. The plan phase reads-then-clears the file each iteration
     so the note is consumed exactly once.
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    hint = (
+    note = (
         f"\n- [{ts}] archon[plan-validate]: previous iter's PROGRESS.md "
         "had no parseable objectives under `## Current Objectives` and "
         "no `(no prover dispatch this iter ...)` skip marker. Rewrite "
         "with the canonical heading + `### N. **`File.lean`**` entries, "
         "or (if intentional) add the skip marker line.\n"
     )
-    hints_file.parent.mkdir(parents=True, exist_ok=True)
+    notes_file.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
-    if hints_file.exists():
+    if notes_file.exists():
         try:
-            existing = hints_file.read_text()
+            existing = notes_file.read_text()
         except OSError:
             pass
-    hints_file.write_text(existing + hint)
+    notes_file.write_text(existing + note)

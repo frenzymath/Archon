@@ -35,7 +35,7 @@ def loop(
              "'## Current Objectives' for a single iter. When the planner "
              "exceeds it (e.g. writes 27 files), only the first N are "
              "dispatched to provers; the remainder are deferred to the "
-             "next iter via a USER_HINTS entry. Prevents the runaway "
+             "next iter via an AUTO_NOTES entry. Prevents the runaway "
              "fan-out failure mode. (default from config or 10)",
     ),
     block_on_blocked_deps: Optional[bool] = typer.Option(

@@ -285,8 +285,8 @@ class ParallelProverRunner:
                     log.warn(
                         f"Dropped {len(dropped)} objective(s) whose "
                         f"transitive imports failed the previous lake "
-                        f"build — they were already hinted to the "
-                        f"planner via USER_HINTS."
+                        f"build — they were already noted for the "
+                        f"planner via AUTO_NOTES."
                     )
                 if not sorry_files:
                     log.warn(
@@ -310,7 +310,7 @@ class ParallelProverRunner:
             log.warn(
                 f"Dropped {len(noop_dropped)} objective(s) naming an "
                 f"existing .lean file with zero open sorries (no work to "
-                f"do) — already hinted to the planner via USER_HINTS."
+                f"do) — already noted for the planner via AUTO_NOTES."
             )
         if not sorry_files:
             log.warn(
@@ -320,7 +320,7 @@ class ParallelProverRunner:
             return
 
         # Hard cap on dispatched provers. plan_validate already warned
-        # loudly and queued the deferred list into USER_HINTS; we slice
+        # loudly and queued the deferred list into AUTO_NOTES; we slice
         # here so the dispatcher is deterministic even if plan_validate
         # was bypassed (e.g. --from prover replay of a stale PROGRESS.md
         # that's over the cap).
@@ -329,7 +329,7 @@ class ParallelProverRunner:
                 f"PROGRESS.md lists {len(sorry_files)} objectives — "
                 f"capping dispatch at {self.max_objectives}. The remaining "
                 f"{len(sorry_files) - self.max_objectives} files are "
-                f"already queued for the next plan agent via USER_HINTS."
+                f"already queued for the next plan agent via AUTO_NOTES."
             )
             sorry_files = sorry_files[: self.max_objectives]
 

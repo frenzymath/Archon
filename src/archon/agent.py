@@ -106,7 +106,18 @@ DEFAULT_MODEL = "opus"
 # spawner ``Task`` rather than ``Agent``; archon never relies on a native
 # task-checklist tool, so disallowing it is harmless. Bash/Read/Write/
 # Edit/Grep/Glob/WebSearch/WebFetch/TodoWrite are unaffected.
-DISALLOWED_NATIVE_TOOLS: tuple[str, ...] = ("Agent", "Task", "ScheduleWakeup")
+DISALLOWED_NATIVE_TOOLS: tuple[str, ...] = (
+    "Agent",
+    "Task",
+    "ScheduleWakeup",
+    # Prover lanes must not manage process lifetime themselves. A Fable run
+    # used `pkill -f "lean.*File"` as "cleanup", which can match the shell
+    # running the command and terminate the lane before it writes a report.
+    # Keep Bash available, but block the common process-kill entry points.
+    "Bash(pkill:*)",
+    "Bash(killall:*)",
+    "Bash(kill:*)",
+)
 
 
 # Foreground-Bash timeout (ms) handed to every spawned ``claude`` via

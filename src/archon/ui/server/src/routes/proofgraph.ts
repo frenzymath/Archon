@@ -89,13 +89,13 @@ function parseContent(content: string, rel: string): LD[] {
   const sl = new Set(countSorryInLean(content).map(o => o.line));
   const ds: LD[] = []; let i = 0;
   while (i < lines.length) {
-    const m = code[i].match(DECL_RE);
+    const m = code[i].trim().match(DECL_RE);
     if (!m) { i++; continue; }
     const kind = m[1]; const name = (m[2] || '').replace(/[.,;]+$/, ''); const s = i + 1;
     let e = s, bd = 0;
     for (let j = i; j < lines.length; j++) {
       for (const c of code[j]) { if (c === '{' || c === '⟨') bd++; if (c === '}' || c === '⟩') bd--; }
-      if (j > i && bd <= 0 && j + 1 < lines.length && code[j + 1].trim() && DECL_RE.test(code[j + 1])) { e = j + 1; break; }
+      if (j > i && bd <= 0 && j + 1 < lines.length && code[j + 1].trim() && DECL_RE.test(code[j + 1].trim())) { e = j + 1; break; }
       e = j + 1;
     }
     // Anonymous `example` / unnamed `instance :` — a structural boundary but

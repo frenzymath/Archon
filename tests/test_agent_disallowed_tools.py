@@ -49,6 +49,9 @@ class DisallowedToolsTest(unittest.TestCase):
         self.assertIn("Agent", DISALLOWED_NATIVE_TOOLS)
         self.assertIn("ScheduleWakeup", DISALLOWED_NATIVE_TOOLS)
         self.assertIn("Task", DISALLOWED_NATIVE_TOOLS)
+        self.assertIn("Bash(pkill:*)", DISALLOWED_NATIVE_TOOLS)
+        self.assertIn("Bash(killall:*)", DISALLOWED_NATIVE_TOOLS)
+        self.assertIn("Bash(kill:*)", DISALLOWED_NATIVE_TOOLS)
         # Monitor must stay AVAILABLE: dag.md/plan.md use a blocking Monitor
         # until-loop as the in-turn wait for auto-backgrounded dispatches
         # (foreground sleep is harness-blocked). Disallowing it broke claude-p
@@ -62,8 +65,9 @@ class DisallowedToolsTest(unittest.TestCase):
         )
 
     def test_build_flags_keeps_benign_tools_available(self) -> None:
-        # We only ever disallow the native spawn/wakeup tools — never the
-        # workhorse tools archon agents actually need.
+        # We disallow native spawn/wakeup tools and a few dangerous Bash
+        # command patterns, but never the whole Bash tool or other workhorse
+        # tools archon agents actually need.
         disallowed = set(_disallowed_in(ClaudeAgent()._build_flags("opus")))
         for keep in ("Bash", "Read", "Write", "Edit", "Grep", "Glob"):
             self.assertNotIn(keep, disallowed)

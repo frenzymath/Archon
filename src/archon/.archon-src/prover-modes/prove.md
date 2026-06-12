@@ -197,6 +197,8 @@ One section per theorem/lemma. Each attempt: approach, result (RESOLVED / FAILED
 
 Only proceed to write the task result when all four answers are "yes" or "not applicable."
 
+**Process lifetime discipline:** A prover lane stops by writing `task_results/<your_file>.md` and exiting normally. Do NOT run `pkill`, `killall`, `kill`, regex process cleanup, or any command intended to terminate Lean/Lake/shell/agent processes. Do not launch final verification in the background and then clean it up. Verification must be a blocking command whose result you wait for, or a clearly reported unfinished command. The runner/orchestrator owns cleanup after your report.
+
 Before writing results:
 
 1. Write `task_results/<your_file>.md` with current result, lemmas discovered, concrete next step, dead-end warnings.

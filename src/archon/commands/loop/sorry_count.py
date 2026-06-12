@@ -77,10 +77,10 @@ def file_open_sorry_count(lean_file: Path) -> int | None:
 
     Used by plan-validate to detect objective files that the prover
     cannot productively work on (zero open sorries → guaranteed no-op
-    dispatch). Reuses the bundled analyzer, which strips comments /
-    strings / nested block comments and skips `sorryAx` and identifiers
-    ending in `sorry`; falls back to a comment-stripping regex if the
-    analyzer is unavailable.
+    dispatch). Reuses the bundled analyzer, which strips comments,
+    strings, and nested block comments and counts `sorry`, `sorryAx`,
+    and `admit` tokens (excluding those embedded in identifiers); falls
+    back to a conservative comment-stripping regex if the analyzer is unavailable.
 
     Returns ``None`` when the count can't be determined (caller should
     treat unknown as "keep the objective" — never drop on uncertainty).
@@ -104,7 +104,7 @@ def file_open_sorry_count(lean_file: Path) -> int | None:
         except Exception:
             pass
 
-    # Fallback: strip line + nested block comments, then count `sorry`
+    # Fallback: strip line + nested block comments, then count placeholder
     # tokens not embedded in identifiers. Conservative — on any read
     # error we return None so the caller keeps the objective.
     try:
@@ -118,14 +118,14 @@ def file_open_sorry_count(lean_file: Path) -> int | None:
         if stripped == text:
             break
         text = stripped
-    return len(re.findall(r"(?<![A-Za-z0-9_!?'])sorry(?![A-Za-z0-9_!?'])", text))
+    return len(re.findall(r"(?<![A-Za-z0-9_!?'])(?:sorry|sorryAx|admit)(?![A-Za-z0-9_!?'])", text))
 
 
 def count_sorries(project_path: Path) -> int | None:
     """Count remaining `sorry` placeholders in the project's `.lean` files.
 
-    Tries the bundled analyzer first (it skips comments / sorryAx /
-    identifiers ending in `sorry`); falls back to a coarse `grep` if the
+    Tries the bundled analyzer first (it skips comments and strings,
+    and counts `sorry`, `sorryAx`, and `admit` tokens); falls back to a coarse `grep` if the
     analyzer isn't available or its output format is unexpected.
     Returns `None` only if both probes fail.
     """

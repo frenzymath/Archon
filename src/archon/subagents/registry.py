@@ -257,7 +257,9 @@ def build_registry(
         kept = {n: d for n, d in merged.items() if d.default_enabled}
     elif enabled == "*":
         kept = dict(merged)
-    else:
+    elif isinstance(enabled, (list, tuple, set)):
         wanted = set(enabled)
         kept = {n: d for n, d in merged.items() if n in wanted}
+    else:
+        raise TypeError("enabled must be None, '*', or a list of subagent names")
     return SubagentRegistry(kept)

@@ -134,6 +134,7 @@ Archon talks back to the user through **`TO_USER.md`** — a single, *persistent
 - Your **active mode** is injected directly into your invocation prompt — read it carefully, it defines your goal, workflow, and constraints for this session.
 - When your mode specifies `read_blueprint: true`, you are permitted to **read** your assigned blueprint chapter (`blueprint/src/chapters/<your_slug>.tex`) for the informal proof sketch. You may never write to blueprint chapters.
 - Write results to `task_results/<your_file>.md`.
+- A prover lane ends by writing its task result and exiting normally. **Do not kill Lean, Lake, shell, or sibling agent processes from inside the prover lane.** Do not run `pkill`, `killall`, regex-based process cleanup, or background-verification cleanup. If a verification command is still running, wait for its result or report that it is still running; process lifetime is owned by the Archon runner/orchestrator.
 - Write only to the `.lean` file(s) you are assigned — never edit another agent's file.
 - Check for `/- USER: ... -/` comments in your file for file-specific hints.
 - Do NOT edit blueprint chapters. Flag in your task result which declarations are ready for which marker; the review agent applies them.
