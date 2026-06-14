@@ -32,7 +32,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeAgent, ClaudeBackend, DEFAULT_MODEL
 
 
 @dataclass
@@ -111,6 +111,7 @@ def merge_file_versions(
     iteration: int,
     model: str = DEFAULT_MODEL,
     verbose_logs: bool = False,
+    backend: ClaudeBackend | None = None,
 ) -> MergeOutcome:
     """Produce a merged version of ``target_rel`` from lane candidates.
 
@@ -152,7 +153,7 @@ def merge_file_versions(
         candidates=candidates,
         state_dir=state_dir,
     )
-    agent = ClaudeAgent(model=model, role='merge')
+    agent = ClaudeAgent(model=model, role='merge', backend=backend or ClaudeBackend())
     ok = agent.run(prompt, cwd=project_path, log_base=log_base, verbose_logs=verbose_logs)
 
     if not ok:

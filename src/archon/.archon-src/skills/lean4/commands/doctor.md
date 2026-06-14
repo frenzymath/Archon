@@ -213,7 +213,7 @@ When running inside an Archon-initialized project (`.archon/` exists), verify th
 **State files** — check all required files exist in `.archon/`:
 ```
 .archon/PROGRESS.md
-.archon/CLAUDE.md
+.archon/AGENTS.md
 .archon/task_pending.md
 .archon/task_done.md
 .archon/USER_HINTS.md
@@ -222,9 +222,9 @@ When running inside an Archon-initialized project (`.archon/` exists), verify th
 
 **Prompts** — check `.archon/prompts/` for each expected prompt:
 ```
-plan.md, prover-autoformalize.md, prover-prover.md, prover-polish.md, review.md
+plan.md, dag.md, review.md
 ```
-For each: report whether it's a valid symlink, a local override (real file), or missing/broken.
+For each: report whether it's a valid symlink, a local override (real file), or missing/broken. (Per-stage prover instructions live in `.archon/prover-modes/*.md`, not `prompts/prover-*.md`.)
 
 **Skills plugin** — check `lean4@archon-local` plugin:
 - Installed and enabled (via `claude plugin list`) → `✓ lean4@archon-local plugin installed`

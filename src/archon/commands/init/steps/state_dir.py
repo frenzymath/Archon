@@ -12,6 +12,7 @@ _USER_STATE_FILES = (
     "PROGRESS.md",
     "STRATEGY.md",
     "USER_HINTS.md",
+    "ARCHON_MEMORY.md",
     "task_pending.md",
     "task_done.md",
 )
@@ -57,21 +58,34 @@ class StateDirStep(InitStep):
             copy_file(src, dst)
             copied += 1
 
-        claude_src = template_dir / "CLAUDE.md"
-        claude_dst = ctx.state_dir / "CLAUDE.md"
-        if claude_src.exists():
+        # AGENTS.md — the bundled agent role doc (was CLAUDE.md pre-0.3.0).
+        # AGENTS.md is the cross-tool convention auto-loaded by both Claude
+        # Code and Codex; Archon also references it explicitly in every prompt.
+        agents_src = template_dir / "AGENTS.md"
+        agents_dst = ctx.state_dir / "AGENTS.md"
+        legacy_dst = ctx.state_dir / "CLAUDE.md"
+        if agents_src.exists():
             # Only warn when the file is actually about to change. The
             # previous warning fired even on a clean re-init where the
-            # user hadn't edited CLAUDE.md, which was misleading.
+            # user hadn't edited the role doc, which was misleading.
             if (
-                claude_dst.exists()
+                agents_dst.exists()
                 and not ctx.fresh
-                and not _files_equal(claude_src, claude_dst)
+                and not _files_equal(agents_src, agents_dst)
             ):
-                log.warn("CLAUDE.md will be overwritten with the latest bundled version.")
-            copy_file(claude_src, claude_dst, overwrite=True)
+                log.warn("AGENTS.md will be overwritten with the latest bundled version.")
+            copy_file(agents_src, agents_dst, overwrite=True)
+            # Migrate older projects: drop the now-unused .archon/CLAUDE.md so
+            # it can't drift from AGENTS.md. (The role doc is bundled, not
+            # user-edited, so nothing custom is lost.)
+            if legacy_dst.exists():
+                try:
+                    legacy_dst.unlink()
+                    log.step("Migrated .archon/CLAUDE.md → AGENTS.md")
+                except OSError:
+                    pass
         else:
-            log.warn("Template not found: CLAUDE.md")
+            log.warn("Template not found: AGENTS.md")
 
         # MULTILANE.md — reference doc for setting up additional providers.
         # Always overwrite with the bundled version: it's a reference, not a

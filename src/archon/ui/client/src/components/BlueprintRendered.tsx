@@ -13,7 +13,7 @@
  * for a sidebar preview, mirroring what `blueprint serve` shows but without
  * requiring the Python plasTeX toolchain to run.
  */
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import styles from './BlueprintRendered.module.css';
@@ -38,6 +38,7 @@ type Node =
   | { type: 'em'; children: Node[] }
   | { type: 'code'; value: string }
   | { type: 'ref'; value: string }
+  | { type: 'comment'; value: string }
   | { type: 'env'; name: string; meta: Meta; children: Node[] };
 
 interface Meta {
@@ -52,16 +53,63 @@ interface Meta {
 function stripComments(src: string): string {
   return src
     .split('\n')
-    .map(line => {
-      // A % starts a comment unless escaped. We don't need full tokenisation here.
-      let out = '';
-      for (let i = 0; i < line.length; i++) {
-        if (line[i] === '%' && (i === 0 || line[i - 1] !== '\\')) break;
-        out += line[i];
-      }
-      return out;
-    })
+    .map(stripTrailingComment)
     .join('\n');
+}
+
+/** Drop a trailing `%` comment from one line (honours escaped `\%`). */
+function stripTrailingComment(line: string): string {
+  let out = '';
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '%' && (i === 0 || line[i - 1] !== '\\')) break;
+    out += line[i];
+  }
+  return out;
+}
+
+// ── Comment preservation (showComments mode) ─────────────────────────────────
+// Instead of discarding `%` comments, fold each *run* of full-line comments
+// into a single inline `\archoncomment{<base64>}` token at its source position.
+// parseInline turns that token into a `comment` node, which renders as an
+// expandable chip — inside an env body too, since the token sits where the
+// comment was. Trailing (mid-line) comments are still stripped. Base64 keeps
+// the (possibly multi-line, brace-bearing) comment text from confusing the
+// LaTeX brace/command tokeniser.
+
+function b64encodeUtf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function b64decodeUtf8(s: string): string {
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0)));
+  } catch {
+    return '';
+  }
+}
+
+function encodeComments(src: string): string {
+  const out: string[] = [];
+  let run: string[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    const joined = run
+      .map(l => l.replace(/^\s*%\s?/, ''))
+      // Drop machine directives (`% archon:covers …`) — not user annotations.
+      .filter(l => !/^archon:/i.test(l.trim()))
+      .join('\n');
+    run = [];
+    if (joined.trim()) out.push(`\\archoncomment{${b64encodeUtf8(joined)}}`);
+  };
+  for (const line of src.split('\n')) {
+    if (/^\s*%/.test(line)) run.push(line);
+    else { flush(); out.push(stripTrailingComment(line)); }
+  }
+  flush();
+  return out.join('\n');
 }
 
 /**
@@ -162,6 +210,17 @@ function parseInline(src: string): Node[] {
       if (end !== -1) {
         out.push({ type: 'math', value: src.slice(i + 2, end), display: false });
         i = end + 2;
+        continue;
+      }
+    }
+
+    // Archon comment token (inserted by encodeComments in showComments mode)
+    if (src.startsWith('\\archoncomment{', i)) {
+      const braceStart = i + '\\archoncomment'.length;
+      const close = findMatchingBrace(src, braceStart);
+      if (close !== -1) {
+        out.push({ type: 'comment', value: b64decodeUtf8(src.slice(braceStart + 1, close)) });
+        i = close + 1;
         continue;
       }
     }
@@ -312,6 +371,9 @@ function renderNode(n: Node, key: string, macros?: Record<string, string>): JSX.
   if (n.type === 'ref') {
     return <span key={key} className={styles.ref}>{n.value}</span>;
   }
+  if (n.type === 'comment') {
+    return <CommentChip key={key} value={n.value} macros={macros} />;
+  }
   // n.type === 'env'
   const label = ENV_LABELS[n.name] ?? n.name[0].toUpperCase() + n.name.slice(1);
   const paras = paragraphise(n.children);
@@ -343,20 +405,107 @@ function renderNode(n: Node, key: string, macros?: Record<string, string>): JSX.
   );
 }
 
+// Recognised annotation tags inside `%` comments → short display label.
+const TAG_RE = /^(SOURCE QUOTE PROOF|SOURCE QUOTE|SOURCE|NOTE|TODO|FIXME)\b\s*:?\s*/i;
+const TAG_LABEL: Record<string, string> = {
+  'SOURCE': 'source',
+  'SOURCE QUOTE': 'quote',
+  'SOURCE QUOTE PROOF': 'proof quote',
+  'NOTE': 'note',
+  'TODO': 'todo',
+  'FIXME': 'fixme',
+};
+
+interface CommentEntry { tag: string; text: string; }
+
+/** Split a comment run into tagged entries (a continuation line joins the prior tag). */
+function parseCommentEntries(value: string): CommentEntry[] {
+  const entries: CommentEntry[] = [];
+  let cur: CommentEntry | null = null;
+  for (const line of value.split('\n')) {
+    const m = TAG_RE.exec(line);
+    if (m) {
+      if (cur) entries.push(cur);
+      cur = { tag: m[1].toUpperCase(), text: line.slice(m[0].length) };
+    } else if (cur) {
+      cur.text += '\n' + line;
+    } else {
+      cur = { tag: '', text: line };
+    }
+  }
+  if (cur) entries.push(cur);
+  return entries.filter(e => e.text.trim() || e.tag);
+}
+
+/** An expandable “ chip for a run of `%` comments (source pointers, quotes, notes). */
+function CommentChip({ value, macros }: { value: string; macros?: Record<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const entries = useMemo(() => parseCommentEntries(value), [value]);
+  if (!entries.length) return null;
+
+  const tags = Array.from(new Set(entries.map(e => e.tag).filter(Boolean)));
+  const label = tags.length
+    ? tags.map(t => TAG_LABEL[t] ?? t.toLowerCase()).join(' · ')
+    : 'note';
+
+  return (
+    <span className={styles.commentWrap}>
+      <button
+        type="button"
+        className={`${styles.commentToggle} ${open ? styles.commentOpen : ''}`}
+        onClick={() => setOpen(o => !o)}
+        title={open ? 'Hide annotation' : 'Show source / note'}
+      >
+        <span className={styles.quoteIcon}>“</span>
+        <span className={styles.commentLabel}>{label}</span>
+      </button>
+      {open && (
+        <span className={styles.commentBody}>
+          {entries.map((e, ei) => {
+            const paras = paragraphise(parseInline(stripComments(e.text)));
+            return (
+              <span key={ei} className={styles.commentEntry}>
+                {e.tag && (
+                  <span className={styles.commentTag}>{TAG_LABEL[e.tag] ?? e.tag.toLowerCase()}</span>
+                )}
+                <span className={styles.commentText}>
+                  {paras.map((p, pi) => (
+                    <span key={pi} className={styles.commentPara}>
+                      {p.map((c, ci) => renderNode(c, `cm${ei}-${pi}-${ci}`, macros))}
+                    </span>
+                  ))}
+                </span>
+              </span>
+            );
+          })}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function BlueprintRendered({
   tex,
   macros,
+  showComments = false,
 }: {
   tex: string;
   macros?: Record<string, string>;
+  /** Surface `%` comments as expandable chips instead of stripping them. */
+  showComments?: boolean;
 }) {
-  const nodes = useMemo(() => parseInline(stripComments(tex)), [tex]);
+  const nodes = useMemo(
+    () => parseInline(showComments ? encodeComments(tex) : stripComments(tex)),
+    [tex, showComments],
+  );
   const paras = paragraphise(nodes);
   return (
     <div className={styles.root}>
       {paras.map((p, pi) => {
-        // If a paragraph is a single env, render it directly; else wrap in <p>.
-        if (p.length === 1 && p[0].type === 'env') return renderNode(p[0], `top-${pi}`, macros);
+        // A paragraph that is a single env/comment renders directly; else wrap in <p>.
+        if (p.length === 1 && (p[0].type === 'env' || p[0].type === 'comment')) {
+          return renderNode(p[0], `top-${pi}`, macros);
+        }
         return <p key={pi}>{p.map((c, ci) => renderNode(c, `top-${pi}-${ci}`, macros))}</p>;
       })}
     </div>

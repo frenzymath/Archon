@@ -11,7 +11,8 @@ from typing import Optional
 
 import typer
 
-from archon.agent import DEFAULT_MODEL
+from archon import log
+from archon.agent import DEFAULT_MODEL, InteractiveBackend
 from archon.types import Stage
 
 from .command import LoopCommand, parse_from_phase
@@ -34,7 +35,7 @@ def loop(
              "'## Current Objectives' for a single iter. When the planner "
              "exceeds it (e.g. writes 27 files), only the first N are "
              "dispatched to provers; the remainder are deferred to the "
-             "next iter via a USER_HINTS entry. Prevents the runaway "
+             "next iter via an AUTO_NOTES entry. Prevents the runaway "
              "fan-out failure mode. (default from config or 10)",
     ),
     block_on_blocked_deps: Optional[bool] = typer.Option(
@@ -133,6 +134,29 @@ def loop(
              "when they notice something the developer should fix. "
              "(default from config or off)",
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "'claude-p': use the claude-p TUI-backed wrapper instead of claude -p "
+            "(useful when the headless API is rate-limited on a subscription account). "
+            "'interactive': run claude in the foreground for you to drive by hand "
+            "(stable subscription fallback; forces serial execution, no multilane). "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
+    claude_p_config_dir: Optional[str] = typer.Option(
+        None, "--claude-p-config-dir",
+        help=(
+            "CLAUDE_CONFIG_DIR to use when --claude-backend=claude-p. "
+            "Selects which Claude Code login / account claude-p uses. "
+            "(default from .archon/config.json loop.claude_p_config_dir "
+            "or the CLAUDE_CONFIG_DIR env var already in the environment)"
+        ),
+    ),
 ) -> None:
     """Start the automated plan → prove → review loop.
 
@@ -155,6 +179,7 @@ def loop(
     from archon.commands.tooling.project_config import (
         load_project_config,
         resolve as _resolve,
+        resolve_claude_backend,
     )
 
     project_config = load_project_config(resolved)
@@ -177,6 +202,11 @@ def loop(
     debug_feedback = _resolve(
         debug_feedback, section=loop_cfg, key='debug_feedback', default=False,
     )
+    backend = resolve_claude_backend(
+        project_config,
+        cli_value=claude_backend,
+        claude_p_config_dir=claude_p_config_dir,
+    )
 
     # Multi-lane execution fires automatically when config.json has it
     # enabled with at least one lane defined. The old --multilane-execute
@@ -184,6 +214,19 @@ def loop(
     # purely through .archon/config.json.
     multilane_lanes = multilane_cfg.get('lanes') or []
     multilane_execute = bool(multilane_cfg.get('enabled')) and len(multilane_lanes) >= 1
+
+    # The interactive backend hands the terminal to a human, who can only
+    # drive one session at a time — force serial provers (parallel=False,
+    # max_parallel=1) and disable multilane, overriding any config/flags.
+    if isinstance(backend, InteractiveBackend):
+        if parallel or max_parallel != 1 or multilane_execute:
+            log.info(
+                "Interactive backend: forcing serial execution "
+                "(parallel=False, max_parallel=1) and disabling multilane."
+            )
+        parallel = False
+        max_parallel = 1
+        multilane_execute = False
 
     # --resume without an explicit --from auto-detects which phase to
     # resume by inspecting the prior iter's meta.json — done inside
@@ -215,6 +258,7 @@ def loop(
         multilane_cfg=multilane_cfg,
         debug_feedback=debug_feedback,
         resume=resume,
+        backend=backend,
     )
 
     LoopCommand(options).run()

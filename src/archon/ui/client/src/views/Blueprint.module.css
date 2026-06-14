@@ -1,0 +1,157 @@
+.root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Top: TOC + reading column ----------------------------------------- */
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.toc {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 10px 8px;
+  background: var(--bg-secondary);
+}
+.tocHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 2px 6px 8px;
+}
+.histTag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--blue);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.tocEmpty { padding: 4px 6px; color: var(--text-muted); font-size: 12px; }
+.tocNum { color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.tocTitle { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-align: left; }
+
+.tocChapRow { display: flex; align-items: flex-start; }
+.tocCaret {
+  flex-shrink: 0; width: 16px; padding: 4px 0; border: none; background: none;
+  color: var(--text-muted); cursor: pointer; font-size: 10px; line-height: 1.4;
+}
+.tocChap {
+  flex: 1; display: flex; gap: 6px; align-items: flex-start; min-width: 0;
+  padding: 4px 6px; font-size: 12px; color: var(--text-secondary);
+  background: none; border: none; cursor: pointer; border-radius: 4px; text-align: left;
+}
+.tocChap:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.tocActive { color: var(--blue); font-weight: 600; }
+.tocSec {
+  display: flex; gap: 6px; width: 100%; min-width: 0;
+  padding: 2px 6px; font-size: 11.5px; color: var(--text-muted);
+  background: none; border: none; cursor: pointer; border-radius: 4px;
+}
+.tocSec:hover { background: var(--bg-tertiary); color: var(--text-secondary); }
+
+/* Big table-of-contents landing ------------------------------------- */
+.bigToc { max-width: 860px; margin: 0 auto; }
+.bigTocHead { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 6px 0 12px; }
+.bigTocHint { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.bigTocChap { margin: 6px 0 12px; }
+.bigTocChapLink {
+  display: block; width: 100%; text-align: left; font-size: 15px; font-weight: 700;
+  color: var(--text-primary); background: none; border: none; cursor: pointer; padding: 2px 0;
+}
+.bigTocChapLink:hover { color: var(--blue); }
+.bigTocSecs { margin: 2px 0 0 18px; }
+.bigTocSec {
+  display: block; width: 100%; text-align: left; font-size: 12.5px;
+  color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 1px 0;
+}
+.bigTocSec:hover { color: var(--blue); }
+
+/* Open (rendered) chapter chrome ------------------------------------ */
+.openChapter { position: relative; }
+.closeChap {
+  position: absolute; top: 26px; right: 4px; z-index: 2;
+  width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-secondary); color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1;
+}
+.closeChap:hover { color: var(--text-primary); border-color: var(--blue); }
+
+.reading {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 28px;
+  min-width: 0;
+}
+.muted { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+
+/* Title page -------------------------------------------------------- */
+.titlePage {
+  max-width: 860px;
+  margin: 12px auto 32px;
+  text-align: center;
+  padding: 24px 0 28px;
+  border-bottom: 1px solid var(--border);
+}
+.docTitle { font-size: 26px; font-weight: 800; color: var(--text-primary); margin: 0 0 10px; line-height: 1.25; }
+.docAuthor { font-size: 15px; color: var(--text-secondary); margin-bottom: 8px; }
+.docMeta { font-size: 12px; color: var(--text-muted); }
+
+/* Resize handle + git timeline -------------------------------------- */
+.gitResize {
+  height: 7px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  margin: 6px 0 3px;
+  border-radius: 3px;
+  background: var(--border);
+  opacity: 0.5;
+}
+.gitResize:hover { opacity: 1; background: var(--blue); }
+.gitPanel {
+  position: relative;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.gitHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.gitTitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.gitLive {
+  font-size: 11px;
+  color: var(--blue);
+  background: none;
+  border: 1px solid var(--blue);
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.gitLive:hover { background: rgba(3, 102, 214, 0.08); }

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 from archon import log
-from archon.agent import ClaudeAgent
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.project_config import (
     load_project_config,
@@ -138,8 +137,12 @@ class ReviewPhase(Phase):
                     capture_output=True,
                 )
         
-        to_user_file = ctx.state_dir / "TO_USER.md"
-        to_user_file.write_text("", encoding="utf-8")
+        # TO_USER.md is a *persistent* shared notice board — plan, prover,
+        # and review may all maintain it. We deliberately do NOT clear it
+        # here: a standing notice (e.g. "set DEEPSEEK_API_KEY to unblock X")
+        # must survive quiet iters until the agent that owns the item prunes
+        # it. The review agent is told to read it, drop now-irrelevant items,
+        # and keep it to <=2-3 concise bullets (see review.md Step 7).
 
         cfg = load_project_config(ctx.project_path)
         prompt = build_review_prompt(
@@ -157,7 +160,7 @@ class ReviewPhase(Phase):
             cwd=ctx.project_path,
             jsonl_fallback=Path(str(review_log) + ".jsonl"),
         )
-        ClaudeAgent(model=ctx.model, role="review").run(
+        ctx.make_agent("review").run(
             REVIEW_CONTINUE if resume_sid else prompt,
             cwd=ctx.project_path,
             log_base=review_log, verbose_logs=ctx.verbose_logs,

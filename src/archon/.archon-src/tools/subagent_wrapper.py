@@ -34,6 +34,7 @@ effectively lost.
 """
 
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -43,6 +44,42 @@ from pathlib import Path
 
 _PARENT_SLUG_ENV_VAR = "ARCHON_SUBAGENT_SLUG"
 _ROOT_PARENT_SLUG = "_root"
+
+
+def _resolve_archon_cmd() -> list[str] | None:
+    """Return the command prefix that invokes the archon CLI, or None.
+
+    Resolution order, most-to-least authoritative:
+
+    1. ``ARCHON_CLI_BIN`` — an absolute ``archon`` console-script path
+       stamped into the env by a parent ``codex`` run (see
+       ``CodexAgent.build_env`` → ``_stamp_archon_cli``). This is the path
+       that actually matters inside the Codex sandbox: codex runs each tool
+       command in a login shell (``bash -lc``) that re-derives ``PATH`` from
+       the user profile, dropping the venv ``bin/`` — so ``shutil.which`` and
+       a bare ``python3`` both miss archon. Non-``PATH`` env vars survive
+       that shell, so this stamped absolute path is the reliable handle.
+    2. ``archon`` console script on ``PATH`` — the normal, non-sandboxed case.
+    3. ``ARCHON_PYTHON`` — an absolute interpreter path stamped alongside
+       ``ARCHON_CLI_BIN`` that can import ``archon``; invoked as
+       ``<python> -m archon``.
+    4. ``<this python> -m archon`` when ``archon`` is importable by the
+       interpreter running this wrapper.
+
+    Returns None only when all four miss, so the caller emits one clear error.
+    """
+    cli_bin = os.environ.get("ARCHON_CLI_BIN")
+    if cli_bin and os.path.isfile(cli_bin):
+        return [cli_bin]
+    exe = shutil.which("archon")
+    if exe:
+        return [exe]
+    stamped_py = os.environ.get("ARCHON_PYTHON")
+    if stamped_py and os.path.isfile(stamped_py):
+        return [stamped_py, "-m", "archon"]
+    if importlib.util.find_spec("archon") is not None:
+        return [sys.executable, "-m", "archon"]
+    return None
 
 
 def _derive_iter_num_from_logs(project_path: Path) -> str | None:
@@ -97,10 +134,12 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    if not shutil.which("archon"):
+    archon_cmd = _resolve_archon_cmd()
+    if archon_cmd is None:
         print(
-            "archon CLI not found on PATH. Install Archon or activate "
-            "its venv before running the loop.",
+            "archon CLI not found: neither an `archon` executable on PATH "
+            f"nor an importable `archon` module for {sys.executable}. Install "
+            "Archon or activate its venv before running the loop.",
             file=sys.stderr,
         )
         return 1
@@ -137,7 +176,7 @@ def main() -> int:
     )
 
     cmd = [
-        "archon", "subagent", args.name,
+        *archon_cmd, "subagent", args.name,
         "--project-path", os.getcwd(),
         "--slug", args.slug,
         "--directive-file", args.directive_file,

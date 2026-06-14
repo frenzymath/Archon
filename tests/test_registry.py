@@ -204,6 +204,24 @@ class BuildRegistryTest(unittest.TestCase):
         r = build_registry(self.project, enabled=[])
         self.assertEqual(len(r), 0)
 
+    def test_enabled_star_loads_everything(self):
+        """`enabled="*"` keeps every descriptor, default_enabled or not."""
+        _write_descriptor(self.project_subdir, "on", {
+            "name": "on", "default_enabled": True,
+        })
+        _write_descriptor(self.project_subdir, "off", {
+            "name": "off", "default_enabled": False,
+        })
+        r = build_registry(self.project, enabled="*")
+        self.assertIn("on", r)
+        self.assertIn("off", r)
+
+    def test_enabled_rejects_non_star_string(self):
+        """Avoid treating an accidental string as a character allowlist."""
+        _write_descriptor(self.project_subdir, "oops", {"name": "oops"})
+        with self.assertRaises(TypeError):
+            build_registry(self.project, enabled="oops")
+
     def test_registry_interface(self):
         _write_descriptor(self.project_subdir, "x", {"name": "x"})
         _write_descriptor(self.project_subdir, "y", {"name": "y"})
@@ -259,6 +277,14 @@ class ResolveSubagentsEnabledTest(unittest.TestCase):
         )
         cfg = ProjectConfig(raw={"subagents": {"enabled": "oops"}})
         self.assertIsNone(resolve_subagents_enabled(cfg))
+
+    def test_star_returns_star(self):
+        from archon.commands.tooling.project_config import (
+            ProjectConfig,
+            resolve_subagents_enabled,
+        )
+        cfg = ProjectConfig(raw={"subagents": {"enabled": "*"}})
+        self.assertEqual(resolve_subagents_enabled(cfg), "*")
 
 
 # ── per-subagent model resolution (new dict shape + legacy string) ──

@@ -139,21 +139,23 @@ export default function Overview() {
       {summary?.sessions && summary.sessions.length > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionLabel}>Sessions</div>
-          <table className={styles.table}>
-            <thead>
-              <tr><th>Time</th><th>Model</th><th>Duration</th><th>Turns</th></tr>
-            </thead>
-            <tbody>
-              {summary.sessions.slice().reverse().map((s, i) => (
-                <tr key={i}>
-                  <td>{fmtTime(s.timestamp)}</td>
-                  <td>{s.model}</td>
-                  <td>{fmtDuration(s.duration)}</td>
-                  <td>{s.turns}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className={styles.tableScroll}>
+            <table className={styles.table}>
+              <thead>
+                <tr><th>Time</th><th>Model</th><th>Duration</th><th>Turns</th></tr>
+              </thead>
+              <tbody>
+                {summary.sessions.slice().reverse().map((s, i) => (
+                  <tr key={i}>
+                    <td>{fmtTime(s.timestamp)}</td>
+                    <td>{s.model}</td>
+                    <td>{fmtDuration(s.duration)}</td>
+                    <td>{s.turns}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from archon import log
 
-from ..utils import data_path, find_global_mcp_lean_lsp, run
+from ..utils import data_path, find_global_mcp_lean_lsp, has, run
 from .base import InitStep
 
 
@@ -15,6 +15,13 @@ class LeanLspMcpStep(InitStep):
     def run(self) -> None:
         ctx = self.ctx
         log.phase(self.number, self.name)
+
+        if not has("claude"):
+            log.warn(
+                "Claude Code is not installed; skipping Claude MCP "
+                "registration. Codex harnesses configure lean-lsp per run."
+            )
+            return
 
         lean_lsp_dir = data_path("tools/lean-lsp-mcp")
 

@@ -13,8 +13,9 @@ from typing import Optional
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 from archon.state import read_stage
+from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
 
 
 _HINT_PATTERN = re.compile(r"^- \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] .+$")
@@ -64,6 +65,7 @@ class DiscussionContext:
             "task_done": _read_if_exists(self.state_dir / "task_done.md"),
             "project_status": _read_if_exists(self.state_dir / "PROJECT_STATUS.md"),
             "user_hints": _read_if_exists(self.state_dir / "USER_HINTS.md", max_chars=1000),
+            "archon_memory": _read_if_exists(self.state_dir / "ARCHON_MEMORY.md", max_chars=800),
             "sorry_info": self._sorry_summary(),
             "journal_summary": self._latest_journal_summary(),
         }
@@ -111,10 +113,14 @@ class DiscussCommand:
         *,
         focus: str | None = None,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.project_path = project_path
         self.focus = focus
         self.model = model
+        self.backend = backend
+        self.harness = harness
 
     def run(self) -> None:
         resolved = Path(self.project_path).resolve()
@@ -136,9 +142,14 @@ class DiscussCommand:
 
         self._announce(resolved, stage)
         try:
-            ClaudeAgent(model=self.model, role="discuss").run_interactive(
-                prompt, cwd=resolved,
-            )
+            cfg = load_project_config(resolved)
+            build_runner(
+                role="discuss",
+                model=self.model,
+                cfg=cfg,
+                harness=self.harness,
+                backend=self.backend or ClaudeBackend(),
+            ).run_interactive(prompt, cwd=resolved)
         except KeyboardInterrupt:
             log.info("Discussion ended")
 
@@ -182,6 +193,7 @@ FOCUS: The mathematician wants to discuss **{self.focus}** specifically.
         task_pending = context["task_pending"]
         task_done = context["task_done"]
         user_hints = context["user_hints"]
+        archon_memory = context.get("archon_memory", "")
         journal_summary = context["journal_summary"]
 
         return textwrap.dedent(f"""\
@@ -193,20 +205,17 @@ Project directory: {resolved}
 Project state directory: {state_dir}
 Current stage: {stage}
 
-Read {state_dir}/CLAUDE.md for full project context.
+Read {state_dir}/AGENTS.md for full project context.
 {focus_section}
-## STRICT RULES — READ CAREFULLY
+## Rules
 
-### What you MUST NOT do
-- **NEVER create, edit, or delete any .lean file.** Not a single character.
-- **NEVER edit PROGRESS.md, task_pending.md, task_done.md, PROJECT_STATUS.md,
-  or any file under proof-journal/.**
+### What you MUST NOT do without explicit user consent
+- **NEVER edit files without asking first.** Default mode is read-only.
 - **NEVER launch or invoke other agents (plan, prover, review).**
-- **NEVER run `lake build`, `lake env lean`, or any command that writes or modifies files.**
+- **NEVER run `lake build`, `lake env lean`, or commands that compile the project.**
 - **NEVER run `archon loop`, `archon init`, or any archon subcommand.**
-- The ONLY file you may write to is `{hints_file}`, and ONLY by appending hint lines.
 
-### What you CAN and SHOULD do
+### What you CAN always do (no consent needed)
 - **Read any file** in the project — .lean files, state files, logs, journal entries, blueprints.
 - **Use Lean LSP MCP tools** (read-only inspection):
   - `lean_goal` — check the goal state at a specific line/column in a .lean file
@@ -222,32 +231,61 @@ Read {state_dir}/CLAUDE.md for full project context.
 - **Verify proof ideas** by checking goal states and searching for lemmas — tell the
   mathematician whether an approach would likely work, without actually editing any file.
 
+### Dynamic write consent — how to request permission
+
+You may write to files **only after the user explicitly approves** a specific request in
+this session. To request consent:
+1. State the **exact file path** you want to edit.
+2. Show the **exact change** (diff or replacement text, not a description).
+3. Explain **why** it is needed.
+4. Wait for the user to reply with explicit approval ("yes", "go ahead", "do it", etc.).
+   A non-committal response is NOT approval. Never interpret silence or "maybe" as consent.
+
+**Per-file warnings you MUST include in your consent request:**
+- `.archon/prompts/*.md` → "⚠ This modifies what Archon agents are told on every future iteration."
+- `.lean` files → "I will only add or edit comments (`/- ... -/` or `--`), not proof code."
+- `blueprint/src/chapters/*.tex` → "I will only add `% NOTE:` annotations or edit existing comments."
+- `.archon/PROGRESS.md`, `.archon/STRATEGY.md`, etc. → "This is a live state file read by the next plan agent."
+
 ### Writing hints to USER_HINTS.md
 
-When the mathematician provides a mathematical insight, a strategic direction, or
-explicitly asks you to record something for the plan agent, append it to
-`{hints_file}`.
+`USER_HINTS.md` has two sections with different lifecycles:
+- `## Temporary hints` — consumed by the next plan phase and then cleared. Use for one-shot
+  steering ("try route X this iter", "skip Lane F this round").
+- `## Persistent hints` — NEVER auto-cleared. These are standing directives that survive every
+  iteration. The plan agent treats them as higher priority than its own prompt instructions.
+  Use for lasting constraints ("never accept axiom X", "don't touch theorem Y until I say so").
 
-**You MUST use exactly this format** — one hint per line, appended at the end of the file:
+When the mathematician provides an insight or direction to record, decide which section fits:
+- One-shot steering → Temporary
+- Project-wide constraint or override → Persistent
 
+Tell the user which section you're targeting and why, then get their confirmation before writing.
+
+**Format** — one hint per line:
 ```
 - [YYYY-MM-DDTHH:MM:SSZ] hint text here
 ```
-
-Example:
-```
-- [2026-04-15T14:30:00Z] The measure_union approach is a dead end for sigma_finite_restrict. Try σ-additivity via MeasureTheory.Measure.sum instead.
-```
-
-Rules for writing hints:
-- Use the current UTC timestamp when writing the hint.
-- Append to the end of the file. Do NOT overwrite or remove existing content.
-- Do NOT modify the header lines ("# User Hints", etc.) at the top of the file.
-- Each hint should be self-contained — the plan agent reads them without this conversation's context.
-- **Always confirm with the mathematician before writing.** Show the exact hint text
-  you intend to write, let them adjust, then write it only after they approve.
+Append under the correct `## Temporary hints` or `## Persistent hints` heading. Each hint must
+be self-contained — the plan agent reads it without this conversation's context.
 
 This format is compatible with `archon hint show` and `archon hint clear`.
+
+### Writing per-file hints to a `.lean` file (`/- USER: ... -/`)
+
+Some steering is **file-specific** rather than project-wide — e.g. "in `Foo/Bar.lean`, prove
+`baz` via the spectral-sequence route, not induction", or "the `sorry` at line 88 is false as
+stated — weaken the hypothesis first". The home for that is a `/- USER: ... -/` block comment
+placed directly above the relevant declaration in the `.lean` file: the prover that owns that
+file reads it next iteration as a first-class instruction. This is the per-file counterpart to
+`USER_HINTS.md` (provers look for the `USER:` marker in their assigned file).
+
+When the insight is about one specific file/declaration, prefer this over `USER_HINTS.md` — it
+reaches exactly the prover who needs it, with the code in front of them. Use the standard
+consent flow for any `.lean` edit: state the file, the exact comment text, and the target
+declaration; note "I will only add a `/- USER: ... -/` comment, not proof code"; wait for
+explicit approval. Keep the comment self-contained — the prover reads it without this
+conversation's context.
 
 ## Current project state (pre-loaded)
 
@@ -271,6 +309,13 @@ This format is compatible with `archon hint show` and `archon hint clear`.
 ### USER_HINTS.md (pending hints)
 {user_hints if user_hints else "(no pending hints)"}
 
+### ARCHON_MEMORY.md (condensed project knowledge — you may update this file)
+{archon_memory if archon_memory else "(empty — no project knowledge recorded yet)"}
+
+You may update `ARCHON_MEMORY.md` during this session to record important project-level
+insights (dead ends, hazards, protected invariants). Hard limits: ≤10 bullets, ≤600 chars.
+Prune before adding. Get user confirmation before writing.
+
 ## How to behave
 
 1. **Start with a concise status overview**: how many sorries remain, which files are
@@ -284,12 +329,15 @@ This format is compatible with `archon hint show` and `archon hint clear`.
    actually search for it with lean_leansearch or lean_loogle, check the types, and
    give an informed answer. Don't guess.
 5. **Record insights as hints**: when the discussion produces an actionable insight,
-   offer to write it as a hint. Confirm the exact text with the mathematician first.
-   The plan agent will read it at the start of the next `archon loop` iteration and
-   translate it into concrete objectives for the provers.
-6. **Never take action beyond hints**: if the mathematician asks you to "fix it" or
-   "try this approach", explain that you can only record it as a hint for the plan
-   agent. Suggest they run `archon loop` afterward to act on the hints.""")
+   proactively offer to record it — and pick the channel that fits the situation:
+   project-wide steering → `USER_HINTS.md` (Temporary vs Persistent); a point about one
+   specific file/declaration → a `/- USER: ... -/` comment in that `.lean` file. Confirm the
+   exact text (and the section, or the target declaration) with the mathematician first. The
+   plan agent reads `USER_HINTS.md` at the start of the next `archon loop` iteration; the
+   owning prover reads the `/- USER: ... -/` comment when it next works that file.
+6. **Offer edits when helpful**: if the mathematician wants a targeted change to a prompt,
+   a comment in a .lean file, or a state file update, offer to do it via the consent flow
+   above rather than just saying "I can't do that".""")
 
     def _announce(self, resolved: Path, stage: str) -> None:
         log.header("Archon Discuss")
@@ -297,7 +345,7 @@ This format is compatible with `archon hint show` and `archon hint clear`.
             "Project": str(resolved),
             "Stage": stage,
             "Focus": self.focus or "(general)",
-            "Writable": "USER_HINTS.md only",
+            "Writable": "files with explicit per-request user consent",
         })
 
         log.info("Starting interactive session — Ctrl+C to exit")
@@ -345,6 +393,20 @@ def discuss(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive session harness, e.g. codex.",
+    ),
 ) -> None:
     """Start an interactive discussion about the project.
 
@@ -368,4 +430,8 @@ def discuss(
       archon discuss . --focus Algebra/WLocal.lean
       archon discuss . --focus wLocal_iff
     """
-    DiscussCommand(project_path, focus=focus, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    DiscussCommand(
+        project_path, focus=focus, model=model, backend=backend, harness=harness,
+    ).run()

@@ -237,20 +237,21 @@ class ProjectBootstrap:
 
         if info.has_mathlib:
             report.add("Mathlib dependency already declared", changed=False)
-        else:
-            try:
-                modified = self.lake.add_mathlib_dependency()
-                if modified:
-                    report.add(f"Added Mathlib dependency to {info.path.name}")
-            except Exception as e:
-                report.warn(f"Failed to add Mathlib dependency: {e}")
-                return
+            # Do NOT run lake update when Mathlib is already pinned — it would
+            # silently upgrade the version in lake-manifest.json, which can
+            # break a project that was carefully pinned to a specific Mathlib.
+            return
 
-        # `lake update` / cache-get / build only touch .lake/ (gitignored)
-        # and lake-manifest.json. They don't constitute "bootstrap work"
-        # on their own on a re-run — if the manifest genuinely changed,
-        # that was caused by the Mathlib-add step above, which already
-        # flipped did_work.
+        try:
+            modified = self.lake.add_mathlib_dependency()
+            if modified:
+                report.add(f"Added Mathlib dependency to {info.path.name}")
+        except Exception as e:
+            report.warn(f"Failed to add Mathlib dependency: {e}")
+            return
+
+        # `lake update` / cache-get / build are only needed after we just added
+        # Mathlib for the first time — they generate the initial manifest lockfile.
         try:
             self.lake.update()
             report.add("Ran `lake update`", changed=False)

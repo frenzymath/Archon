@@ -34,6 +34,7 @@ def _strip_html_comments(text: str) -> str:
     return _HTML_COMMENT_RE.sub("", text)
 
 from archon.commands.tooling.blueprint import chapter_slug_for_lean_file
+from archon.state import normalize_stage_for_prompt_path
 from archon.state.iter_state import (
     format_recent_iter_sidecars_for_prompt,
     objectives_sidecar_path,
@@ -304,53 +305,185 @@ def _axiom_sweep_findings_block(
     return "\n".join(lines)
 
 
+_PERSISTENT_HEADING_RE = re.compile(
+    r"^##\s+Persistent hints\s*$", re.IGNORECASE | re.MULTILINE
+)
+_TEMPORARY_HEADING_RE = re.compile(
+    r"^##\s+Temporary hints\s*$", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _split_hint_sections(text: str) -> tuple[str, str]:
+    """Return (temporary_body, persistent_body) from USER_HINTS.md text.
+
+    Strips HTML comments first, then finds each section's content
+    (everything after the heading until the next ``##`` heading or EOF).
+    Returns empty strings for missing sections.
+    """
+    stripped = _strip_html_comments(text)
+
+    def _section_body(heading_re: re.Pattern[str]) -> str:
+        m = heading_re.search(stripped)
+        if not m:
+            return ""
+        # Body starts after the heading line.
+        body_start = stripped.index("\n", m.start()) + 1
+        # Ends at the next ## heading (or EOF).
+        next_h = re.search(r"^##\s", stripped[body_start:], re.MULTILINE)
+        body_end = body_start + next_h.start() if next_h else len(stripped)
+        return stripped[body_start:body_end].strip()
+
+    return _section_body(_TEMPORARY_HEADING_RE), _section_body(_PERSISTENT_HEADING_RE)
+
+
 def _user_hints_block(captured_hints: str | None) -> str:
     """Inject already-captured USER_HINTS.md content into the plan prompt.
 
-    The loop reads ``USER_HINTS.md`` before the plan phase, passes the
-    text here, and clears the file after the plan agent succeeds. The
-    agent does NOT read or clear the hints file itself; everything the
-    user wrote is already in this block.
-
-    ``captured_hints`` of ``None`` or empty string renders the
-    "no hints this iter" affordance — the planner reads the prior iter's
-    sidecar for any ``## Fallback if no user response`` section (the
-    user-silent fallback contract).
-
-    HTML comments in ``captured_hints`` are stripped before both the
-    emptiness check and the injection. The bundled ``USER_HINTS.md``
-    template is an HTML-comment preamble explaining the format to the
-    user; "template only" content must render as "no hints" to the
-    planner, not as live instructions.
+    Handles the two-section format (Temporary + Persistent). Persistent
+    hints are rendered first and marked as overriding any conflicting
+    instructions. Temporary hints are consumed this iteration and then
+    cleared. HTML comments are stripped before processing.
     """
-    stripped_text = (
-        _strip_html_comments(captured_hints) if captured_hints else ""
-    )
-    if not stripped_text.strip():
-        return dedent("""
+    raw = captured_hints or ""
+    temporary, persistent = _split_hint_sections(raw)
 
-            ## User hints
-
-            No user hints this iteration. If the prior iter's sidecar
-            (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
-            user response` section, execute that fallback now and record
-            the auto-execution in this iter's sidecar under
-            `## User-silent fallback executed`. Otherwise proceed
-            normally.
-        """)
-    return dedent(f"""
+    _NO_HINTS_MSG = dedent("""
 
         ## User hints
 
-        The user wrote the following in `USER_HINTS.md` for this
-        iteration. The loop has already captured the content (shown
-        below) and will clear the file once your plan phase succeeds —
-        you do NOT need to read `USER_HINTS.md` or clear it yourself.
-        Treat anything below as the live hint set; incorporate it into
-        your plan.
+        No user hints this iteration. If the prior iter's sidecar
+        (`iter/iter-{prev}/plan.md`) declares a `## Fallback if no
+        user response` section, execute that fallback now and record
+        the auto-execution in this iter's sidecar under
+        `## User-silent fallback executed`. Otherwise proceed
+        normally.
+    """)
+
+    # Fall back to treating the entire stripped content as temporary for
+    # legacy single-section files (no ## headings found).
+    if not temporary and not persistent:
+        stripped_no_comment = _strip_html_comments(raw)
+        # If the new two-section headings are present (even with empty bodies)
+        # this is a template-only file with no real hints — not a legacy file.
+        has_section_headings = bool(
+            _TEMPORARY_HEADING_RE.search(stripped_no_comment)
+            or _PERSISTENT_HEADING_RE.search(stripped_no_comment)
+        )
+        if has_section_headings:
+            return _NO_HINTS_MSG
+        legacy = stripped_no_comment.strip()
+        if not legacy:
+            return _NO_HINTS_MSG
+        temporary = legacy
+
+    parts: list[str] = ["\n## User hints\n"]
+
+    if persistent:
+        parts.append(dedent(f"""
+            ### Standing directives (persistent — override all conflicting instructions)
+
+            These are long-lived constraints set by the user. They take priority over
+            any instruction in `.archon/prompts/plan.md` or elsewhere in this prompt.
+            If a standing directive conflicts with another instruction, **defer to the
+            standing directive**.
+
+            ```
+            {persistent}
+            ```
+        """))
+
+    if temporary:
+        parts.append(dedent(f"""
+            ### One-shot hints for this iteration
+
+            The user wrote the following in `USER_HINTS.md`. The loop captured the
+            content and will clear this section once your plan phase succeeds — you
+            do NOT need to read or clear `USER_HINTS.md` yourself.
+
+            ```
+            {temporary}
+            ```
+        """))
+
+    return "".join(parts)
+
+
+def _auto_notes_block(captured_auto_notes: str | None) -> str:
+    """Inject loop-generated AUTO_NOTES.md feedback into the plan prompt.
+
+    These are plan-validate's automated notes (no-op/blocked/deferred
+    objectives, format corrections) from the previous iteration — the
+    system-managed counterpart to user hints. Returns "" when there is
+    nothing to surface, so no empty section is rendered.
+    """
+    raw = _strip_html_comments(captured_auto_notes or "").strip()
+    if not raw:
+        return ""
+    return dedent(f"""
+
+        ## Automated validation notes
+
+        The Archon loop's plan-validation step recorded the following about the
+        previous iteration (objectives it dropped as no-ops, blocked-by-failed-
+        build, or deferred over the dispatch cap, and any format corrections).
+        These are **loop-generated diagnostics, not user input** — act on them
+        when choosing this iteration's objectives. The loop captured and will
+        clear them; you do NOT need to read or clear `AUTO_NOTES.md` yourself.
 
         ```
-        {stripped_text.strip()}
+        {raw}
+        ```
+    """)
+
+
+def _archon_memory_block(state_dir: Path | None, *, writable: bool = False) -> str:
+    """Inject ARCHON_MEMORY.md content into an agent prompt.
+
+    When ``writable=True`` (plan agent, discuss), the block includes
+    write instructions. When ``writable=False`` (provers, review,
+    refactor), the block is read-only context.
+
+    Returns an empty string when the file is missing or contains only
+    the HTML-comment preamble (no actual bullets).
+    """
+    if state_dir is None:
+        return ""
+    memory_file = state_dir / "ARCHON_MEMORY.md"
+    if not memory_file.exists():
+        return ""
+    try:
+        raw = memory_file.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    content = _strip_html_comments(raw).strip()
+    if not content:
+        return ""
+
+    if writable:
+        return dedent(f"""
+
+            ## Archon memory
+
+            Condensed project knowledge carried across iterations. You MAY update
+            `{memory_file}` during this session. Rules:
+            - Hard limits: **≤10 bullets**, **≤600 chars total** in the file.
+            - Prune the least important bullet before adding a new one.
+            - One-line bullets only. No prose, no sub-bullets.
+            - Only keep things that would surprise an agent reading the code fresh
+              (dead ends, hazards, Mathlib gaps, protected invariants).
+              Do NOT note things already obvious from the codebase or PROGRESS.md.
+
+            Current contents:
+            ```
+            {content}
+            ```
+        """)
+    return dedent(f"""
+
+        ## Archon memory (read only — do NOT modify this file)
+
+        ```
+        {content}
         ```
     """)
 
@@ -583,6 +716,7 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     agent can't miss it.
     """
     from archon.commands.tooling.project_config import (
+        apply_forced_subagents,
         load_project_config,
         resolve_subagents_enabled,
     )
@@ -593,7 +727,9 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     )
 
     cfg = load_project_config(project_path)
-    enabled = resolve_subagents_enabled(cfg)
+    enabled = apply_forced_subagents(
+        project_path, resolve_subagents_enabled(cfg),
+    )
     registry = build_registry(project_path, enabled=enabled)
 
     if len(registry) == 0:
@@ -736,40 +872,403 @@ def _subagent_catalog_block(project_path: Path, *, role: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ── prover modes catalog ─────────────────────────────────────────────
+
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)", re.DOTALL)
+
+
+def _parse_mode_frontmatter(text: str) -> dict:
+    """Extract YAML frontmatter from a prover-mode descriptor file."""
+    import yaml as _yaml
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}
+    try:
+        return _yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        return {}
+
+
+def load_prover_mode_content(state_dir: Path, mode_name: str | None) -> str | None:
+    """Return a prover-mode descriptor's body (frontmatter stripped), or None.
+
+    ``None`` when ``mode_name`` is falsy or the file is missing.
+    """
+    if not mode_name:
+        return None
+    mode_file = state_dir / "prover-modes" / f"{mode_name}.md"
+    if not mode_file.exists():
+        return None
+    text = mode_file.read_text(encoding="utf-8")
+    stripped = re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.DOTALL)
+    return stripped.strip() or None
+
+
+def default_prover_mode_for_stage(state_dir: Path, stage: str) -> str | None:
+    """Return the prover-mode that declares itself default for ``stage``.
+
+    Scans ``<state_dir>/prover-modes/*.md`` for a descriptor whose
+    ``default_for_stages`` frontmatter includes the canonical stage token
+    (e.g. ``prove`` for ``prover``, ``formalize`` for ``autoformalize``,
+    ``polish`` for ``polish``) and returns its file stem — usable directly by
+    the runner's mode loader. The default mode is what a prover gets when its
+    objective carries no explicit ``[prover-mode: …]`` tag, so the modes are
+    the single source of truth (the static ``prompts/prover-<stage>.md`` files
+    were retired). Returns ``None`` when the modes dir is absent or no mode
+    claims the stage — then the caller falls back to the legacy static prompt
+    for old projects that predate modes.
+    """
+    modes_dir = state_dir / "prover-modes"
+    if not modes_dir.is_dir():
+        return None
+    canonical = normalize_stage_for_prompt_path(stage)
+    for path in sorted(modes_dir.glob("*.md")):
+        try:
+            fm = _parse_mode_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        defaults = fm.get("default_for_stages") or []
+        if isinstance(defaults, str):
+            defaults = [defaults]
+        if canonical in defaults:
+            return path.stem
+    return None
+
+
+def _prover_modes_catalog_block(state_dir: Path) -> str:
+    """Render the available prover-modes catalog for injection into the plan prompt.
+
+    Reads ``<state_dir>/prover-modes/*.md`` (installed by ``archon init``
+    from the built-in ``prover-modes/`` source directory). Returns an empty
+    string if no mode files are found.
+    """
+    modes_dir = state_dir / "prover-modes"
+    if not modes_dir.is_dir():
+        return ""
+
+    modes: list[dict] = []
+    for path in sorted(modes_dir.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _parse_mode_frontmatter(text)
+        if not fm.get("name"):
+            continue
+        modes.append(fm)
+
+    if not modes:
+        return ""
+
+    lines = [
+        "",
+        "## Available prover modes",
+        "",
+        "Add `[prover-mode: <name>]` to an objective line in `PROGRESS.md` to "
+        "override the default mode for that file. The stage default is used when no tag is present "
+        "(formalize → autoformalize stage, prove → prover stage, polish → polish stage). "
+        "Blueprint access is granted automatically to modes that require it.",
+        "",
+    ]
+    for fm in modes:
+        name = fm.get("name", "?")
+        desc = str(fm.get("description", "")).strip()
+        compatible = fm.get("compatible_stages") or []
+        defaults = fm.get("default_for_stages") or []
+        read_bp = fm.get("read_blueprint", False)
+
+        tags: list[str] = []
+        if defaults:
+            tags.append(f"default for: {', '.join(defaults)}")
+        if read_bp:
+            tags.append("reads blueprint")
+        tag_str = f" [{' · '.join(tags)}]" if tags else ""
+        compat_str = f" — valid stages: {', '.join(compatible)}" if compatible else ""
+        short_desc = desc[:200] + "..." if len(desc) > 200 else desc
+        lines.append(f"- **{name}**{tag_str}{compat_str} — {short_desc}")
+
+        notes = str(fm.get("dispatcher_notes", "")).strip()
+        if notes:
+            for note_line in notes.splitlines():
+                lines.append(f"  {note_line}")
+
+    lines.append("")
+    lines.append(
+        "Tag syntax (add to any objective bullet in PROGRESS.md): "
+        "`[prover-mode: fine-grained]`. One tag per objective; "
+        "the tag is stripped from the directive the prover sees."
+    )
+
+    return "\n".join(lines) + "\n"
+
+
 # ── stage normalization ───────────────────────────────────────────────
 
 
-# Canonical prover stage tokens shipped at `.archon/prompts/prover-<stage>.md`.
-# Used by ``_normalize_stage_for_prompt_path`` to recover the canonical
-# token from a verbose ``## Current Stage`` line; the planner sometimes
-# writes things like ``prover (Iter-123: M1.b residual — Steps 1-4 ...)``
-# and the raw text breaks the prompt-file path resolution.
-_PROVER_STAGES = ("autoformalize", "prover", "polish")
-
-
-def _normalize_stage_for_prompt_path(stage: str) -> str:
-    """Pick the canonical prover-stage token used in `prover-<stage>.md` paths.
-
-    The plan agent occasionally writes ``## Current Stage`` with descriptive
-    text appended after the stage token, e.g.::
-
-        ## Current Stage
-        prover (Iter-123: M1.b residual — Steps 1-4 of the IsLocalization.of_le)
-
-    The raw text contains parentheses, em-dashes and trailing fragments — when
-    embedded into ``.archon/prompts/prover-<stage>.md`` this produces a
-    non-existent filename and the prover wastes one boot pivoting back to the
-    canonical path. Match the first known prefix instead so the path is always
-    one of the three shipped prompts.
-    """
-    head = stage.strip().lower().lstrip("`*").lstrip()
-    for canonical in _PROVER_STAGES:
-        if head.startswith(canonical):
-            return canonical
-    return "prover"
-
-
 # ── prompt builders ───────────────────────────────────────────────────
+
+
+def _blueprint_frontier_block(project_path: Path) -> str:
+    """Inject the leandag graph state (frontier, ∞-holes, broken deps) into the plan prompt.
+
+    Built from leandag — the SAME dependency graph the dashboard DAG page and
+    the ``archon dag`` agent use — so the planner, the dashboard, and the
+    reviewer never disagree about what is ready or what is blocked. Replaces
+    the older standalone ``dependency_graph.py`` frontier. Degrades to an empty
+    string when there is no blueprint or leandag is unavailable, so a broken
+    blueprint can't block the loop.
+    """
+    chapters_dir = project_path / "blueprint" / "src" / "chapters"
+    if not chapters_dir.is_dir():
+        return ""
+    try:
+        from archon.commands.dag.leandag_gaps import compute_gaps
+        report = compute_gaps(project_path)
+    except Exception:
+        return ""
+    if report.error or not report.has_blueprint:
+        return ""
+
+    # Planner-focused, token-cheap rendering: the frontier (what to dispatch),
+    # the ∞ holes (what to blueprint first), broken deps (what to fix), and
+    # the Lean ↔ blueprint coverage debt (lean_aux + isolated nodes). The
+    # debt MUST be shown here: provers create helpers every iter, the dag
+    # agent only runs before the loop, and the planner is the only agent
+    # that authors blueprint entries — omitting it lets isolated nodes
+    # accumulate silently (observed: 28 unmatched decls after 10 iters).
+    def _lst(title: str, items: list, n: int, render=lambda x: f"`{x}`") -> str:
+        shown = items[:n]
+        out = [f"**{title}** ({len(items)}):"]
+        if not items:
+            out.append("- none")
+        else:
+            out += [f"- {render(it)}" for it in shown]
+            if len(items) > n:
+                out.append(f"- … and {len(items) - n} more")
+        return "\n".join(out)
+
+    body = "\n\n".join([
+        f"Entry `{report.entry}` — {report.total_blueprint_decls} blueprint "
+        f"declaration(s); {len(report.unproved)} unproved, "
+        f"{report.infinity_total} with ∞-effort closure, "
+        f"{len(report.uncovered)} Lean decl(s) with no blueprint entry.",
+        _lst("Ready to prove (every \\uses dep done — dispatch these first)",
+             report.ready, 25),
+        _lst("∞ sources — statements with NO informal proof (root-first)",
+             report.infinity_sources, 15),
+        _lst("Broken \\uses{} (label exists in no chapter)",
+             report.broken_uses, 15,
+             render=lambda t: f"`{t[0]}` → `{t[1]}`"),
+        _lst("Coverage debt — Lean decls with NO blueprint entry "
+             "(isolated `lean_aux` nodes)", report.uncovered, 25),
+        _lst("Isolated blueprint nodes (no \\uses{} edges in or out)",
+             report.isolated_blueprint, 15),
+    ])
+
+    header = dedent("""
+
+        ## Blueprint graph state (leandag) — frontier, gaps, broken deps
+
+        Computed deterministically from the leandag dependency graph (the same
+        graph the dashboard DAG page and `archon dag` use), reflecting
+        \\lean{}/\\uses{}/\\leanok as of the last sync. Choose objectives from it
+        directly — you do NOT need to re-parse the blueprint.
+
+        """)
+    footer = dedent("""
+
+        **Act on these before dispatching provers:**
+        - **Ready to prove** — every \\uses{} dep is done. Dispatch the frontier first.
+        - **∞ effort / ∞ sources** — a statement with NO informal proof. Formalizing it is blind progress: **never dispatch a prover at an ∞-effort node.** Write the missing informal proof (or dispatch a blueprint subagent) to give it finite effort first.
+        - **Broken \\uses{}** — fix the ref (remove it, or add the missing \\begin{lemma} block with \\label/\\lean/\\uses) before dispatching anything that depends on it.
+        - If a frontier node SHOULD depend on something not yet done, add the missing \\uses{label} so the graph reflects the true dependency — an incomplete \\uses list makes a node look ready when it isn't.
+        - **Coverage debt is YOURS to clear THIS iter — it does not carry over silently.** Each listed Lean decl is a prover-created helper with no blueprint entry: an isolated node the graph cannot see (it appears in no frontier, effort, or cone computation). For each one, author the blueprint block — statement, \\label{}, \\lean{exact.Lean.Name}, **accurate \\uses{...}** reflecting what the Lean proof actually needs, and at least a one-line informal proof — or dispatch a blueprint-writer subagent to do it. The provers' task_results/*.md list each helper's dependencies under "## Needs blueprint entry"; consult them for the \\uses{} lists. Helpers that are genuinely implementation details may instead be marked `private` in the Lean source so they leave the scan.
+        - **Isolated blueprint nodes** — their dependencies were never transcribed into \\uses{}; wire them in (or delete the node if it is dead).
+        """)
+    return header + body + "\n" + footer
+
+
+def _protected_block(project_path: Path) -> str:
+    """Compact rendering of archon-protected.yaml for prompt injection.
+
+    Injected into the plan and prover prompts so neither has to remember
+    to open the file. Covers all rule types: frozen Lean signatures
+    (body may be filled), fully-frozen Lean declarations (untouchable even
+    with a sorry), read-only files/blueprint chapters (also enforced
+    deterministically by the dispatch gate), and protected blueprint
+    blocks by label. Empty / missing file → empty block.
+    """
+    from archon.commands.tooling import protect
+
+    ps = protect.load(project_path)
+    if ps.total_count() == 0:
+        return ""
+    lines = [
+        "",
+        "## Protected by the mathematician (`archon-protected.yaml`)",
+        "",
+        "The mathematician owns everything below; respect every rule. Do "
+        "NOT set or accept an objective that requires violating one.",
+        "",
+    ]
+    sig = [r for r in ps.lean_rules if r.level == "signature"]
+    full = [r for r in ps.lean_rules if r.level == "all"]
+    if sig:
+        lines.append(
+            "**Frozen signatures** (you MAY fill the proof body / close a "
+            "`sorry`, but never rename / re-type / reorder args / weaken "
+            "hypotheses):"
+        )
+        lines += [f"- `{r.file}`: `{r.name}`" for r in sig]
+        lines.append("")
+    if full:
+        lines.append(
+            "**Fully frozen declarations** (do not touch AT ALL — not even "
+            "to fill a `sorry`; the body is the mathematician's):"
+        )
+        lines += [f"- `{r.file}`: `{r.name}`" for r in full]
+        lines.append("")
+    bp_files = [r for r in ps.blueprint_rules if r.kind == "file"]
+    bp_labels = [r for r in ps.blueprint_rules if r.kind == "label"]
+    if bp_files or ps.file_rules:
+        lines.append(
+            "**Read-only files** (never write these; the dispatch gate also "
+            "rejects any write-domain that covers them):"
+        )
+        lines += [f"- `{r.pattern}` (blueprint chapter)" for r in bp_files]
+        lines += [f"- `{pat}`" for pat in ps.file_rules]
+        lines.append("")
+    if bp_labels:
+        lines.append(
+            "**Protected blueprint blocks** (matched by `\\label{}`, globs "
+            "allowed). `statement` = the declaration block (statement + "
+            "`\\label`/`\\lean`/`\\uses` annotations) is frozen but its "
+            "`proof` environment may be written; `all` = statement AND "
+            "proof are frozen:"
+        )
+        lines += [f"- `{r.pattern}` — {r.level}" for r in bp_labels]
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _prover_dag_hint_block(project_path: Path) -> str:
+    """Short DAG-navigation note injected into every prover prompt.
+
+    A prover reads the active mode body (the mode block injected into its
+    prompt), so this lives in the prompt builder (like ``_protected_block``)
+    to reach provers regardless of mode. Only shown
+    when the project has a blueprint — otherwise there is no graph to query.
+    """
+    if not (project_path / "blueprint" / "src" / "chapters").is_dir():
+        return ""
+    return dedent("""
+
+        ## Blueprint dependency graph (leandag)
+
+        You can navigate the project's dependency graph read-only to find the
+        proven lemmas/defs your goal can lean on (with the exact `\\lean{}`
+        names to apply) instead of re-deriving them. `archon` is on PATH;
+        `--json` prints parseable JSON to stdout (banner to stderr):
+
+        ```
+        archon dag-query ancestors --node <blueprint-label-of-your-target>   # proven deps available to you
+        archon dag-query node      --node <label>                            # one declaration's status
+        ```
+
+        It is a navigation aid only — the proof obligation and your blueprint
+        chapter remain the source of truth.
+        """)
+
+
+def _peers_block(project_path: Path) -> str:
+    """Inject read-only awareness of peer projects (``.archon/peers.yaml``).
+
+    Lists peer Archon projects in scope and, when their DAGs are built,
+    surfaces declarations this project still needs that a peer already proved
+    (matched by fully-qualified Lean name). Purely read-only: nothing is merged.
+    Degrades to an empty string when no peers are configured. Best-effort —
+    never raises into the prompt.
+    """
+    try:
+        from archon.commands.tooling import peers as peers_mod
+        peers = peers_mod.resolve_peers(project_path)
+    except Exception:
+        return ""
+    if not peers:
+        return ""
+
+    # What this project still needs (its own DAG, read-only — no rebuild).
+    own_dag = peers_mod.read_peer_dag(str(project_path))
+    needed = peers_mod.needed_lean_names(own_dag) if own_dag else set()
+
+    lines = [
+        "",
+        "## Peer projects (read-only awareness)",
+        "",
+        f"{len(peers)} peer project(s) are in scope (declared in "
+        "`.archon/peers.yaml`). You may **read** their graphs to reuse "
+        "infrastructure and avoid duplicating work — never edit them:",
+        "",
+    ]
+    for p in peers:
+        tag = "" if p.has_dag else "  *(DAG not built yet)*"
+        lines.append(f"- **{p.name}** — `{p.path}`{tag}")
+    lines += [
+        "",
+        "**Walk a peer's graph read-only** with `archon dag-query <verb> "
+        "--project-path <peer> [--json]`. It reads the peer's cached "
+        "`.leandag/dag.json` — it never rebuilds or writes anything in the peer. "
+        "Verbs: `frontier, node, ancestors, cone, interface, overlap, unproved, "
+        "sorry, gaps, needs-leanok, needs-lean, unmatched, leaves, roots, all`. "
+        "E.g.:",
+        "```bash",
+        "archon dag-query node      --node <label> --project-path <peer> --json  # one decl: statement, proof, deps, status",
+        "archon dag-query interface --node <label> --project-path <peer> --json  # the API a decl exposes to its users",
+        "archon dag-query cone      --node <label> --project-path <peer> --json  # its full dependency closure",
+        "```",
+        "**Read their source directly (read-only)** once a query points you at a "
+        "file: open the peer's `*.lean` for the Lean proof and "
+        "`blueprint/src/**.tex` for the informal write-up, then port it here. "
+        "Reuse the *strategy / structure*; the proof must still compile in THIS "
+        "project (different imports, Mathlib pin, namespaces).",
+        "",
+        "**Read-only, always.** You may read any peer file and query its cached "
+        "graph — nothing more. Never write to a peer path, and never run a "
+        "graph-mutating command (`leandag build`, `archon dag-graph`) against a "
+        "peer (it would touch their `.leandag/`). Writes outside this project "
+        "are rejected anyway.",
+    ]
+
+    # Cross-project matches: declarations you still need, already proved next door.
+    _CAP = 20
+    any_match = False
+    for p in peers:
+        if not p.has_dag or not needed:
+            continue
+        dag = peers_mod.read_peer_dag(p.path)
+        if not dag:
+            continue
+        hits = sorted(peers_mod.available_lean_names(dag) & needed)
+        if not hits:
+            continue
+        if not any_match:
+            lines += [
+                "",
+                "**Already available from peers** — declarations you still need "
+                "that a peer has already proved (by Lean name). Prefer reusing or "
+                "adapting their approach (read their blueprint/proof via "
+                "`dag-query`) over re-deriving from scratch. Verify the statement "
+                "matches before relying on it — same name can hide a different "
+                "definition:",
+                "",
+            ]
+            any_match = True
+        shown = hits[:_CAP]
+        extra = f" … (+{len(hits) - _CAP} more)" if len(hits) > _CAP else ""
+        lines.append(f"- from **{p.name}**: " + ", ".join(f"`{h}`" for h in shown) + extra)
+
+    return "\n".join(lines) + "\n"
 
 
 def build_plan_prompt(
@@ -780,6 +1279,7 @@ def build_plan_prompt(
     debug_feedback: bool = False,
     recent_iter_window: int = 3,
     captured_user_hints: str | None = None,
+    captured_auto_notes: str | None = None,
 ) -> str:
     refs = _references_summary(state_dir, project_path)
     refs_block = ""
@@ -825,55 +1325,288 @@ def build_plan_prompt(
 
         HARD RULE — refactors:
         - You MUST NOT write to {state_dir}/REFACTOR_DIRECTIVE.md. That file is a leftover from an older Archon flow and is only used by the interactive `archon refactor draft` command the mathematician runs by hand.
-        - The autonomous loop's way to refactor is to invoke the `refactor` subagent via the Agent tool, passing the directive INLINE in the prompt (see prompts/plan.md § "Subagent delegation"). The directive is never staged in a file.
+        - The autonomous loop's way to refactor is to dispatch the `refactor` subagent the same way as any other subagent: write its directive to `.archon/logs/iter-NNN/refactor-<slug>-directive.md`, then run the blocking `python3 .claude/tools/archon-subagent.py --name refactor --slug <slug> --directive-file … --write-domain '<glob>'` Bash call (see prompts/plan.md § "Subagent delegation"). The native `Agent`/`Task` tool is disabled — do NOT try to invoke the subagent through it. The per-iter `logs/iter-NNN/` directive file is correct; the standalone `REFACTOR_DIRECTIVE.md` is the deprecated flow to avoid.
         - If the existing {state_dir}/REFACTOR_DIRECTIVE.md, STRATEGY.md, task_pending.md, or PROGRESS.md contain references to the old REFACTOR_DIRECTIVE.md flow (e.g. "write the directive then the refactor agent will pick it up"), treat those as historical noise: prune them when you rewrite those files, and do NOT reproduce that pattern this iteration.""")
 
     sidecar_block = _iter_sidecar_context_block(
         state_dir, iter_num,
         role="plan", window=recent_iter_window,
     )
+    modes_catalog_block = _prover_modes_catalog_block(state_dir)
     catalog_block = _subagent_catalog_block(project_path, role="plan")
     user_hints_block = _user_hints_block(captured_user_hints)
+    auto_notes_block = _auto_notes_block(captured_auto_notes)
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
+    frontier_block = _blueprint_frontier_block(project_path)
+    peers_block = _peers_block(project_path)
+    memory_block = _archon_memory_block(state_dir, writable=True)
+    protected_block = _protected_block(project_path)
 
     return dedent(f"""\
         You are the plan agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/plan.md and {state_dir}/PROGRESS.md.
         State files (PROGRESS.md, task_pending.md, task_done.md, task_results/) live in {state_dir}/.
         The .lean files are in {project_path}/.
 
         Notes on what the loop has already done for you THIS iteration (so you don't repeat it):
         - User hints from USER_HINTS.md have been captured and are injected below under `## User hints`. The loop will clear the file when your plan phase succeeds; you do NOT need to read or clear it yourself.
-        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.""") + user_hints_block + doctor_block + axiom_sweep_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+        - Automated validation notes from the previous iter's plan-validate (dropped/blocked/deferred objectives, format corrections) are injected below under `## Automated validation notes` when there were any. These are loop-generated, NOT user input — the user-authored `USER_HINTS.md` never carries them.
+        - The prior iter's blueprint-doctor findings are injected below under `## Blueprint doctor — live structural findings` (when there were any). You do NOT need to read `logs/iter-{{prev}}/blueprint-doctor.md`; act on what's inline.
+        - The leandag graph state (ready-to-prove frontier, ∞-effort holes, broken `\\uses` refs, Lean ↔ blueprint coverage debt) is injected below under `## Blueprint graph state (leandag)` — the same graph the dashboard DAG page shows. You do NOT need to parse the blueprint chapters to derive dispatch ordering.""") + user_hints_block + auto_notes_block + memory_block + protected_block + doctor_block + axiom_sweep_block + frontier_block + peers_block + refs_block + blueprint_block + multilane_block + no_directive_block + sidecar_block + modes_catalog_block + catalog_block + debug_feedback_block(debug_feedback, state_dir, "plan", iter_num)
+
+
+def _lean_files_block(project_path: Path) -> str:
+    """Enumerate .lean files (excluding lake/target dirs) for the DAG prompt."""
+    _SKIP_PARTS = {'.lake', '_target', 'lake-packages', '.archon'}
+    lean_files = sorted(
+        p.relative_to(project_path)
+        for p in project_path.rglob("*.lean")
+        if not any(part in _SKIP_PARTS or part.startswith('.') for part in p.parts[1:])
+    )
+    if not lean_files:
+        return ""
+    lines = [
+        "",
+        "## Lean files in the project",
+        "",
+        "Each of these files will eventually need a blueprint chapter. "
+        "The slug mapping is: `Foo/Bar.lean` → `blueprint/src/chapters/Foo_Bar.tex`.",
+        "",
+    ]
+    for f in lean_files:
+        lines.append(f"- `{f}`")
+    return "\n".join(lines) + "\n"
+
+
+def _existing_chapters_block(project_path: Path) -> str:
+    """List existing blueprint chapters for the DAG prompt."""
+    chapters_dir = project_path / "blueprint" / "src" / "chapters"
+    if not chapters_dir.is_dir():
+        return (
+            "\n## Existing blueprint chapters\n\n"
+            "None yet — you will create them from scratch.\n"
+        )
+    chapters = sorted(chapters_dir.glob("*.tex"))
+    if not chapters:
+        return (
+            "\n## Existing blueprint chapters\n\n"
+            "None yet — you will create them from scratch.\n"
+        )
+    lines = ["", "## Existing blueprint chapters", ""]
+    for c in chapters:
+        lines.append(f"- `{c.relative_to(project_path)}`")
+    return "\n".join(lines) + "\n"
+
+
+def _goal_description_block(state_dir: Path, project_path: Path) -> str:
+    """Inject PROJECT_GOAL.md / ARCHON_GOAL.md content if present."""
+    for base in (state_dir, project_path):
+        for name in ("PROJECT_GOAL.md", "ARCHON_GOAL.md", "GOAL.md"):
+            f = base / name
+            if f.is_file():
+                try:
+                    content = f.read_text(encoding="utf-8").strip()
+                except OSError:
+                    continue
+                if content:
+                    return dedent(f"""
+
+                        ## Project goal ({f.name})
+
+                        {content}
+                    """)
+    return ""
+
+
+def _dag_iter_sidecar_block(state_dir: Path, iter_num: int, *, window: int = 3) -> str:
+    """Inject recent dag.md sidecar narratives into the DAG prompt."""
+    from archon.state.iter_state import dag_sidecar_path, existing_iter_nums
+
+    all_nums = existing_iter_nums(state_dir)
+    candidates = [n for n in all_nums if n < iter_num]
+    if not candidates:
+        return ""
+    selected = candidates[-window:]
+
+    parts: list[str] = []
+    for n in selected:
+        dag_file = dag_sidecar_path(state_dir, n)
+        if not dag_file.is_file():
+            continue
+        try:
+            content = dag_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if content:
+            truncated = content[:4000] + "\n\n... (truncated)" if len(content) > 4000 else content
+            parts.append(f"### iter-{n:03d} dag.md\n\n{truncated}")
+
+    if not parts:
+        return ""
+    header = "\n\n## Recent DAG iteration sidecars\n\n"
+    return header + "\n\n".join(parts) + "\n"
+
+
+def _dag_status_block(state_dir: Path) -> str:
+    """Inject current DAG_STATUS.md content if present."""
+    status_file = state_dir / "DAG_STATUS.md"
+    if not status_file.is_file():
+        return ""
+    try:
+        content = status_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not content:
+        return ""
+    return dedent(f"""
+
+        ## Current DAG_STATUS.md
+
+        ```markdown
+        {content}
+        ```
+    """)
+
+
+def _leandag_block(project_path: Path) -> str:
+    """Inject a leandag blueprint-coverage gap summary into the DAG prompt.
+
+    Surfaces uncovered Lean declarations (no blueprint entry), broken
+    ``\\uses{}`` refs, and unproved/ready declarations so the elaboration
+    agent sees what the blueprint is missing without parsing it itself.
+    Degrades to an empty string on any failure.
+    """
+    try:
+        from archon.commands.dag.leandag_gaps import compute_gaps, format_markdown
+        report = compute_gaps(project_path)
+    except Exception:
+        return ""
+    body = format_markdown(report).strip()
+    if not body:
+        return ""
+    return dedent("""
+
+        ## Blueprint coverage (leandag)
+
+        The blueprint DAG below is computed by `leandag` from the current
+        `.lean` files and blueprint chapters. Close the gaps it lists:
+        dispatch a `blueprint-writer` for uncovered declarations, and fix
+        broken `\\uses{}` refs. To re-query the live DAG, drive the `leandag`
+        CLI directly — `leandag build --html`, `leandag stats`, `leandag
+        focus`, `leandag show gaps`, `leandag query` (see prompts/dag.md for
+        the cadence).
+
+        """) + body + "\n"
+
+
+def build_dag_prompt(
+    project_name: str, project_path: Path, state_dir: Path,
+    iter_num: int,
+    *,
+    lean_aware: bool = True,
+) -> str:
+    """Build the invocation prompt for the DAG elaboration agent."""
+    refs = _references_summary(state_dir, project_path)
+    refs_block = ""
+    if refs:
+        refs_block = dedent(f"""
+
+            ## References available for this project
+
+            The file {project_path / 'references' / 'summary.md'} lists the informal sources backing this project.
+            Read the relevant source files under `references/` before writing any declaration block
+            that draws from external material.
+
+            ```markdown
+            {refs}
+            ```""")
+
+    lean_block = _lean_files_block(project_path) if lean_aware else ""
+    chapters_block = _existing_chapters_block(project_path)
+    goal_block = _goal_description_block(state_dir, project_path)
+    doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
+    leandag_block = _leandag_block(project_path)
+    sidecar_block = _dag_iter_sidecar_block(state_dir, iter_num)
+    status_block = _dag_status_block(state_dir)
+    catalog_block = _subagent_catalog_block(project_path, role="dag")
+    # Writable for the dag agent, same as the plan agent: it runs before
+    # the loop, establishes STRATEGY.md + the blueprint, and is the right
+    # place to seed durable cross-iteration knowledge (Mathlib gaps, dead
+    # ends, protected invariants) that the later plan agent reads.
+    memory_block = _archon_memory_block(state_dir, writable=True)
+    peers_block = _peers_block(project_path)
+
+    return dedent(f"""\
+        You are the DAG elaboration agent for project '{project_name}'.
+        Archon iteration: {iter_num:03d}.
+        Project directory: {project_path}
+        Project state directory: {state_dir}
+        Read {state_dir}/AGENTS.md for project context, then read {state_dir}/prompts/dag.md for your full role.
+
+        Your mission: produce a mathematically complete, dependency-correct informal blueprint
+        for the ENTIRE project — the full mathematical roadmap that `archon loop` will follow
+        to produce formal Lean proofs.
+
+        Notes on what has already been done for you this iteration:
+        - The blueprint-doctor findings from the prior iter are injected below (when present).
+        - Recent DAG sidecar narratives (your prior iter's dag.md) are injected below.
+        - The current DAG_STATUS.md is injected below.
+        - A leandag blueprint-coverage gap summary is injected below (uncovered Lean decls, broken \\uses{{}} refs, ready/∞ declarations).""") + status_block + memory_block + goal_block + lean_block + chapters_block + refs_block + doctor_block + leandag_block + peers_block + _protected_block(project_path) + sidecar_block + catalog_block
 
 
 def build_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
-    iter_num: int, debug_feedback: bool = False
+    iter_num: int, debug_feedback: bool = False,
+    *,
+    mode_name: str | None = None,
+    mode_content: str | None = None,
 ) -> str:
-    stage_path = _normalize_stage_for_prompt_path(stage)
+    memory_block = _archon_memory_block(state_dir, writable=False)
+    if mode_content:
+        mode_block = (
+            f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
+            + mode_content.strip()
+            + "\n"
+        )
+        return dedent(f"""\
+            You are the prover agent for project '{project_name}'. Current stage: {stage}.
+            Archon iteration: {iter_num:03d}.
+            Project directory: {project_path}
+            Project state directory: {state_dir}
+            Read {state_dir}/AGENTS.md for your role, then read {state_dir}/PROGRESS.md.
+            All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
+            + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + mode_block \
+            + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+    stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are the prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
-        All state files are in {state_dir}/. The .lean files are in {project_path}/.""") + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
+        All state files are in {state_dir}/. The .lean files are in {project_path}/.""") \
+        + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "prover", iter_num)
 
 
 def build_parallel_prover_prompt(
     project_name: str, project_path: Path, state_dir: Path, stage: str,
     iter_num: int, debug_feedback: bool = False,
     assigned_rel_lean_path: str | None = None,
+    *,
+    mode_name: str | None = None,
+    mode_content: str | None = None,
 ) -> str:
     """Build the prover prompt, optionally tailored to a specific assigned file.
 
-    When `assigned_rel_lean_path` is provided, the prompt includes a
-    pointer to the blueprint chapter for that file.
+    When ``assigned_rel_lean_path`` is provided, a blueprint chapter pointer
+    is injected (the chapter path is derived from the file slug).
+
+    When ``mode_content`` is provided, the mode body is injected inline and
+    replaces the old "read prover-<stage>.md" instruction.
     """
     bp_hint = ""
     if assigned_rel_lean_path:
@@ -881,13 +1614,38 @@ def build_parallel_prover_prompt(
         if hint:
             bp_hint = "\n\n" + hint
 
-    stage_path = _normalize_stage_for_prompt_path(stage)
+    memory_block = _archon_memory_block(state_dir, writable=False)
+
+    if mode_content:
+        mode_block = (
+            f"\nActive prover mode: **{mode_name or 'custom'}**\n\n"
+            + mode_content.strip()
+            + "\n"
+        )
+        return dedent(f"""\
+            You are a prover agent for project '{project_name}'. Current stage: {stage}.
+            Archon iteration: {iter_num:03d}.
+            Project directory: {project_path}
+            Project state directory: {state_dir}
+            Read {state_dir}/AGENTS.md for your role, then read {state_dir}/PROGRESS.md.
+            Check your .lean file for /- USER: ... -/ comments for file-specific hints.
+
+            IMPORTANT:
+            - You own ONLY the file assigned below. Do NOT edit any other .lean file.
+            - Write your results to {state_dir}/task_results/<your_file>.md when done.
+            - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
+            - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
+            - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
+            + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + mode_block \
+            + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+
+    stage_path = normalize_stage_for_prompt_path(stage)
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/prover-{stage_path}.md and {state_dir}/PROGRESS.md.
         Check your .lean file for /- USER: ... -/ comments for file-specific hints.
 
         IMPORTANT:
@@ -895,7 +1653,8 @@ def build_parallel_prover_prompt(
         - Write your results to {state_dir}/task_results/<your_file>.md when done.
         - Do NOT edit PROGRESS.md, task_pending.md, or task_done.md.
         - Missing Mathlib infrastructure is NEVER a valid reason to leave a sorry.
-        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") + bp_hint + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
+        - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.""") \
+        + bp_hint + memory_block + _protected_block(project_path) + _prover_dag_hint_block(project_path) + _peers_block(project_path) + debug_feedback_block(debug_feedback, state_dir, "parallel prover", iter_num)
 
 
 def build_refactor_prompt(
@@ -909,20 +1668,22 @@ def build_refactor_prompt(
     fixed slug ``"cli"``; the autonomous loop generates a kebab-case
     slug per call.
     """
+    memory_block = _archon_memory_block(state_dir, writable=False)
     return dedent(f"""\
         You are the refactor agent for project '{project_name}'.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
         Slug: {slug}
-        Read {state_dir}/CLAUDE.md for project context, then read {state_dir}/prompts/refactor.md.
+        Read {state_dir}/AGENTS.md for project context, then read {state_dir}/prompts/refactor.md.
 
         DIRECTIVE FROM PLAN AGENT:
         {directive}
 
         Execute this directive. Keep all files compiling (insert sorry at broken proof sites).
         Document every change in {state_dir}/task_results/refactor-{slug}.md
-        (include the slug as the `## Slug` field at the top of the report).""") + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
+        (include the slug as the `## Slug` field at the top of the report).""") \
+        + memory_block + debug_feedback_block(debug_feedback, state_dir, f"refactor ({slug})", iter_num)
 
 
 def _blueprint_doctor_block(state_dir: Path, iter_num: int) -> str:
@@ -991,7 +1752,8 @@ def _sync_leanok_block(state_dir: Path, iter_num: int) -> str:
         - ``iter`` equals this iteration ({iter_num:03d}) ⇒ sync has run for
           the current tree. Any remaining ``\\leanok`` is the script's
           deterministic verdict; only flag genuine laundering after a
-          first-hand audit of the Lean source.
+          first-hand audit of the Lean source. You are authorized to manually
+          override incorrect markers if you are certain (see Step 6).
         - ``iter`` is older or the file is missing ⇒ markers may be stale.
           Note the ambiguity in ``summary.md`` instead of raising CRITICAL.""")
 
@@ -1010,13 +1772,14 @@ def build_review_prompt(
     catalog_block = _subagent_catalog_block(project_path, role="review")
     doctor_block = _blueprint_doctor_block(state_dir, iter_num)
     sync_block = _sync_leanok_block(state_dir, iter_num)
+    memory_block = _archon_memory_block(state_dir, writable=False)
 
     return dedent(f"""\
         You are the review agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {project_path}
         Project state directory: {state_dir}
-        Read {state_dir}/CLAUDE.md for your role, then read {state_dir}/prompts/review.md.
+        Read {state_dir}/AGENTS.md for your role, then read {state_dir}/prompts/review.md.
         Session number: {session_num} (matches the iteration number — session_{session_num}/ is the review of iter-{iter_num:03d}).
         Pre-processed attempt data: {attempts_file} (READ THIS FIRST).
         Prover log: {combined_prover_log}
@@ -1025,4 +1788,6 @@ def build_review_prompt(
           {session_dir}/milestones.jsonl
           {session_dir}/summary.md
           {session_dir}/recommendations.md
-          {state_dir}/PROJECT_STATUS.md""") + sidecar_block + catalog_block + doctor_block + sync_block + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)
+          {state_dir}/PROJECT_STATUS.md""") \
+        + memory_block + sidecar_block + catalog_block + doctor_block + sync_block \
+        + debug_feedback_block(debug_feedback, state_dir, "review", iter_num)

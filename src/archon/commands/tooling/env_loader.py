@@ -39,6 +39,15 @@ PROVIDERS: dict[str, list[str]] = {
         'DEEPSEEK_BASE_URL',
         'DEEPSEEK_MODEL',
     ],
+    # OpenRouter speaks the Anthropic API natively (same wire format as
+    # kimi/deepseek), but requires ANTHROPIC_API_KEY to be explicitly
+    # set to "" so Claude Code doesn't try to use its own Anthropic
+    # credentials. provider_env() handles this automatically.
+    'openrouter': [
+        'OPENROUTER_API_KEY',
+        'OPENROUTER_BASE_URL',
+        'OPENROUTER_MODEL',
+    ],
 }
 
 # Single-key credentials used by the *informal* agent (the tool that
@@ -48,7 +57,6 @@ PROVIDERS: dict[str, list[str]] = {
 INFORMAL_AGENT_KEYS: list[str] = [
     'OPENAI_API_KEY',
     'GEMINI_API_KEY',
-    'OPENROUTER_API_KEY',
 ]
 
 # Default values written into the template when a variable isn't yet
@@ -58,6 +66,15 @@ TEMPLATE_DEFAULTS: dict[str, str] = {
     'MOONSHOT_MODEL': 'kimi-k2.6',
     'DEEPSEEK_BASE_URL': 'https://api.deepseek.com/anthropic',
     'DEEPSEEK_MODEL': 'deepseek-coder',
+    'OPENROUTER_BASE_URL': 'https://openrouter.ai/api',
+}
+
+# When a provider's own API key is absent, these slugs let us route the
+# same request through OpenRouter as a fallback (if OPENROUTER_API_KEY
+# is set). The slug format matches OpenRouter's model catalogue.
+OPENROUTER_FALLBACK_MODELS: dict[str, str] = {
+    'moonshot': 'moonshotai/kimi-k2',
+    'deepseek': 'deepseek/deepseek-r1',
 }
 
 
@@ -125,12 +142,18 @@ def render_env_template(*, shell_env: dict[str, str] | None = None) -> str:
         '# For full setup details, see .archon/MULTILANE.md.',
         '',
         '# ── Informal agent (one key is enough; pick whichever you have) ──',
-        '# Used by the archon informal agent for blueprint sketches, etc.',
+        '# Used by archon-informal-agent.py for proof sketches via direct API calls.',
+        '# NOTE: MOONSHOT_API_KEY lives in the multilane section below. Both key',
+        '#       flavours work with the informal agent: a standard key (sk-...) uses',
+        '#       the OpenAI-compatible route; a Kimi-for-Coding key (sk-kimi-...) is',
+        '#       auto-routed to the Anthropic-compatible coding endpoint using',
+        '#       MOONSHOT_BASE_URL. Standard keys come from platform.moonshot.cn.',
     ]
     for key in INFORMAL_AGENT_KEYS:
         lines.append(_line(key))
     lines.append('')
     lines.append('# ── Multi-lane providers (non-Anthropic prover lanes) ──')
+    lines.append('# These use Anthropic-compatible APIs and are separate from the informal agent.')
     for provider, keys in PROVIDERS.items():
         lines.append(f'# {provider.title()}')
         for key in keys:
@@ -150,7 +173,7 @@ def write_env_template(project_path: Path, *, force: bool = False) -> bool:
 
 
 def provider_env(provider: str) -> dict[str, str] | None:
-    """Direct-API provider settings (kimi/moonshot, deepseek).
+    """Direct-API provider settings (kimi/moonshot, deepseek, openrouter).
 
     Returns the {ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …} dict the
     lane settings file needs. ``None`` if the API key is missing or the
@@ -158,6 +181,11 @@ def provider_env(provider: str) -> dict[str, str] | None:
 
     ``provider == "anthropic"`` returns ``{}`` because Anthropic lanes
     use Claude Code's own auth.
+
+    ``provider == "openrouter"`` also injects ``ANTHROPIC_API_KEY: ""``
+    (empty string, not absent) so Claude Code stops trying to use its own
+    Anthropic credentials and lets the Bearer token in ANTHROPIC_AUTH_TOKEN
+    carry the OpenRouter key.
     """
     if provider == 'anthropic':
         return {}
@@ -174,6 +202,10 @@ def provider_env(provider: str) -> dict[str, str] | None:
         'ANTHROPIC_AUTH_TOKEN': api_key,
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
     }
+    if provider == 'openrouter':
+        # Explicit empty string prevents Claude Code from falling back
+        # to its own Anthropic session credentials.
+        settings['ANTHROPIC_API_KEY'] = ''
     if model:
         settings.update({
             'ANTHROPIC_MODEL': model,
@@ -181,4 +213,39 @@ def provider_env(provider: str) -> dict[str, str] | None:
             'ANTHROPIC_DEFAULT_SONNET_MODEL': model,
             'ANTHROPIC_DEFAULT_HAIKU_MODEL': model,
         })
+    return settings
+
+
+def openrouter_fallback_env(provider: str) -> dict[str, str] | None:
+    """Route a provider alias through OpenRouter when the direct key is absent.
+
+    Called by :func:`~archon.agent.ClaudeAgent._resolve_provider` as a
+    last resort: if the user asked for ``deepseek`` but only
+    ``OPENROUTER_API_KEY`` is set, we transparently redirect the request
+    through OpenRouter's Anthropic-compatible endpoint using the matching
+    OpenRouter model slug.
+
+    Returns ``None`` when ``OPENROUTER_API_KEY`` is unset or the
+    provider has no entry in :data:`OPENROUTER_FALLBACK_MODELS`.
+    """
+    openrouter_key = os.environ.get('OPENROUTER_API_KEY')
+    if not openrouter_key:
+        return None
+    model_slug = OPENROUTER_FALLBACK_MODELS.get(provider)
+    if not model_slug:
+        return None
+    base_url = (
+        os.environ.get('OPENROUTER_BASE_URL')
+        or TEMPLATE_DEFAULTS.get('OPENROUTER_BASE_URL', '')
+    )
+    settings: dict[str, str] = {
+        'ANTHROPIC_BASE_URL': base_url,
+        'ANTHROPIC_AUTH_TOKEN': openrouter_key,
+        'ANTHROPIC_API_KEY': '',
+        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
+        'ANTHROPIC_MODEL': model_slug,
+        'ANTHROPIC_DEFAULT_OPUS_MODEL': model_slug,
+        'ANTHROPIC_DEFAULT_SONNET_MODEL': model_slug,
+        'ANTHROPIC_DEFAULT_HAIKU_MODEL': model_slug,
+    }
     return settings

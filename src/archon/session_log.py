@@ -20,6 +20,11 @@ _FAILURE_MARKERS = (
     'build failed',
     'exited with code',
     'runner_failed',
+    # Hard quota / usage-limit messages from the Anthropic web auth layer
+    # (e.g. "You've hit your weekly limit · resets May 30, 5am (UTC)").
+    # These don't contain "api error" so they'd otherwise be treated as
+    # success and silently wasted iterations.
+    "hit your",
 )
 
 
@@ -60,6 +65,15 @@ def session_end_failure_kind(session_end: dict | None) -> str | None:
     if not session_end:
         return None
     summary = str(session_end.get('summary') or '').strip().lower()
+    # Hard usage-limit: "You've hit your weekly limit · resets …" or
+    # "You've hit your limit • resets …" (session limit). These are
+    # permanent until the reset time; the loop should stop, not retry.
+    if 'hit your' in summary and ('limit' in summary or 'resets' in summary):
+        return 'quota_exhausted'
+    # Transient server overload: "API Error: 529 Overloaded …". Retry
+    # with backoff — the server usually recovers within minutes.
+    if '529' in summary or 'overloaded' in summary:
+        return 'overloaded'
     # Rate / quota signals from Anthropic, Moonshot, OpenAI, and the
     # bundled LiteLLM proxy all mention 429 or "rate limit" or TPD/RPM.
     if (

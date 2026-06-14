@@ -31,13 +31,16 @@ That's it. You don't need to touch any CLI flag.
 | Anthropic (Claude Code) | `anthropic` | (Claude Code login) | Claude Code's own auth |
 | Moonshot (Kimi) | `moonshot` | `MOONSHOT_API_KEY` | Provider's `/anthropic` endpoint (native) |
 | DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | Provider's `/anthropic` endpoint (native) |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` | OpenRouter's `/anthropic` endpoint (native) |
 
 Every supported provider speaks the Anthropic API natively — archon points the
 lane's Claude Code session at the provider's `/anthropic` endpoint via
-`ANTHROPIC_BASE_URL`. OpenAI and Gemini are intentionally not in the list:
-Claude Code's tool-use semantics don't translate cleanly through a wire-format
-proxy, so those models work better in their own native CLIs (codex,
-gemini-cli) — out of scope for this multilane runner.
+`ANTHROPIC_BASE_URL`. OpenRouter doubles as an automatic fallback: if a
+`moonshot`/`deepseek` lane has no key but `OPENROUTER_API_KEY` is set, that lane
+routes through OpenRouter. OpenAI and Gemini are intentionally absent — Claude
+Code's tool-use semantics don't translate cleanly through a wire-format proxy,
+so those models work better in their own native CLIs (use the `codex` harness
+instead; see [CONFIGURATION.md](CONFIGURATION.md)).
 
 ## Per-provider env vars
 
@@ -48,7 +51,7 @@ optional; only the API key is mandatory.
 
 ```bash
 MOONSHOT_API_KEY=sk-...
-# MOONSHOT_BASE_URL=https://api.moonshot.ai/anthropic     # default
+# MOONSHOT_BASE_URL=https://api.kimi.com/coding/          # default
 # MOONSHOT_MODEL=kimi-k2.6                                 # default
 ```
 
@@ -58,6 +61,14 @@ MOONSHOT_API_KEY=sk-...
 DEEPSEEK_API_KEY=sk-...
 # DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic    # default
 # DEEPSEEK_MODEL=deepseek-coder                            # default
+```
+
+### OpenRouter
+
+```bash
+OPENROUTER_API_KEY=sk-...
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet              # required: pick a model
+# OPENROUTER_BASE_URL=https://openrouter.ai/api           # default
 ```
 
 ## Example: run Anthropic + Kimi side by side
@@ -95,10 +106,10 @@ others — a single missing key doesn't take down the round.
 `archon loop` runs all `(lane × file)` jobs concurrently up to
 `loop.max_parallel × num_lanes` slots. When one lane finishes a file
 **cleanly** (no sorries, no new axioms, builds, only the assigned file
-changed), the other lanes still working on that file get **10 minutes** of
-grace; if they haven't wrapped up by then they're killed. The merge agent
-then picks the best proof per declaration across whichever lanes did finish
-that file.
+changed), the other lanes still working on that file get a grace period —
+`multilane.grace_minutes` (default **10**; set `0` to cancel slow lanes
+immediately) — after which they're killed. The merge agent then picks the best
+proof per declaration across whichever lanes did finish that file.
 
 ## Where things land on disk
 

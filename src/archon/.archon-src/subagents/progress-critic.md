@@ -257,69 +257,29 @@ Pick ONE primary corrective per CHURNING/STUCK route. Multiple are allowed when 
 
 ## Report format
 
-Write your report to `.archon/task_results/progress-critic-<slug>.md` (or the parent-aware path when invoked nested — your invocation prompt names the exact path).
+Write your report to `.archon/task_results/progress-critic-<slug>.md`.
 
-**Omit-empty rule.** Only `## Slug`, `## Iteration`, `## Routes audited`, and `## Overall verdict` are required. Omit any section whose right answer is "nothing to report." Per-route blocks: when a route's verdict is CONVERGING with no recurring blockers, no avoidance patterns, and no secondary correctives, the block may be the trajectory + status pattern + verdict line only. Same for dispatch sanity: if dispatch is OK and no under-dispatch finding exists, render as a single line (`Verdict: OK — file count <N> within cap <C>, no under-dispatch`).
+**CRITICAL COST RULE**: Your report must be extremely concise to save LLM tokens. Use dense bullet points, abbreviations, and zero conversational filler. DO NOT write paragraphs. Omit empty sections. The plan agent only needs facts.
 
 ```markdown
-# Progress Critic Report
+# Progress Critic: <slug>
+**Iter:** <NNN>
 
-## Slug
-<slug>
+## Routes
+<For each route, max 2-3 lines:>
+- **`Foo.lean`**: <CONVERGING|CHURNING|STUCK|UNCLEAR>. Sorry 1->1, +9 helpers.
+  - Corrective: <Name action, e.g. "mathlib-build L1 bridge">
 
-## Iteration
-<NNN>
+## Dispatch Sanity
+- **Verdict**: <OK | OVER_CAP | UNDER_DISPATCH | BLOAT_WITHOUT_PROGRESS>. <1 line context>.
 
-## Routes audited
+## Must-fix-this-iter
+<OMIT if empty. Max 1 line per item.>
+- Route `Foo.lean`: CHURNING - needs L1 bridge.
+- Dispatch: UNDER_DISPATCH.
 
-For each route in the directive, one block:
-
-### Route: <name>
-
-- **Sorry trajectory**: <description, e.g. "5 → 5 → 4 → 4 → 4 across iter-100 to 104">
-- **Helper accumulation**: <description, e.g. "13 helpers added across last 4 iters; 1 sorry closed">
-- **Prover dispatch pattern**: <e.g. "1 of 3 ready files dispatched for 3 consecutive iters">
-- **Recurring blockers**: <list or "none">
-- **Avoidance patterns**: <list or "none" — name each: off-critical-path reclassification, consecutive plan-only iters, persistent deferral language, possible rotation churn>
-- **Prover status pattern**: <e.g. "PARTIAL, PARTIAL, PARTIAL, PARTIAL">
-- **Throughput**: ON_SCHEDULE | SLIPPING | OVER_BUDGET | ESTIMATE_FREE — <estimated K iters, elapsed K'>
-- **Verdict**: CONVERGING | CHURNING | STUCK | UNCLEAR
-- **Primary corrective** (if CHURNING/STUCK): <one of the actions above, with one paragraph of why>
-- **Secondary correctives** (if applicable): <list>
-
-## PROGRESS.md dispatch sanity
-
-Independent of any route verdict.
-
-- **File count**: <N> (cap: <C>)
-- **Ready but not dispatched**: <list of files with complete chapters and open sorries that are NOT in the proposal, or "none identified">
-- **Over the cap**: yes | no
-- **Under-dispatch finding**: yes | no — <if yes: gap size, how many consecutive iters>
-- **Iter-over-iter trend**: <e.g. "1 → 1 → 1; consistently under-dispatching 3 ready files">
-- **Verdict**: OK | OVER_CAP | UNDER_DISPATCH | BLOAT_WITHOUT_PROGRESS
-  - OK: dispatch list is within cap, not under-dispatching ready files, and not growing while routes churn.
-  - OVER_CAP: more files than the cap allows.
-  - UNDER_DISPATCH: ≥3 ready files absent from the proposal, or consistently fewer than ready across ≥2 iters. Land in must-fix-this-iter.
-  - BLOAT_WITHOUT_PROGRESS: file count growing iter over iter while route signals say CHURNING/STUCK.
-
-## Must-fix-this-iter <!-- omit entire section if no CHURNING/STUCK verdicts AND no OVER_BUDGET/OVER_CAP/UNDER_DISPATCH/BLOAT findings -->
-
-Every CHURNING and every STUCK verdict lands here automatically, every OVER_BUDGET throughput finding (with `Iters left > 0`), and every OVER_CAP / UNDER_DISPATCH / BLOAT_WITHOUT_PROGRESS dispatch verdict. Do not under-classify.
-
-- Route <name>: <verdict> — primary corrective: <action>. Why: <one line>.
-- Route <name>: OVER_BUDGET — STRATEGY.md estimates <K> iters, elapsed <K'>. Revise the estimate or escalate.
-- Route <name>: avoidance pattern — <specific pattern detected>. Primary corrective: <action>.
-- Dispatch: UNDER_DISPATCH — <N> ready files absent from proposal for <M> consecutive iters. Fill all ready lanes this iter.
-- Dispatch: OVER_CAP — planner listed <N> files (cap <C>). Re-prioritize; defer <N-C> files.
-- Dispatch: BLOAT_WITHOUT_PROGRESS — file count <a> → <b> → <c> while routes <X>, <Y> remain CHURNING.
-
-## Informational <!-- omit if every route is CONVERGING with no commentary worth surfacing -->
-
-CONVERGING and UNCLEAR verdicts that warrant a comment.
-
-## Overall verdict
-
-One paragraph: how many routes are healthy, how many are stuck or churning or avoidance-stalled, what the planner's iter should look like to address the stuck ones. If avoidance patterns were detected, name them explicitly — "the planner has dispatched a single prover for 4 consecutive iters while 3 files were ready" must appear in the verdict so the plan agent cannot overlook it.
+## Overall
+- <1 sentence summary: e.g., "1 converging, 1 stuck (needs L1 bridge), dispatch OK.">
 ```
 
 ## Return value

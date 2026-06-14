@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { LogEntry } from '../types';
-import { fmtTime, truncate } from '../utils/format';
+import { fmtTime, primaryModel, truncate } from '../utils/format';
 import DetailRenderer from './log-details';
 import styles from './LogEntryLine.module.css';
 
@@ -108,11 +108,7 @@ export default function LogEntryLine({ entry }: Props) {
     }
     case 'session_end': {
       const dur = entry.duration_ms ? `${(entry.duration_ms / 1000).toFixed(0)}s` : '';
-      let model = '';
-      if (entry.model_usage) {
-        const fullName = Object.keys(entry.model_usage)[0] || '';
-        model = fullName.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-      }
+      const model = primaryModel(entry.model_usage);
       const parts = ['Session end'];
       if (model) parts.push(model);
       if (dur) parts.push(dur);

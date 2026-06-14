@@ -196,6 +196,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.proverMode {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--purple);
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 30%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .fileCommit {
   margin-left: auto;
   font-family: var(--font-mono);

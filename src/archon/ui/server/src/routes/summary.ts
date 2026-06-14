@@ -2,7 +2,7 @@
 import fs from 'fs';
 import type { FastifyInstance } from 'fastify';
 import type { LogEntry, AggregatedStats, SessionSummary } from '../types.js';
-import { parseJsonl } from '../utils.js';
+import { parseJsonl, primaryModelId } from '../utils.js';
 import type { ProjectPaths } from './project.js';
 
 function calculateStats(logs: LogEntry[]): AggregatedStats {
@@ -15,7 +15,7 @@ function calculateStats(logs: LogEntry[]): AggregatedStats {
     const duration = entry.duration_ms || 0;
     const tokIn = entry.input_tokens || 0;
     const tokOut = entry.output_tokens || 0;
-    const model = entry.model_usage ? Object.keys(entry.model_usage)[0] || 'unknown' : 'unknown';
+    const model = primaryModelId(entry.model_usage);
     totalCost += cost;
     totalDuration += duration;
     totalTokensIn += tokIn;
@@ -29,10 +29,9 @@ function calculateStats(logs: LogEntry[]): AggregatedStats {
   return { totalCost, totalDuration, totalTokensIn, totalTokensOut, sessionCount: sessions.length, sessions };
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { logsPath } = paths;
-
-  fastify.get('/api/summary', async () => {
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  fastify.get('/api/summary', async (req) => {
+    const { logsPath } = req.paths;
     if (!fs.existsSync(logsPath)) return { totalCost: 0, totalDuration: 0, totalTokensIn: 0, totalTokensOut: 0, sessionCount: 0, sessions: [] };
     let allLogs: LogEntry[] = [];
     function walkJsonl(dir: string) {

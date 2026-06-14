@@ -4,9 +4,10 @@ import { useLogs } from '../hooks/useApi';
 import { useLogDeepLink } from '../hooks/useLogDeepLink';
 import { useLogStream } from '../hooks/useLogStream';
 import type { LogEntry, LogGroup } from '../types';
-import { fmtDuration, truncateSubject } from '../utils/format';
+import { fmtDuration, primaryModel, truncateSubject } from '../utils/format';
 import LogEntryLine from '../components/LogEntryLine';
 import MarkdownBlock from '../components/MarkdownBlock';
+import ProverMetaHeader from '../components/ProverMetaHeader';
 import styles from './LogViewer.module.css';
 
 // --- Sidebar components ---
@@ -217,7 +218,9 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
             if (f.name === 'provers-combined.jsonl') return null;
 
             const proverSlug = f.name.replace('.jsonl', '');
-            const proverStatus = isProver && meta?.provers?.[proverSlug]?.status;
+            const baseProverSlug = proverSlug.includes('__') ? proverSlug.slice(0, proverSlug.lastIndexOf('__')) : proverSlug;
+            const proverStatus = isProver && meta?.provers?.[baseProverSlug]?.status;
+            const proverMode = isProver ? (meta?.provers?.[baseProverSlug]?.mode ?? null) : null;
             const subagentRoleLabel = isSubagent
               ? subagentDisplayRole(f.role || '')
               : '';
@@ -260,6 +263,7 @@ function IterGroup({ group, selectedFile, onSelect, isLatest, nowMs }: {
                 <span className={styles.fileName}>
                   {isProver ? displayName : (displaySlug || '')}
                 </span>
+                {proverMode && <span className={styles.proverMode}>{proverMode}</span>}
                 {f.commit && <span className={styles.fileCommit}>{f.commit.shortSha}</span>}
               </div>
             );
@@ -323,6 +327,7 @@ function subagentPairKey(innerName: string, slug: string): string {
 const SUBAGENT_REPORT_RE = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-(.+)-report$/;
 
 const FILTER_OPTIONS = [
+  { value: 'prompt', label: 'prompt' },
   { value: 'shell', label: 'shell' },
   { value: 'thinking', label: 'thinking' },
   { value: 'tool_call', label: 'tool call' },
@@ -340,7 +345,7 @@ const DEFAULT_FILTERS: FilterEvent[] = FILTER_OPTIONS.map(option => option.value
 function RunSummaryBar({ entries }: { entries: LogEntry[] }) {
   const sessionEnd = entries.find(e => e.event === 'session_end');
   if (!sessionEnd) return null;
-  const model = sessionEnd.model_usage ? Object.keys(sessionEnd.model_usage)[0]?.replace(/^claude-/, '').replace(/-\d{8}$/, '') : '';
+  const model = primaryModel(sessionEnd.model_usage);
   const parts: string[] = [];
   if (model) parts.push(model);
   if (sessionEnd.duration_ms) parts.push(fmtDuration(sessionEnd.duration_ms));
@@ -556,6 +561,15 @@ export default function LogViewer() {
   // For .md artifacts the server returns a single entry with event="text"
   const artifactContent = selectedIsArtifact && entries.length > 0 ? (entries[0].content || '') : '';
 
+  // Parse iter ID + prover slug from a prover JSONL path like
+  // "iter-NNN/provers/<slug>[__lane].jsonl"
+  const proverHeaderInfo = useMemo(() => {
+    if (selectedRole !== 'prover' || selectedIsArtifact || !selectedFile) return null;
+    const m = selectedFile.match(/^(iter-\d+)\/provers\/(.+?)(?:__[^/]+)?\.jsonl$/);
+    if (!m) return null;
+    return { iterId: m[1], proverSlug: m[2] };
+  }, [selectedFile, selectedRole, selectedIsArtifact]);
+
   return (
     <div className={styles.root}>
       {/* Sidebar */}
@@ -655,6 +669,16 @@ export default function LogViewer() {
         {showSessionSummary && <RunSummaryBar entries={entries} />}
 
         <div className={styles.container}>
+          {/* ProverMetaHeader lives inside the scroll container so metrics row
+              sticks at the top while objective / diff scroll away */}
+          {proverHeaderInfo && (
+            <ProverMetaHeader
+              iterId={proverHeaderInfo.iterId}
+              proverSlug={proverHeaderInfo.proverSlug}
+              isLive={streaming}
+            />
+          )}
+
           {/* Render markdown artifacts inline */}
           {selectedIsArtifact && artifactContent && (
             <div className={styles.summaryBlock}>

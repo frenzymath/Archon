@@ -110,6 +110,78 @@ class RunBlueprintDoctorTest(unittest.TestCase):
         self.assertEqual(r.orphan_chapters, [])
         self.assertEqual(r.broken_refs, [])
 
+    def test_detects_literal_ref_placeholders(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "In the setting of Definition~REF, see Sections REF--REF.\n"
+            "\\end{theorem}\n"
+            "\\cref{thm:foo}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        lits = [(k, reason) for _, k, reason in r.malformed_refs if k == "literal-ref"]
+        self.assertEqual(len(lits), 3)
+        self.assertIn("Definition~REF", lits[0][1])
+
+    def test_no_literal_ref_false_positives(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:REF_like}\n"
+            "PREFIX and REFEREE and \\cref{thm:REF_like} are fine.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        self.assertEqual(
+            [k for _, k, _ in r.malformed_refs if k == "literal-ref"], [],
+        )
+
+    def test_detects_interleaved_math_delimiters(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "Let $P \\subseteq Q\\( be the subsheaf whose \\)T$-points vanish.\n"
+            "Then \\(H^1(C, \\mathcal{O}) = 0\\) and $x = y$.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        probs = [reason for _, k, reason in r.malformed_refs if k == "math-delim"]
+        self.assertTrue(any("inside $…$" in p for p in probs), probs)
+        # The well-formed formulas on the next line produce no findings.
+        self.assertTrue(all("line 3" not in p for p in probs), probs)
+
+    def test_detects_bare_labels_in_prose(self):
+        self.bp.write_chapter(
+            "Good",
+            "\\begin{theorem}\\label{thm:foo}\\uses{lem:helper}\n"
+            "By Kleiman Thm.~th:main the claim follows; see \\cref{thm:foo}.\n"
+            "\\end{theorem}\n"
+            "\\begin{lemma}\\label{lem:helper}H.\\end{lemma}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        bare = [reason for _, k, reason in r.malformed_refs if k == "bare-label"]
+        self.assertEqual(len(bare), 1, bare)
+        self.assertIn("th:main", bare[0])
+        # labels inside \uses{} / \cref{} / \label{} are never flagged.
+        self.assertNotIn("lem:helper", " ".join(bare))
+        self.assertNotIn("thm:foo", " ".join(bare))
+
+    def test_detects_undefined_macros(self):
+        # \Pic is defined in macros/common.tex; \fppf in-chapter; \mystery nowhere.
+        (self.bp.macros / "common.tex").write_text(
+            "\\DeclareMathOperator{\\Pic}{Pic}\n", encoding="utf-8",
+        )
+        self.bp.write_chapter(
+            "Good",
+            "\\providecommand{\\fppf}{\\mathrm{fppf}}\n"
+            "\\begin{theorem}\\label{thm:foo}\n"
+            "Then \\(\\Pic(C)_{\\fppf} \\to \\mystery(C)\\) is \\emph{flat}.\n"
+            "\\end{theorem}\n",
+        )
+        r = run_blueprint_doctor(self.root)
+        um = [reason for _, k, reason in r.malformed_refs if k == "undefined-macro"]
+        self.assertEqual(len(um), 1, um)
+        self.assertIn("\\mystery", um[0])
+
     def test_detects_orphan_chapter(self):
         self.bp.write_chapter(
             "Good",

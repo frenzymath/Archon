@@ -20,6 +20,39 @@ from archon import log
 from archon.commands.tooling.blueprint import BlueprintServer
 
 
+def install_signal_exit(*signal_names: str) -> None:
+    """Convert terminating signals into ``SystemExit`` so ``atexit`` runs.
+
+    Background services (the dashboard / blueprint server) are stopped by
+    ``atexit``-registered cleanups. But ``atexit`` does NOT run when the
+    process is killed by a default-disposition signal — and **SIGHUP**
+    (closing the terminal, or an SSH session dropping) is exactly that.
+    Because the child servers are spawned ``start_new_session=True`` (their
+    own session), they don't receive the terminal's SIGHUP either, so they
+    orphan and keep holding their listening ports. Re-raising the signal as
+    ``SystemExit`` lets the registered cleanups fire and the ports release.
+
+    Defaults to SIGHUP + SIGTERM (SIGINT already raises KeyboardInterrupt,
+    which runs atexit on its own). Only installs over a default/ignored
+    handler so a caller's existing handler is never clobbered. No-op off the
+    main thread or where a signal is unsupported (e.g. SIGHUP on Windows).
+    """
+    names = signal_names or ("SIGHUP", "SIGTERM")
+
+    def _raise_exit(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    for name in names:
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            if signal.getsignal(sig) in (signal.SIG_DFL, signal.SIG_IGN, None):
+                signal.signal(sig, _raise_exit)
+        except (ValueError, OSError):
+            pass
+
+
 class PortProbe:
     """Find an unbound TCP port to spawn a local service on."""
 

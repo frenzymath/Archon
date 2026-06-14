@@ -13,7 +13,7 @@ from __future__ import annotations
 import unittest
 
 from archon.prompts import (
-    _normalize_stage_for_prompt_path,
+    normalize_stage_for_prompt_path,
     build_parallel_prover_prompt,
     build_prover_prompt,
 )
@@ -22,7 +22,7 @@ from archon.prompts import (
 class NormalizeStageForPromptPathTest(unittest.TestCase):
     def test_passes_through_canonical_tokens(self):
         for s in ("autoformalize", "prover", "polish"):
-            self.assertEqual(_normalize_stage_for_prompt_path(s), s)
+            self.assertEqual(normalize_stage_for_prompt_path(s), s)
 
     def test_strips_trailing_descriptive_text(self):
         verbose = (
@@ -30,28 +30,28 @@ class NormalizeStageForPromptPathTest(unittest.TestCase):
             "IsLocalization.of_le)"
         )
         self.assertEqual(
-            _normalize_stage_for_prompt_path(verbose), "prover",
+            normalize_stage_for_prompt_path(verbose), "prover",
         )
 
     def test_strips_trailing_descriptive_text_for_polish(self):
         verbose = "polish — final pass cleanup round"
         self.assertEqual(
-            _normalize_stage_for_prompt_path(verbose), "polish",
+            normalize_stage_for_prompt_path(verbose), "polish",
         )
 
     def test_case_insensitive_match(self):
         self.assertEqual(
-            _normalize_stage_for_prompt_path("PROVER"), "prover",
+            normalize_stage_for_prompt_path("PROVER"), "prover",
         )
         self.assertEqual(
-            _normalize_stage_for_prompt_path("AutoFormalize"), "autoformalize",
+            normalize_stage_for_prompt_path("AutoFormalize"), "autoformalize",
         )
 
     def test_unknown_falls_back_to_prover(self):
         self.assertEqual(
-            _normalize_stage_for_prompt_path("nonsense"), "prover",
+            normalize_stage_for_prompt_path("nonsense"), "prover",
         )
-        self.assertEqual(_normalize_stage_for_prompt_path(""), "prover")
+        self.assertEqual(normalize_stage_for_prompt_path(""), "prover")
 
 
 class BuildProverPromptStagePathTest(unittest.TestCase):

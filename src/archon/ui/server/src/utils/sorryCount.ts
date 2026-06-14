@@ -1,6 +1,83 @@
 import fs from 'fs';
 import path from 'path';
 
+export interface LeanMetrics {
+  sorries: number;
+  loc: number;           // non-empty lines (comments included)
+  locNoComments: number; // non-empty lines, comment lines excluded
+  defs: number;          // def / noncomputable def / private def
+  lemmas: number;        // lemma / theorem / proposition / corollary
+  axioms: number;        // axiom declarations
+}
+
+/** Count various metrics from Lean source text.
+ *
+ * `sorry` occurrences are counted via `countSorryInLean`, so this performs
+ * an extra scan over the content before the line-metrics pass.
+ */
+export function countLeanMetrics(content: string): LeanMetrics {
+  const sorries = countSorryInLean(content).length;
+
+  let loc = 0;
+  let locNoComments = 0;
+  let defs = 0;
+  let lemmas = 0;
+  let axioms = 0;
+
+  const lines = content.split('\n');
+  let inBlockComment = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    loc++;
+
+    // Track block comments (/-  -/) for locNoComments.
+    // We do a simplified pass: toggle inBlockComment on /- and -/.
+    let isCommentLine = inBlockComment;
+
+    // Check if this line opens or closes a block comment (simplified: just
+    // detect if the non-whitespace content is entirely within block comments).
+    const tempLine = line;
+    let tempInBlock: boolean = inBlockComment;
+    let contentOutsideComment = false;
+    let ci = 0;
+    while (ci < tempLine.length) {
+      if (tempInBlock) {
+        if (tempLine[ci] === '-' && tempLine[ci + 1] === '/') {
+          tempInBlock = false;
+          ci += 2;
+        } else {
+          ci++;
+        }
+      } else {
+        if (tempLine[ci] === '/' && tempLine[ci + 1] === '-') {
+          tempInBlock = true;
+          ci += 2;
+        } else if (tempLine[ci] === '-' && tempLine[ci + 1] === '-') {
+          // Rest is line comment
+          break;
+        } else {
+          contentOutsideComment = true;
+          ci++;
+        }
+      }
+    }
+    inBlockComment = tempInBlock;
+    isCommentLine = !contentOutsideComment;
+
+    if (!isCommentLine) {
+      locNoComments++;
+      // Count declarations (only on non-comment lines).
+      if (/^(?:private\s+|protected\s+|noncomputable\s+)*def\s/.test(line)) defs++;
+      else if (/^(?:private\s+|protected\s+)*(?:lemma|theorem|proposition|corollary)\s/.test(line)) lemmas++;
+      else if (/^(?:private\s+)?axiom\s/.test(line)) axioms++;
+    }
+  }
+
+  return { sorries, loc, locNoComments, defs, lemmas, axioms };
+}
+
 export interface SorryOccurrence {
   line: number;
   column: number;

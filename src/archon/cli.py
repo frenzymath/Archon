@@ -29,9 +29,10 @@ class _BannerGroup(typer.core.TyperGroup):
             "  [bold cyan]1.[/bold cyan] archon setup       → install system dependencies\n"
             "  [bold cyan]2.[/bold cyan] cd project/dir     → navigate to your project directory\n"
             "  [bold cyan]3.[/bold cyan] archon init .      → create a project and initialize it with Lean 4\n"
-            "  [bold cyan]4.[/bold cyan] archon loop        → run autonomous formalization\n"
-            "  [bold cyan]5.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
-            "  [bold cyan]6.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
+            "  [bold cyan]4.[/bold cyan] archon dag         → elaborate the full blueprint (optional, before loop)\n"
+            "  [bold cyan]5.[/bold cyan] archon loop        → run autonomous formalization\n"
+            "  [bold cyan]6.[/bold cyan] archon discuss .   → understand blockers and provide hints\n"
+            "  [bold cyan]7.[/bold cyan] archon dashboard . → visualize agent activity and project status\n\n"
             "[dim]Run [bold]archon <command> -h[/bold] for details on any command.[/dim]"
         )
         console.print(Panel(
@@ -94,8 +95,27 @@ from archon.commands.branch import branch, inner_log  # noqa: E402
 from archon.commands.version import version as version_cmd  # noqa: E402
 from archon.commands.subagent import subagent_command  # noqa: E402
 from archon.commands.migrate import app as migrate_app  # noqa: E402
+from archon.commands.dag import dag  # noqa: E402
+from archon.commands.extract import extract, merge  # noqa: E402
+from archon.commands.dag.gaps_entry import dag_carve_plan, dag_gaps, dag_graph, dag_query  # noqa: E402
 
 app.command()(init)
+app.command()(dag)
+# Agent/internal plumbing — invoked by prompts and the loop, not by humans.
+# Hidden from `archon --help` (still fully runnable + `<cmd> --help` works)
+# so the top-level surface stays focused on the user workflow.
+app.command("dag-gaps", hidden=True)(dag_gaps)
+app.command("dag-graph", hidden=True)(dag_graph)
+app.command("dag-query", hidden=True)(dag_query)
+app.command("dag-carve-plan", hidden=True)(dag_carve_plan)
+from archon.commands.loop.blueprint_doctor import blueprint_doctor_cli  # noqa: E402
+app.command("blueprint-doctor")(blueprint_doctor_cli)
+from archon.commands.tooling.protect import protect_check_cli  # noqa: E402
+app.command("protect-check", hidden=True)(protect_check_cli)
+from archon.commands.tooling.peers import peers_cli  # noqa: E402
+app.command("peers")(peers_cli)
+app.command()(extract)
+app.command()(merge)
 app.command()(loop)
 app.command()(doctor)
 app.command()(dashboard)
@@ -107,7 +127,7 @@ app.command("branch")(branch)
 app.command("log")(inner_log)
 app.command("version")(version_cmd)
 app.add_typer(refactor_app, name="refactor")
-app.command("subagent")(subagent_command)
+app.command("subagent", hidden=True)(subagent_command)
 app.add_typer(migrate_app, name="migrate")
 
 if __name__ == "__main__":

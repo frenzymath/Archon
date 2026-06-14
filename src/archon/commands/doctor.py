@@ -127,23 +127,77 @@ class ApiKeysDoctorCheck(DoctorCheck):
     title = "API keys"
 
     _KEYS = {
+        "DEEPSEEK_API_KEY": "DeepSeek",
+        "MOONSHOT_API_KEY": "Kimi (Moonshot)",
+        "OPENROUTER_API_KEY": "OpenRouter",
         "OPENAI_API_KEY": "OpenAI",
         "GEMINI_API_KEY": "Gemini",
-        "OPENROUTER_API_KEY": "OpenRouter",
     }
+
+    # "sk-kimi-" prefix → Kimi-for-Coding key; Anthropic-compatible. Usable by
+    # the informal agent via the kimi-anthropic provider (coding endpoint), but
+    # not the OpenAI-compatible `kimi` route.
+    _KIMI_CODING_PREFIX = "sk-kimi-"
+
+    _PROBES: dict[str, str] = {
+        "MOONSHOT_API_KEY": "https://api.moonshot.cn/v1/models",
+        "DEEPSEEK_API_KEY": "https://api.deepseek.com/v1/models",
+    }
+
+    def _probe(self, var: str, url: str, timeout: int = 5) -> str | None:
+        """Return None if key is valid/unreachable; error string on 401/403."""
+        import urllib.error
+        import urllib.request
+
+        key = os.environ.get(var, "")
+        if not key:
+            return None
+        try:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+            urllib.request.urlopen(req, timeout=timeout)
+            return None
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return f"HTTP {e.code}"
+            return None
+        except Exception:
+            return None
 
     def run(self) -> list[CheckRow]:
         rows: list[CheckRow] = []
         found_any = False
         for var, label in self._KEYS.items():
-            if os.environ.get(var):
-                rows.append((f"{label} key", "ok", f"${var} is set"))
-                found_any = True
-            else:
+            val = os.environ.get(var, "")
+            if not val:
                 rows.append((f"{label} key", "skipped", "not set"))
+                continue
+
+            # Kimi-for-Coding key — Anthropic-compatible. Usable by the informal
+            # agent via the kimi-anthropic provider (and by multilane), but not
+            # the OpenAI-compatible `kimi` route, so skip the /models probe.
+            if var == "MOONSHOT_API_KEY" and val.startswith(self._KIMI_CODING_PREFIX):
+                rows.append((
+                    f"{label} key",
+                    "ok",
+                    "sk-kimi- = Kimi-for-Coding (informal agent uses kimi-anthropic)",
+                ))
+                found_any = True
+                continue
+
+            # Probe known endpoints for auth validity
+            probe_url = self._PROBES.get(var)
+            if probe_url:
+                err = self._probe(var, probe_url)
+                if err:
+                    rows.append((f"{label} key", "warning", f"set but {err} — invalid or wrong key"))
+                    continue
+
+            rows.append((f"{label} key", "ok", f"${var} is set"))
+            found_any = True
+
         if not found_any:
             rows.append(
-                ("informal agent", "warning", "no API keys — informal agent won't work"),
+                ("informal agent", "warning", "no valid API keys — informal agent won't work"),
             )
         return rows
 
@@ -193,7 +247,7 @@ class ProjectStateDoctorCheck(DoctorCheck):
             return rows
         rows.append((".archon/", "ok", str(state_dir)))
 
-        for name in ("PROGRESS.md", "CLAUDE.md"):
+        for name in ("PROGRESS.md", "AGENTS.md"):
             f = state_dir / name
             if f.exists():
                 rows.append((name, "ok", f"{f.stat().st_size:,} bytes"))

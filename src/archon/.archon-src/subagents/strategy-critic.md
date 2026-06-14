@@ -5,12 +5,16 @@ write_domain: "task_results/**"
 read_only: true
 can_spawn: false
 default_enabled: false
-mandatory: [plan]
+mandatory: [plan, dag]
 dispatcher_notes: |
-  - I am highly recommended every plan phase. When you do dispatch me,
-    do so AFTER you've finished writing / confirming STRATEGY.md and
-    BEFORE any writer / refactor / prover dispatch this iteration. My
-    verdict is what you act on before committing the iter's plan.
+  - I am highly recommended every plan phase, and every dag phase that
+    touched STRATEGY.md. When you do dispatch me, do so AFTER you've
+    finished writing / confirming STRATEGY.md and BEFORE any writer /
+    refactor / prover dispatch this iteration. My verdict is what you act
+    on before committing the iter's plan. (In dag mode there are no
+    provers yet — dispatch me after you've established/updated STRATEGY.md
+    and the blueprint, to confirm the strategy the blueprint serves is
+    sound and matches its canonical skeleton.)
 
     **You may skip me this iter when ALL of:**
       - STRATEGY.md is unchanged since the prior iter's verbatim
@@ -97,7 +101,7 @@ For each strategic route in `STRATEGY.md`:
 
 5. **Prerequisite assumptions.** Does the strategy assume Mathlib infrastructure that may not exist? Verify the named lemmas / type classes / structures actually exist (use `lean_leansearch` / `lean_loogle` for spot-checks). Strategy that depends on phantom Mathlib infra is invalid.
 
-6. **Effort estimates.** If the strategy carries per-route LOC or iteration estimates, do they look honest given the scope of the route? Estimates that are wildly under-counted (e.g. "200 LOC for representability of Pic") indicate either underestimated effort or a misplanned route. The LOC cell carries two figures (`remaining · realized/it`); flag rows where they are internally inconsistent with `Iters left` — e.g. `≈250 · ~30/it` alongside `Iters left: 2` is arithmetically impossible (250 ÷ 30 ≈ 8), a dishonest-estimate signal — and rows reading `~0/it` that are still claimed as actively progressing.
+6. **Effort estimates.** If the strategy carries per-route LOC or iteration estimates, do they look honest given the scope of the route? Estimates that are wildly under-counted (e.g. "200 LOC for representability of Pic") indicate either underestimated effort or a misplanned route. The LOC cell is a rough remaining-LOC range (e.g. `~80–220`); flag rows whose LOC range is grossly inconsistent with `Iters left` given the route's scope — e.g. a sprawling representability phase marked `~30` LOC with `Iters left: 1`. Cross-check the realized LOC of comparable rows in `## Completed` (when present) against the active estimates: a remaining phase of similar scope to a completed one but estimated at a fraction of its realized LOC is a dishonest-estimate signal.
 
 7. **Infrastructure-deferral patterns.** This is a distinct failure mode from sunk-cost and must be checked independently. An infrastructure-deferral pattern is present when any of the following hold:
 
@@ -111,7 +115,7 @@ For each strategic route in `STRATEGY.md`:
 
    - The strategy proposes huge phases and is reluctant to start working on them, without decomposing them into concrete sub-phases that it could have started on. This is a deferral pattern because it will always assume this phase it too difficult, but in pratice it should think like a mathlib contributor and decompose the phase into intermediate phases.
 
-   - A phase row in `## Phases & estimations` has `Iters left: ?` or `~0/it` velocity AND has been in that state without any active prover lane and without any concrete progress in the blueprints. Stagnant phases are infrastructure-deferral by inaction.
+   - A phase row in `## Phases & estimations` has `Iters left: ?` (or an estimate-free / never-shrinking cell) AND has been in that state without any active prover lane and without any concrete progress in the blueprints. Stagnant phases are infrastructure-deferral by inaction.
 
    For each infrastructure-deferral finding: name the specific construction being deferred, confirm whether the stated goal requires it, and state whether any route in the strategy actually builds it with a concrete timeline. A construction deferred to "Mathlib upstream" with no project-side plan and no timeline is an unresolved gap in the project's strategy, not an accepted dependency.
 
@@ -120,10 +124,10 @@ For each strategic route in `STRATEGY.md`:
 9. **Format compliance.** `STRATEGY.md` must follow the canonical skeleton documented in the plan prompt. Violations to flag:
 
    - **Size**: the file exceeds ~250 lines or ~12 KB.
-   - **Headings**: the section list isn't exactly `## Goal`, `## Phases & estimations`, `## Routes`, `## Open strategic questions`, `## Mathlib gaps & new material` (in that order). Renamed or extra top-level sections (`## Project goal`, `## End-state`, `## Decomposition`, `## Roadmap`, `## Soundness rules`, etc.) are violations.
-   - **Per-iter narrative**: references to specific iterations ("iter-NNN", "this iter we tried X", "last iter", "the iter-XYZ pivot"). Per-iter history belongs in `iter/iter-NNN/plan.md`, never in STRATEGY.md.
-   - **No accumulation**: completed phases or excised routes still occupy space. The file must shrink toward "complete", not grow.
-   - **Table discipline**: `## Phases & estimations` must be a Markdown table with columns Phase | Status | Iters left | LOC (remaining · realized/it) | Key Mathlib needs | Risks, one short line per cell. The LOC cell must carry both the remaining-LOC estimate and the realized per-iter velocity (e.g. `≈250 · ~30/it`); a LOC cell with only one figure is a (minor) discipline gap. Long prose in cells, or replacing the table with prose subsections, is a violation.
+   - **Headings**: the section list isn't exactly `## Goal`, `## Phases & estimations`, `## Completed`, `## Routes`, `## Open strategic questions`, `## Mathlib gaps & new material` (in that order). `## Completed` is optional — omitted while nothing is done yet — but when present it MUST sit between `## Phases & estimations` and `## Routes`. Renamed or other extra top-level sections (`## Project goal`, `## End-state`, `## Decomposition`, `## Roadmap`, `## Soundness rules`, etc.) are violations.
+   - **Per-iter narrative**: references to specific iterations ("this iter we tried X", "last iter", "the iter-XYZ pivot") in prose. Per-iter history belongs in `iter/iter-NNN/plan.md`, never in STRATEGY.md. (Bare iter numbers in the `## Completed` table's `Iters` cell — e.g. `294 · 8` — are fine; that is the ledger, not narrative.)
+   - **Accumulation discipline**: a completed phase still sitting in the active `## Phases & estimations` table (it must MOVE to `## Completed`), an excised route still occupying a `## Routes` subsection, or freeform prose-history anywhere. The concise `## Completed` table is allowed and expected; what's flagged is completed work left in the active table, prose bloat, or a `## Completed` table that has ballooned past ~12 rows or grown multi-line cells.
+   - **Table discipline**: `## Phases & estimations` must be a Markdown table with columns Phase | Status | Iters left | LOC | Key Mathlib needs | Risks, one short line per cell. `Status` must be a short inline tag (`ACTIVE`, `BLOCKED`, `PAUSED BY USER`, …), not prose; `LOC` must be a rough remaining-LOC range (e.g. `~80–220`), not a velocity figure. When present, `## Completed` must be a Markdown table with columns Phase | Iters (done@ · used) | LOC | Files | Key results | Reusable techniques | Pitfalls, again one short line per cell. Long prose in cells, or replacing either table with prose subsections, is a violation.
    - **Appendix sections**: "Historical decisions", "Considered alternatives", "Past iterations summary", "Lessons learned", or any other history-tracking section. Iter sidecars are where rejected alternatives live.
 
    Format violations are reported under a synthetic "format" route — see the Report Format section below. **Format is not cosmetic.** A STRATEGY.md that drifts from the canonical skeleton bleeds into the plan agent's context every iter and makes the strategy itself harder to reason about. Treat material format violations as a CHALLENGE that must be resolved this iter via an in-place restructure (using iter sidecars to hold any historical detail that currently lives inline).
@@ -215,7 +219,7 @@ A separate block from "Routes audited" — this audits the *document* against th
 - **Size**: <line count> / <bytes> — within budget | over budget (~250 lines / ~12 KB).
 - **Headings**: PASS | FAIL — <if FAIL, list the violating headings>.
 - **Per-iter narrative detected**: yes | no — <if yes, quote one or two representative phrases verbatim>.
-- **Accumulation detected**: yes | no — <if yes, name the completed phases / excised routes still present>.
+- **Accumulation detected**: yes | no — <if yes, name completed phases still in the active `## Phases & estimations` table (should be in `## Completed`), excised routes still present, prose-history bloat, or a `## Completed` table that has outgrown its bound>.
 - **Table discipline**: PASS | FAIL — <if FAIL, describe the deviation>.
 - **Appendix sections**: <list any detected; omit field if none>.
 - **Format verdict**: COMPLIANT | DRIFTED | NON-COMPLIANT

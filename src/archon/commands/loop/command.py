@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from archon import log
+from archon.agent import QuotaExhaustedError
 from archon.dispatch import (
     MAX_PARALLEL_ENV_VAR,
     SLOTS_ENV_VAR,
@@ -106,7 +107,15 @@ class LoopCommand:
         ctx.prev_sorry = ctx.initial_sorry
 
         for i in range(self.options.max_iterations):
-            if not self._run_iteration(i):
+            try:
+                if not self._run_iteration(i):
+                    break
+            except QuotaExhaustedError as exc:
+                log.error(
+                    f"API quota exhausted: {exc}\n"
+                    f"Stopping the loop to avoid polluting logs. "
+                    f"Resume with `archon loop --from plan` after the limit resets."
+                )
                 break
 
         self._summarize()
@@ -120,7 +129,7 @@ class LoopCommand:
         progress_file = state_dir / "PROGRESS.md"
         log_dir = state_dir / "logs"
 
-        preflight(resolved, state_dir, opts.dry_run)
+        preflight(resolved, state_dir, opts.dry_run, backend=opts.backend)
 
         if not opts.dry_run:
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +209,12 @@ class LoopCommand:
         ctx = self.ctx
         opts = self.options
 
+        # Make the background-service cleanups (registered via atexit) fire on
+        # SIGHUP/SIGTERM too — otherwise closing the terminal leaks the
+        # detached dashboard/blueprint servers and holds their ports.
+        from .services import install_signal_exit
+        install_signal_exit()
+
         if not opts.dry_run and not opts.no_dashboard:
             dashboard = DashboardProcess(opts.project_path, open_browser=opts.open_browser)
             url = dashboard.start()
@@ -249,8 +264,8 @@ class LoopCommand:
         # Phase 1b — Validate the plan's PROGRESS.md output.
         # Deterministic regex rewrites first (catch heading drift like
         # ``## Strategy`` → ``## Current Objectives``); if still no
-        # parseable objectives, append a corrective hint to
-        # USER_HINTS.md and skip prover/review for this iteration. This
+        # parseable objectives, append a corrective auto-note to
+        # AUTO_NOTES.md and skip prover/review for this iteration. This
         # short-circuits the silent-loop failure where the orchestrator
         # parser rejects PROGRESS.md, prover dispatches nothing, and
         # review misdiagnoses the empty round as a mathematical dead
@@ -258,7 +273,7 @@ class LoopCommand:
         if not plan_validate.validate_plan_output(ctx):
             log.warn(
                 f"Iteration {i + 1}: skipping prover/review — plan-validate "
-                f"failed. Next plan agent will see USER_HINTS.md."
+                f"failed. Next plan agent will see AUTO_NOTES.md."
             )
             iter_secs = int(time.monotonic() - iter_start)
             if not ctx.dry_run and ctx.iter_meta is not None:

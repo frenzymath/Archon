@@ -13,7 +13,7 @@ from pathlib import Path
 import typer
 
 from archon import log
-from archon.agent import DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL
 from archon.commands.tooling.version import warn_if_mismatch
 
 from .context import InitContext
@@ -44,10 +44,14 @@ class InitCommand:
         *,
         force: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.project_path_arg = project_path
         self.force = force
         self.model = model
+        self.backend = backend
+        self.harness = harness
         self.ctx: InitContext | None = None
 
     def run(self) -> None:
@@ -69,14 +73,18 @@ class InitCommand:
         warn_if_mismatch(resolved)
 
         if not has("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
+            log.warn(
+                "Claude Code is not installed. Claude-backed harnesses will "
+                "fail, but Codex-backed harnesses can still run."
+            )
 
         self.ctx = InitContext(
             project_path=resolved,
             state_dir=state_dir,
             fresh=True,
             model=self.model,
+            backend=self.backend or ClaudeBackend(),
+            harness=self.harness,
         )
 
         mode = self._resolve_reinit_mode()
@@ -93,12 +101,18 @@ class InitCommand:
         if mode != "fresh":
             self.ctx.fresh = False
 
+        # Prompt files should be force-replaced on a fresh install OR when
+        # the user explicitly chose "overwrite" (or --force). "merge" and
+        # "keep" deliberately preserve local edits, so they don't set this.
+        if mode in ("fresh", "overwrite"):
+            self.ctx.overwrite = True
+
         if mode == "keep":
             self._run_keep_only()
             return
 
         if mode == "merge":
-            PromptMerger(resolved, state_dir, model=self.model).run()
+            PromptMerger(resolved, state_dir, model=self.model, backend=self.backend or ClaudeBackend()).run()
 
         self._run_full_init()
 
@@ -154,12 +168,13 @@ class InitCommand:
         log.success("Verification complete.")
 
     def _run_full_init(self) -> None:
-        """Deterministic setup → optional Claude semantic pass → final stamps."""
+        """Deterministic setup -> optional semantic pass -> final stamps."""
         ctx = self.ctx
 
         for step_cls in (
             StateDirStep, CopyPromptsStep, BootstrapStep,
             LeanLspMcpStep, SkillsStep, DisableConflictingPluginsStep,
+            EnvAndConfigStep,
         ):
             step_cls(ctx).run()
 
@@ -169,13 +184,11 @@ class InitCommand:
             log.success("Merge-based re-init complete.")
             log.step(f"Next: archon loop {ctx.project_path}")
 
-        # Always show the protected-declarations summary, then config /
-        # inner-git / hook install / version stamp (in that order so the
-        # inner-git commit captures the freshly-written .env and
-        # config.json, and the hook is installed against the git-dir
-        # that was just created).
+        # Always show the protected-declarations summary, then inner-git /
+        # hook install / version stamp (in that order so the inner-git
+        # commit captures the freshly-written .env and config.json, and
+        # the hook is installed against the git-dir that was just created).
         for step_cls in (
-            ReportProtectedStep, EnvAndConfigStep, InnerGitStep,
-            GitHooksStep, VersionStampStep,
+            ReportProtectedStep, InnerGitStep, GitHooksStep, VersionStampStep,
         ):
             step_cls(ctx).run()

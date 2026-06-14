@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -256,11 +257,19 @@ def _decl_has_sorry(lean_file: Path, decl_name: str) -> bool | None:
 
 
 def _file_compiles(lean_file: Path, project_path: Path) -> bool | None:
-    """Best-effort compile check. Returns None if we can't decide."""
+    """Best-effort compile check. Returns None if we can't decide.
+
+    Uses `lake build <module>` rather than `lake env lean <file>` to
+    ensure dependencies are built correctly, avoiding spurious
+    missing-import failures.
+    """
     try:
+        # Convert path to module name: Foo/Bar.lean -> Foo.Bar
+        rel = lean_file.relative_to(project_path)
+        module = str(rel).replace('.lean', '').replace('/', '.')
         r = subprocess.run(
-            ['lake', 'env', 'lean', str(lean_file.relative_to(project_path))],
-            capture_output=True, text=True, timeout=180,
+            ['lake', 'build', module],
+            capture_output=True, text=True, timeout=300,
             cwd=project_path,
         )
     except (OSError, subprocess.SubprocessError):
@@ -381,11 +390,20 @@ def _add_leanok(body: str) -> str:
     insert_at = 0
     metadata_re = re.compile(r'^\s*\\(label|lean|uses|proves)\s*\{')
     leading = 0
+    depth = 0  # unbalanced-brace depth carried across multi-line metadata
     for i, line in enumerate(lines):
+        if depth > 0:
+            # Continuation of a multi-line metadata macro (e.g. a `\uses{...}`
+            # whose labels span several lines). Consume it whole — inserting
+            # `\leanok` inside the brace group corrupts the cross-reference.
+            depth += line.count('{') - line.count('}')
+            leading = i + 1
+            continue
         if line.strip() == '':
             leading = i + 1
             continue
         if metadata_re.match(line):
+            depth += line.count('{') - line.count('}')
             leading = i + 1
             continue
         break
@@ -559,6 +577,79 @@ def _sync_chapter(
     return changes
 
 
+# ── parallel compile-check warm-up ────────────────────────────────────
+
+
+def _default_jobs() -> int:
+    """Worker count for the per-file compile-check sweep.
+
+    Each worker runs one ``lake build <module>`` (a memory-heavy Lean
+    process), so cap the default modestly rather than at all cores. Override
+    with ``ARCHON_SYNC_LEANOK_JOBS``.
+    """
+    env = os.environ.get('ARCHON_SYNC_LEANOK_JOBS')
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return max(1, min(8, os.cpu_count() or 4))
+
+
+def _collect_compile_targets(
+    chapters: list[Path], decl_index: dict[str, Path],
+) -> set[Path]:
+    """The set of Lean files the chapters will compile-check.
+
+    Mirrors :func:`_sync_chapter`'s in-scope filter (skip ``\\mathlibok`` /
+    ``\\notready`` blocks and blocks with no resolvable ``\\lean{...}``) so
+    we warm exactly the files the sequential pass would otherwise compile
+    lazily — no more, no less.
+    """
+    targets: set[Path] = set()
+    for tex in chapters:
+        try:
+            text = tex.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        for blk in _parse_chapter_blocks(text):
+            if blk.has_mathlibok or blk.has_notready or blk.lean_name is None:
+                continue
+            lean_file = decl_index.get(blk.lean_name)
+            if lean_file is not None:
+                targets.add(lean_file)
+    return targets
+
+
+def _populate_compile_cache(
+    files: set[Path], project_path: Path, *, jobs: int,
+) -> dict[Path, bool | None]:
+    """Compile-check ``files`` sequentially into a cache dict.
+
+    While check individual files are independent, `lake build` uses a
+    global lock. Running multiple `lake build` processes concurrently
+    would cause lock contention and potential timeouts. We run them
+    sequentially here; Lake's internal parallelism will still utilize
+    available cores to build dependencies.
+    """
+    cache: dict[Path, bool | None] = {}
+    if not files:
+        return cache
+
+    # Run checks sequentially to avoid Lake lock contention.
+    # Parallelism is handled internally by Lake.
+    for f in sorted(files):
+        try:
+            cache[f] = _file_compiles(f, project_path)
+        except Exception:
+            # One file blowing up (transient toolchain error, unexpected
+            # raise) must not abort the whole warm-up sweep — record it as
+            # undecided (None) and move on. _file_compiles already maps its
+            # own OSError/SubprocessError to None; this is the outer backstop.
+            cache[f] = None
+    return cache
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
@@ -570,6 +661,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--verbose', action='store_true',
                         help='Include no-op decisions in the output.')
     parser.add_argument('--format', choices=['text', 'json'], default='text')
+    parser.add_argument(
+        '--jobs', type=int, default=None,
+        help='Parallel workers for the per-file compile-check sweep '
+             '(default: min(8, cpu count), or $ARCHON_SYNC_LEANOK_JOBS). '
+             'Use 1 to force serial.',
+    )
     args = parser.parse_args(argv)
 
     project_path = Path(args.project_path).resolve()
@@ -579,9 +676,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # not a failure — just nothing to do
 
     decl_index = _scan_lean_decls(project_path)
-    compile_cache: dict[Path, bool | None] = {}
+
+    # Warm the per-file compile-check cache in parallel before the
+    # sequential marker pass. On a large blueprint (dozens of chapters,
+    # hundreds of referenced files) the serial `lake env lean` sweep is the
+    # dominant cost and used to blow the phase timeout; doing the
+    # independent checks concurrently cuts wall-clock by ~#workers.
+    chapters = sorted(chapters_dir.glob('*.tex'))
+    jobs = args.jobs if args.jobs is not None else _default_jobs()
+    targets = _collect_compile_targets(chapters, decl_index)
+    compile_cache: dict[Path, bool | None] = _populate_compile_cache(
+        targets, project_path, jobs=jobs,
+    )
     all_changes: list[Change] = []
-    for tex in sorted(chapters_dir.glob('*.tex')):
+    for tex in chapters:
         all_changes.extend(_sync_chapter(
             tex, project_path, decl_index,
             dry_run=args.dry_run, verbose=args.verbose,

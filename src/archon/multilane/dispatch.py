@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
-from archon.state import parse_objective_files
+from archon.state import normalize_stage_for_prompt_path, parse_objective_files
 
 from .collect import summarize_assignments, write_runtime_jsonl
 from .config import resolve_runtime_paths
@@ -20,7 +20,7 @@ def _prepare_assignment_state_view(source_state_dir: Path, lane_iter_dir: Path) 
         shutil.rmtree(state_view_dir)
     state_view_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in ('CLAUDE.md', 'PROGRESS.md', 'USER_HINTS.md'):
+    for name in ('AGENTS.md', 'PROGRESS.md', 'USER_HINTS.md'):
         src = source_state_dir / name
         if src.exists():
             shutil.copy2(src, state_view_dir / name)
@@ -94,13 +94,31 @@ def build_assignment_prompt(
     assignment: LaneAssignment,
     iter_num: int,
 ) -> str:
+    from archon.prompts import default_prover_mode_for_stage, load_prover_mode_content
+
     state_view = Path(assignment.state_view_path) if assignment.state_view_path else state_dir
+    # Inject the stage's default prover mode inline (the static
+    # prover-<stage>.md prompts were retired in favour of prover-modes).
+    # Resolve from the real state_dir, which holds prover-modes/. Falls back to
+    # the legacy static prompt for projects that predate modes.
+    mode_name = default_prover_mode_for_stage(state_dir, stage)
+    mode_content = load_prover_mode_content(state_dir, mode_name)
+    if mode_content:
+        role_line = f"Read {state_view}/AGENTS.md for your role, then read {state_view}/PROGRESS.md."
+        mode_block = f"\n\nActive prover mode: **{mode_name}**\n\n{mode_content.strip()}\n"
+    else:
+        stage_path = normalize_stage_for_prompt_path(stage)
+        role_line = (
+            f"Read {state_view}/AGENTS.md for your role, then read "
+            f"{state_view}/prompts/prover-{stage_path}.md and {state_view}/PROGRESS.md."
+        )
+        mode_block = ""
     return dedent(f"""\
         You are a prover agent for project '{project_name}'. Current stage: {stage}.
         Archon iteration: {iter_num:03d}.
         Project directory: {lane_project_path}
         Instruction/state directory (read-only): {state_view}
-        Read {state_view}/CLAUDE.md for your role, then read {state_view}/prompts/prover-{stage}.md and {state_view}/PROGRESS.md.
+        {role_line}
         Check your assigned .lean file for /- USER: ... -/ comments for file-specific hints.
 
         CRITICAL WORKTREE RULES:
@@ -118,7 +136,7 @@ def build_assignment_prompt(
         - NEVER revert to a bare sorry. Always leave your partial proof attempt in the code.
 
         Your assigned file: {assignment.assigned_file}
-    """)
+    """) + mode_block
 
 
 def preview_round(

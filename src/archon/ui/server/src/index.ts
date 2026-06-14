@@ -22,7 +22,11 @@ import { register as registerSnapshots } from './routes/snapshots.js';
 import { register as registerProofGraph } from './routes/proofgraph.js';
 import { register as registerGit } from './routes/git.js';
 import { register as registerMultilane } from './routes/multilane.js';
+import { register as registerDag } from './routes/dag.js';
+import { register as registerBlueprint } from './routes/blueprint.js';
+import { register as registerPeers } from './routes/peers.js';
 import type { ProjectPaths } from './routes/project.js';
+import { makePaths, loadPeers, allowedRoots } from './paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,14 +42,34 @@ function parseArgs(): { projectPath: string; port: number } {
   return { projectPath, port };
 }
 
+/**
+ * True when running under WSL (WSL2). Detected via the env vars WSL sets in
+ * its shells, with a `/proc/version` kernel-string fallback. Used to pick the
+ * listen host: WSL2's Windows→Linux localhost relay forwards to an IPv4
+ * loopback target, so a dual-stack `::` socket is unreachable from the
+ * Windows browser (gh issue #26).
+ */
+function isWsl(): boolean {
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return /microsoft/i.test(fs.readFileSync('/proc/version', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 export async function createServer(options: { projectPath: string; port: number }) {
   const { projectPath, port } = options;
 
-  const paths: ProjectPaths = {
-    projectPath,
-    archonPath: path.join(projectPath, '.archon'),
-    logsPath: path.join(projectPath, '.archon', 'logs'),
-  };
+  const paths: ProjectPaths = makePaths(projectPath);
+
+  // Project switching: a request may target the base project or any peer it
+  // declares (`.archon/peers.yaml`), via `?project=<path>`. The allowlist is
+  // resolved once at boot (peers rarely change mid-session). Every request gets
+  // a `request.paths` — the base paths, or the validated peer's. Anything
+  // outside the allowlist is rejected, so the server can never be pointed at an
+  // arbitrary directory.
+  const allowed = allowedRoots(projectPath, loadPeers(projectPath));
 
   // `forceCloseConnections: true` makes `fastify.close()` destroy any
   // open keep-alive / websocket connections immediately instead of
@@ -56,6 +80,22 @@ export async function createServer(options: { projectPath: string; port: number 
   const fastify = Fastify({ logger: false, forceCloseConnections: true });
   await fastify.register(cors);
   await fastify.register(websocket);
+
+  // Resolve each request's project root (base, or an allowed peer via
+  // `?project=`). Routes read `request.paths` rather than the boot-time paths.
+  fastify.decorateRequest('paths', null);
+  fastify.addHook('onRequest', async (request, reply) => {
+    const requested = (request.query as { project?: string } | undefined)?.project;
+    if (requested) {
+      const root = path.resolve(requested);
+      if (!allowed.has(root)) {
+        return reply.status(403).send({ error: 'Project not in scope' });
+      }
+      request.paths = makePaths(root);
+    } else {
+      request.paths = paths;
+    }
+  });
 
   // Serve built client (SPA)
   const clientBuildPath = path.join(__dirname, '../../client/dist');
@@ -77,14 +117,25 @@ export async function createServer(options: { projectPath: string; port: number 
   registerProofGraph(fastify, paths);
   registerGit(fastify, paths);
   registerMultilane(fastify, paths);
+  registerDag(fastify, paths);
+  registerBlueprint(fastify, paths);
+  registerPeers(fastify, paths);
 
-  // Bind dual-stack (IPv6 `::` with IPV6_V6ONLY=0 accepts IPv4 too on Linux/macOS).
-  // Binding to `0.0.0.0` alone causes "waiting for host…" when the browser
-  // resolves localhost to ::1 first. Fall back to IPv4-only if IPv6 is disabled.
+  // Host selection.
+  //   Native Linux/macOS → dual-stack `::` (IPV6_V6ONLY=0 accepts IPv4 too).
+  //     Binding `0.0.0.0` alone there can stall with "waiting for host…" when
+  //     the browser resolves localhost to ::1 first.
+  //   WSL2 → IPv4 `0.0.0.0`. The Windows→WSL localhost relay forwards to an
+  //     IPv4 loopback target, so a `::` socket is unreachable from the Windows
+  //     browser (ERR_CONNECTION_REFUSED) — a 0.2 regression, gh issue #26.
+  //   Override either default with ARCHON_DASHBOARD_HOST (e.g. `::`, `0.0.0.0`,
+  //   `127.0.0.1`).
+  const host = process.env.ARCHON_DASHBOARD_HOST || (isWsl() ? '0.0.0.0' : '::');
   try {
-    await fastify.listen({ port, host: '::' });
+    await fastify.listen({ port, host });
   } catch (e: any) {
-    if (e?.code === 'EAFNOSUPPORT' || e?.code === 'EADDRNOTAVAIL') {
+    if ((e?.code === 'EAFNOSUPPORT' || e?.code === 'EADDRNOTAVAIL') && host !== '0.0.0.0') {
+      // IPv6 unavailable (or the chosen host can't bind) → IPv4 wildcard.
       await fastify.listen({ port, host: '0.0.0.0' });
     } else {
       throw e;

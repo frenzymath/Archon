@@ -14,3 +14,6 @@ src/archon/ui/.archon-ui/
 # project's pyproject.toml deps are unpinned, so consumers resolve
 # their own environments instead of being held to pinned versions.
 uv.lock
+.claude 
+.pytest_cache/
+.ruff_cache/

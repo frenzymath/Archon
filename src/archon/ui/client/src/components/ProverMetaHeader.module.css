@@ -1,0 +1,184 @@
+/* Wrapper — no border; the component now lives inside the scroll container */
+.header {
+  font-size: 12px;
+}
+
+/* Sticky metrics row — stays at the top of the scroll container */
+.metricsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 14px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  cursor: default;
+}
+/* Faint indigo tint on the sticky bar to visually anchor it */
+.metricsRow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(99, 102, 241, 0.04);
+  pointer-events: none;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.metricLabel {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.metricValue {
+  font-family: var(--font-mono, monospace);
+}
+
+.delta {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.deltaGood { color: var(--green, #3fb950); }
+.deltaBad  { color: var(--red,   #f85149); }
+.deltaNeutral { color: var(--text-muted); }
+
+.toggleBtn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 7px;
+  margin-left: auto;
+}
+.toggleBtn:hover { background: rgba(255,255,255,0.05); }
+
+.commentToggle {
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  margin-left: 6px;
+}
+.commentToggle:hover { color: var(--text); }
+
+.snapCount {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Objective block — matches summaryBlock / summaryLabel from LogViewer */
+.objectiveBlock {
+  margin: 10px 14px;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-left: 3px solid #6366f1;
+  border-radius: 6px;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.objectiveLabel {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6366f1;
+  margin-bottom: 8px;
+}
+
+.objectiveContent {
+  font-size: 12px;
+}
+
+/* Diff block — separate collapsible section */
+.diffBlock {
+  margin: 0 14px 10px;
+  max-height: 400px;
+  overflow-y: auto;
+  border-radius: 6px;
+}
+
+/* ── Hover sparkline chart popover ── */
+.chartPopover {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  min-width: 300px;
+  pointer-events: all;
+}
+
+.chartGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+}
+
+.chartCell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chartCellHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chartMetricLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 36px;
+}
+
+.chartMetricVal {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chartMetricVal2 {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.chartTrend {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+.chartFooter {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  text-align: center;
+}
+
+.chartLoading {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 4px;
+}

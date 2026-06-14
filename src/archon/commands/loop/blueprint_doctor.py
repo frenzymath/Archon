@@ -43,6 +43,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import typer
+
 
 _INPUT_RE = re.compile(r"\\(?:input|include)\s*\{\s*([^{}]+?)\s*\}")
 # ``*`` (not ``+``) on the inner class so empty ``\label{}`` matches and
@@ -107,6 +109,82 @@ _REF_RES = (
     re.compile(r"\\uses\s*\{\s*([^{}]*?)\s*\}"),
     re.compile(r"\\proves\s*\{\s*([^{}]*?)\s*\}"),
 )
+
+# A literal standalone "REF" token in prose ("Definition~REF",
+# "Sections REF–REF") — a writer pasted a placeholder instead of a
+# resolvable \cref{<label>}. Matched with the optional preceding
+# kind-word so the finding reads naturally.
+_LITERAL_REF_RE = re.compile(
+    r"(?:\b(?:Definition|Lemma|Theorem|Proposition|Corollary|Chapter|"
+    r"Section|Remark|Equation|Step|Part)s?[~\s]+)?"
+    r"(?<![A-Za-z\\{:_])REF(?![A-Za-z}_:])"
+)
+
+# A bare label-like token in prose ("Thm.~th:main", "Cor.~cor:algsch") — a
+# writer pasted a LaTeX label id instead of the human theorem number or a
+# \cref{}. Only matched OUTSIDE braces (annotation arguments are stripped
+# before the scan).
+_BARE_LABEL_RE = re.compile(
+    r"(?<![\\{:\w])(?:thm?|lemma|lem|lm|cor|defn?|prop|sec|chap|eqn?|rem|rmk)"
+    r":[A-Za-z][A-Za-z0-9_-]+"
+)
+# Strip every {...} argument so labels inside \uses{}/\cref{}/\label{} (and
+# any other command argument) never reach the bare-label scan.
+_BRACE_ARG_RE = re.compile(r"\{[^{}]*\}")
+
+
+def _scan_math_delims(text: str) -> list[tuple[int, str]]:
+    """Detect interleaved/unbalanced math delimiters: ``$ … \\( … \\) … $``.
+
+    Balanced *counts* don't catch the real failure mode (a writer switching
+    delimiter style mid-formula), so this walks the file with a tiny mode
+    machine. Returns ``(line_number, problem)`` pairs.
+    """
+    probs: list[tuple[int, str]] = []
+    mode: str | None = None  # None | '$' | '$$' | 'paren'
+    line = 1
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1; i += 1; continue
+        if c == "\\":
+            nxt = text[i + 1: i + 2]
+            if nxt == "(":
+                if mode in ("$", "$$"):
+                    probs.append((line, f"\\( opened inside {mode}…{mode} math"))
+                elif mode == "paren":
+                    probs.append((line, "nested \\( inside \\(…\\)"))
+                else:
+                    mode = "paren"
+                i += 2; continue
+            if nxt == ")":
+                if mode == "paren":
+                    mode = None
+                else:
+                    probs.append((line, "\\) without a matching \\("))
+                i += 2; continue
+            i += 2; continue  # skip escaped char (\$, \\, …)
+        if c == "$":
+            if text[i + 1: i + 2] == "$":
+                if mode is None:
+                    mode = "$$"
+                elif mode == "$$":
+                    mode = None
+                else:
+                    probs.append((line, f"$$ inside {mode} math"))
+                i += 2; continue
+            if mode is None:
+                mode = "$"
+            elif mode == "$":
+                mode = None
+            else:
+                probs.append((line, "$ inside \\(…\\) math"))
+            i += 1; continue
+        i += 1
+    if mode is not None:
+        probs.append((line, f"unclosed {mode} math at end of file"))
+    return probs
 
 
 @dataclass
@@ -241,6 +319,26 @@ def _scan_labels_and_refs(
         except OSError:
             continue
         text = _strip_tex_comments(text)
+        # Literal "REF" placeholders — a writer wrote prose like
+        # "Definition~REF" instead of a resolvable \cref{<label>}. plasTeX
+        # renders them as-is, littering the blueprint with dead references.
+        for m in _LITERAL_REF_RE.finditer(text):
+            malformed.append((
+                tex, "literal-ref",
+                f'literal "{m.group(0)}" placeholder — use \\cref{{<label>}}',
+            ))
+        # Interleaved/unbalanced math delimiters ($ … \( … \) … $) — these
+        # shred the rendered output mid-formula in both plasTeX and the
+        # dashboard. Capped so one badly damaged file doesn't flood the report.
+        for line_no, prob in _scan_math_delims(text)[:8]:
+            malformed.append((tex, "math-delim", f"line {line_no}: {prob}"))
+        # Bare label ids in prose ("Thm.~th:main") — outside any {...}.
+        for m in _BARE_LABEL_RE.finditer(_BRACE_ARG_RE.sub(" ", text)):
+            malformed.append((
+                tex, "bare-label",
+                f'bare label "{m.group(0)}" in prose — use \\cref{{{m.group(0)}}} '
+                f"or the human-readable number",
+            ))
         for m in _LABEL_RE.finditer(text):
             piece = m.group(1).strip()
             if piece:
@@ -265,6 +363,154 @@ def _scan_labels_and_refs(
                     else:
                         malformed.append((tex, kind, "empty list item"))
     return labels, refs, malformed
+
+
+# ── Undefined-macro lint ──────────────────────────────────────────────────────
+# A chapter using a control sequence that is neither defined in the project
+# (macros/*.tex or a chapter-local \newcommand/\providecommand/
+# \DeclareMathOperator/\def) nor a standard TeX/LaTeX/KaTeX command renders
+# as raw TeX in both the dashboard and the compiled blueprint. The whitelist
+# is deliberately generous — a missed exotic-but-valid command costs one
+# advisory finding; a missed undefined macro costs unreadable output.
+
+_MACRO_DEF_RES = (
+    re.compile(r"\\(?:re)?newcommand\*?\s*\{?\\([A-Za-z@]+)\}?"),
+    re.compile(r"\\providecommand\*?\s*\{?\\([A-Za-z@]+)\}?"),
+    re.compile(r"\\DeclareMathOperator\*?\s*\{\\([A-Za-z@]+)\}"),
+    re.compile(r"\\def\s*\\([A-Za-z@]+)"),
+    re.compile(r"\\DeclarePairedDelimiter\s*\{?\\([A-Za-z@]+)\}?"),
+)
+_USED_CMD_RE = re.compile(r"\\([A-Za-z]+)")
+
+_KNOWN_TEX_COMMANDS: frozenset[str] = frozenset("""
+alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa
+varkappa lambda mu nu xi pi varpi rho varrho sigma varsigma tau upsilon phi
+varphi chi psi omega digamma Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi
+Psi Omega
+frac dfrac tfrac cfrac sqrt binom dbinom tbinom genfrac atop over choose
+sum prod coprod int oint iint iiint iiiint idotsint smallint
+lim limsup liminf varinjlim varprojlim injlim projlim colim
+sup inf min max log ln lg exp sin cos tan cot sec csc arcsin arccos arctan
+sinh cosh tanh coth deg det dim gcd hom ker arg Pr mod pmod bmod
+mathbb mathbf mathcal mathfrak mathrm mathsf mathtt mathit mathscr mathnormal
+text textbf textit textrm textsf texttt textsc textup textnormal textmd
+emph textsl underline bm boldsymbol operatorname mathop mathbin mathrel
+mathord mathopen mathclose mathpunct mathstrut
+hat widehat bar overline tilde widetilde vec dot ddot dddot breve check grave
+acute mathring overbrace underbrace overrightarrow overleftarrow
+overleftrightarrow underrightarrow underleftarrow xrightarrow xleftarrow
+xmapsto overset underset stackrel substack
+to mapsto rightarrow leftarrow Rightarrow Leftarrow leftrightarrow
+Leftrightarrow longrightarrow longleftarrow Longrightarrow Longleftarrow
+longmapsto longleftrightarrow Longleftrightarrow hookrightarrow hookleftarrow
+twoheadrightarrow twoheadleftarrow rightharpoonup rightharpoondown
+leftharpoonup leftharpoondown rightrightarrows leftleftarrows
+rightleftarrows leftrightarrows rightleftharpoons uparrow downarrow
+updownarrow Uparrow Downarrow Updownarrow nearrow searrow swarrow nwarrow
+iff implies impliedby nleftarrow nrightarrow nLeftarrow nRightarrow
+curvearrowright curvearrowleft circlearrowright circlearrowleft
+rightsquigarrow leadsto dashrightarrow dashleftarrow
+le leq ge geq ne neq sim simeq cong equiv approx propto prec succ preceq
+succeq ll gg lll ggg subset supset subseteq supseteq subsetneq supsetneq
+varsubsetneq sqsubset sqsupset sqsubseteq sqsupseteq nsubseteq nsupseteq
+in ni notin mid nmid parallel nparallel perp vdash dashv nvdash models
+vDash asymp doteq triangleq coloneqq eqqcolon coloneq colonequals doteqdot
+between pitchfork smile frown lesssim gtrsim lessapprox gtrapprox lessgtr
+gtrless trianglelefteq trianglerighteq vartriangleleft vartriangleright
+pm mp times div cdot ast star circ bullet cap cup sqcap sqcup vee wedge
+setminus smallsetminus oplus ominus otimes oslash odot bigcirc dagger
+ddagger amalg uplus bigcup bigcap bigsqcup bigoplus bigotimes bigodot
+bigvee bigwedge biguplus lhd rhd unlhd unrhd wr ltimes rtimes bowtie
+circledast circledcirc circleddash boxplus boxminus boxtimes boxdot
+infty partial nabla forall exists nexists emptyset varnothing angle
+measuredangle sphericalangle triangle square Box Diamond lozenge aleph beth
+gimel daleth hbar hslash ell wp Re Im imath jmath prime backprime backslash
+top bot flat natural sharp clubsuit diamondsuit heartsuit spadesuit surd
+checkmark maltese degree neg lnot complement
+ldots cdots vdots ddots dots dotsb dotsc dotsm dotsi dotso
+left right middle big Big bigg Bigg bigl bigr Bigl Bigr biggl biggr Biggl
+Biggr bigm Bigm langle rangle lceil rceil lfloor rfloor lvert rvert lVert
+rVert vert Vert lbrace rbrace lbrack rbrack lgroup rgroup
+quad qquad thinspace medspace thickspace negthinspace negmedspace
+negthickspace enspace enskip hspace vspace hfill vfill phantom hphantom
+vphantom smash mathllap mathrlap mathclap llap rlap clap kern mkern mskip
+raisebox raise lower rule strut space
+displaystyle textstyle scriptstyle scriptscriptstyle limits nolimits
+displaylimits not cancel bcancel xcancel sout boxed tag notag nonumber
+allowbreak relax protect ensuremath xspace
+begin end label ref eqref pageref cref Cref autoref nameref vref item
+caption chapter section subsection subsubsection paragraph subparagraph
+part appendix footnote footnotemark footnotetext cite citep citet
+bibliography bibliographystyle input include includeonly includegraphics
+newcommand renewcommand providecommand DeclareMathOperator
+DeclarePairedDelimiter newenvironment renewenvironment newtheorem
+theoremstyle numberwithin setcounter addtocounter stepcounter value
+documentclass usepackage RequirePackage ProvidesPackage title author date
+maketitle tableofcontents listoffigures listoftables abstract and thanks
+uses lean leanok mathlibok notready proves discussion home github dochome
+color textcolor colorbox fbox framebox definecolor pagecolor
+small tiny scriptsize footnotesize normalsize large Large LARGE huge Huge
+itshape upshape slshape scshape bfseries mdseries rmfamily sffamily ttfamily
+em it bf rm sf tt sl sc cal frak
+centering raggedright raggedleft noindent indent par newline newpage
+clearpage cleardoublepage linebreak nolinebreak pagebreak nopagebreak
+bigskip medskip smallskip vskip hskip baselineskip parskip parindent
+mbox makebox hbox vbox fboxsep fboxrule
+S P copyright dag ddag pounds euro yen S P
+v u c H r b d t k
+if else fi ifmmode ifdim ifnum let expandafter csname endcsname
+noexpand string detokenize empty today TeX LaTeX KaTeX
+min max argmin argmax sgn sech csch arcsinh arccosh arctanh
+colon textbackslash textasciitilde textasciicircum texorpdfstring href url
+qed qedhere qedsymbol hline cline multicolumn multirow textsuperscript
+textsubscript enquote roman Roman arabic alph Alph fnsymbol
+triangleleft triangleright lor land bigtriangleup bigtriangledown
+leftrightsquigarrow ar arrow matrix verb path
+operatorname Hom End Aut Spec id
+""".split())
+# NOTE: `Hom`/`End`/`Aut`/`Spec`/`id` above are NOT TeX builtins — they are
+# whitelisted because virtually every AG/CT blueprint defines them in
+# macros/common.tex from day one; flagging them would be noise. Everything
+# else project-specific must be defined to pass.
+
+
+def _scan_undefined_macros(
+    chapter_files: list[Path],
+    def_sources: list[Path],
+) -> list[tuple[Path, str, str]]:
+    """Flag control sequences used in chapters but defined nowhere.
+
+    ``def_sources`` is every .tex that may carry definitions (macros/*.tex,
+    preamble files, and the chapters themselves for chapter-local
+    ``\\providecommand``). One finding per (file, command).
+    """
+    defined: set[str] = set()
+    for tex in def_sources:
+        try:
+            text = _strip_tex_comments(tex.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        for d_re in _MACRO_DEF_RES:
+            defined.update(m.group(1) for m in d_re.finditer(text))
+
+    out: list[tuple[Path, str, str]] = []
+    for tex in chapter_files:
+        try:
+            text = _strip_tex_comments(tex.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        seen: set[str] = set()
+        for m in _USED_CMD_RE.finditer(text):
+            cmd = m.group(1)
+            if cmd in seen or cmd in defined or cmd in _KNOWN_TEX_COMMANDS:
+                continue
+            seen.add(cmd)
+            out.append((
+                tex, "undefined-macro",
+                f"\\{cmd} is used but defined nowhere (macros/*.tex or a "
+                f"chapter-local \\providecommand) — define it or fix the typo",
+            ))
+    return out
 
 
 def _scan_axiom_decls(project_path: Path) -> list[tuple[Path, str]]:
@@ -419,6 +665,20 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
     label_scan_targets = sorted(included)
     labels, refs, malformed = _scan_labels_and_refs(label_scan_targets)
 
+    # Undefined macros: definitions may live in macros/*.tex (whether or not
+    # content.tex \inputs them — web.tex usually does), any included file, or
+    # the chapter itself; usage is only linted inside chapters.
+    if has_blueprint:
+        macros_dir = src_dir / "macros"
+        def_sources = sorted({
+            *included,
+            *chapters_present,
+            *(macros_dir.glob("*.tex") if macros_dir.is_dir() else ()),
+        })
+        malformed += _scan_undefined_macros(
+            chapters_included or chapters_present, def_sources,
+        )
+
     broken: list[tuple[Path, str, str]] = []
     for tex, kind, lbl in refs:
         if lbl not in labels:
@@ -445,6 +705,58 @@ def run_blueprint_doctor(project_path: Path) -> DoctorReport | None:
         axiom_decls=axiom_decls,
         covers_problems=covers_problems,
     )
+
+
+def blueprint_doctor_cli(
+    project_path: str = typer.Option(".", "--project-path", help="Path to Lean project"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+) -> None:
+    """Lint the blueprint: orphan chapters, broken/malformed references,
+    literal-REF placeholders, interleaved math delimiters, bare labels in
+    prose, undefined macros, axioms, and `% archon:covers` problems.
+
+    The same checks the loop and `archon dag` run between phases — exposed
+    on demand so review agents (and you) can re-lint after editing chapters.
+    """
+    import json as _json
+    root = Path(project_path).resolve()
+    report = run_blueprint_doctor(root)
+    if report is None:
+        print("{}" if as_json else "No blueprint (and no axioms) to lint.")
+        return
+    if as_json:
+        print(_json.dumps(report.as_dict(), ensure_ascii=False))
+        return
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(root))
+        except ValueError:
+            return str(p)
+
+    if not report.has_findings:
+        print("blueprint-doctor: clean — no structural or rendering findings.")
+        return
+    from collections import Counter
+    kinds = Counter(k for _, k, _ in report.malformed_refs)
+    print(
+        f"blueprint-doctor: {len(report.orphan_chapters)} orphan chapter(s), "
+        f"{len(report.broken_refs)} broken ref(s), "
+        f"{len(report.malformed_refs)} malformed "
+        f"({', '.join(f'{k}: {n}' for k, n in sorted(kinds.items()))}), "
+        f"{len(report.axiom_decls)} axiom(s), "
+        f"{len(report.covers_problems)} covers problem(s)."
+    )
+    for p in report.orphan_chapters:
+        print(f"- [orphan] {_rel(p)}")
+    for tex, kind, lbl in report.broken_refs:
+        print(f"- [broken {kind}] {_rel(tex)}: {lbl}")
+    for tex, kind, reason in report.malformed_refs:
+        print(f"- [{kind}] {_rel(tex)}: {reason}")
+    for f, n in report.axiom_decls:
+        print(f"- [axiom] {_rel(f)} :: {n}")
+    for _kind, detail in report.covers_problems:
+        print(f"- [covers] {detail}")
 
 
 def write_reports(

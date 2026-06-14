@@ -104,3 +104,53 @@
 /* KaTeX itself sets its own sizing; constrain to our container. */
 .root :global(.katex) { font-size: 1em; }
 .root :global(.katex-display) { margin: 6px 0; }
+
+/* Comment annotations (source pointers, quotes, notes) -------------- */
+.commentWrap {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 2px;
+}
+.commentToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 0 5px;
+  border-radius: 10px;
+}
+.commentToggle:hover { color: var(--text-primary); border-color: var(--blue); }
+.commentOpen { color: var(--blue); border-color: var(--blue); }
+.quoteIcon {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.commentLabel { text-transform: lowercase; letter-spacing: 0.02em; }
+
+.commentBody {
+  display: block;
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+}
+.commentEntry { display: block; margin: 3px 0; }
+.commentTag {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.commentText { color: var(--text-secondary); }
+.commentPara { display: block; margin: 2px 0; }

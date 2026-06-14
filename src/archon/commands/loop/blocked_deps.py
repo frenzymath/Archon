@@ -32,7 +32,7 @@ This module catches the case deterministically:
    dispatch + the file-level locking the loop already does.
 
 The intent is identical to the dispatch cap: warn the planner loudly,
-queue the deferred files into ``USER_HINTS.md`` so the next plan agent
+queue the deferred files into ``AUTO_NOTES.md`` so the next plan agent
 re-prioritizes from a clean slate, and slice the dispatch list at the
 runner as a deterministic safety net.
 """
@@ -58,14 +58,13 @@ _BUILD_ERROR_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
-# `import Foo.Bar.Baz` at start of a line — same convention as
-# ``skills/lean4/lib/scripts/dependency_graph.py``. Lean accepts a few
-# odd shapes (runtime module strings, ``import all``); in practice every
-# project we care about uses dotted module names.
+# `import Foo.Bar.Baz` at start of a line. Lean accepts a few odd shapes
+# (runtime module strings, ``import all``); in practice every project we
+# care about uses dotted module names.
 _IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\b")
 
-# Directory parts pruned wholesale from the project's .lean scan.
-# Mirrors ``dependency_graph.py``'s skip set (when --include-deps is off).
+# Directory parts pruned wholesale from the project's .lean scan — build
+# output and archon state; third-party deps live under .lake / lake-packages.
 _SKIP_PARTS = {".git", ".archon", ".lake", "lake-packages"}
 
 
@@ -254,7 +253,7 @@ def filter_objectives_for_blocked_deps(
     for graph lookup.
 
     ``drop`` is ``[(dropped_file, [blocked_deps...])]`` so the caller
-    can render a useful USER_HINTS message ("Foo.lean dropped because
+    can render a useful AUTO_NOTES message ("Foo.lean dropped because
     it imports Bar.lean which doesn't compile").
 
     A blocked file that's *itself* an objective is presumed-being-fixed

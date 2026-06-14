@@ -18,19 +18,23 @@ export interface GitCommit {
   fileSlug?: string;
 }
 
-function runGit(gitDir: string, projectPath: string, args: string[]): string {
+export function runGit(gitDir: string, projectPath: string, args: string[]): string {
   const r = spawnSync('git', args, {
     env: { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: projectPath },
     cwd: projectPath,
     encoding: 'utf-8',
     timeout: 8000,
+    // Default maxBuffer is 1 MB — a full `log --name-only` over a long inner
+    // history exceeds that and the child gets killed (status null, output
+    // silently dropped). 64 MB matches the dag-graph CLI call's headroom.
+    maxBuffer: 64 * 1024 * 1024,
   });
   return r.status === 0 ? (r.stdout ?? '') : '';
 }
 
 const ARCHON_MSG_RE = /archon\[(\d+)\/([^/\]]+)(?:\/([^\]]+))?\]/;
 
-function parseIter(subject: string): { iteration?: string; phase?: string; fileSlug?: string } {
+export function parseIter(subject: string): { iteration?: string; phase?: string; fileSlug?: string } {
   const m = subject.match(ARCHON_MSG_RE);
   if (!m) return {};
   const num = parseInt(m[1], 10);
@@ -77,7 +81,7 @@ function stripTexComments(src: string): string {
  * are skipped silently — a handful of exotic definitions shouldn't stop the
  * rest from rendering.
  */
-function parseMacros(src: string): Record<string, string> {
+export function parseMacros(src: string): Record<string, string> {
   const out: Record<string, string> = {};
   const source = stripTexComments(src);
   const re = /\\(newcommand|renewcommand|providecommand|DeclareMathOperator)\*?\s*/g;
@@ -136,7 +140,7 @@ function parseMacros(src: string): Record<string, string> {
 }
 
 /** Read every .tex file in `blueprint/src/macros/` and merge macro definitions. */
-function loadBlueprintMacros(projectPath: string): Record<string, string> {
+export function loadBlueprintMacros(projectPath: string): Record<string, string> {
   const macrosDir = path.join(projectPath, 'blueprint', 'src', 'macros');
   if (!fs.existsSync(macrosDir) || !fs.statSync(macrosDir).isDirectory()) return {};
   const merged: Record<string, string> = {};
@@ -170,12 +174,13 @@ function readPhaseLog(logsPath: string, iteration: string, phase: string): unkno
   return entries;
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath, archonPath, logsPath } = paths;
-  const gitDir = path.join(archonPath, 'git-dir');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths resolved per-request (base project or an allowed peer via `?project=`).
 
   /** Full commit log from the inner archon git repo */
-  fastify.get('/api/git/log', async (_, reply) => {
+  fastify.get('/api/git/log', async (req, reply) => {
+    const { projectPath, archonPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(gitDir)) return reply.status(404).send({ commits: [] });
 
     // %x01 = field separator (SOH), %x02 = record separator (STX)
@@ -411,7 +416,9 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
    * Returns { commit: null } when no inner git exists (legacy projects) — never 404s,
    * so the UI can render unconditionally without branching on status codes.
    */
-  fastify.get('/api/git/head', async () => {
+  fastify.get('/api/git/head', async (req) => {
+    const { projectPath, archonPath } = req.paths;
+    const gitDir = path.join(archonPath, 'git-dir');
     if (!fs.existsSync(gitDir)) return { commit: null };
     const raw = runGit(gitDir, projectPath, [
       'log', '-1', '--format=%H%x01%h%x01%s%x01%ai%x01%D',
@@ -436,7 +443,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     async (req, reply) => {
       const { iteration, phase } = req.params;
       if (!iteration.startsWith('iter-')) return reply.status(400).send({ error: 'Invalid iteration' });
-      const entries = readPhaseLog(logsPath, iteration, phase);
+      const entries = readPhaseLog(req.paths.logsPath, iteration, phase);
       return { entries };
     }
   );
@@ -454,6 +461,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   fastify.get<{ Querystring: { file?: string; name?: string } }>(
     '/api/blueprint',
     async (req, reply) => {
+      const { projectPath } = req.paths;
       const { file, name } = req.query;
       if (!file || !name) return reply.status(400).send({ error: 'Missing file or name' });
 

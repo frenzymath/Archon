@@ -37,6 +37,8 @@ _OBJECTIVE_NUMBERED = re.compile(
 # relative paths inside other lanes' worktrees.
 _SKIP_PARTS = {".lake", "lake-packages", ".archon"}
 
+_PROVER_MODE_TAG = re.compile(r'\[prover-mode:\s*([^\]]+)\]', re.IGNORECASE)
+
 # Plan agents sometimes list off-limits files inside `## Current Objectives`
 # (e.g. "### 3. The protected files (`Foo.lean`) — DO NOT TOUCH"). Without
 # filtering, the regex picks up `Foo.lean` as an objective and the
@@ -129,11 +131,11 @@ def read_stage(progress_file: Path, force_stage: str | None = None) -> str:
     content = progress_file.read_text()
 
     pattern = r"## Current Stage\s+([^\n#]+)"
-    
+
     match = re.search(pattern, content)
     if match:
-        return match.group(1).strip()
-    
+        return match.group(1).strip().split()[0]
+
     raise ValueError("Could not read current stage from PROGRESS.md")
 
 
@@ -142,6 +144,36 @@ def is_complete(progress_file: Path, force_stage: str | None = None) -> bool:
         return "COMPLETE" in read_stage(progress_file, force_stage)
     except (FileNotFoundError, ValueError):
         return False
+
+
+# Canonical prover stage tokens shipped at `.archon/prompts/prover-<stage>.md`.
+# Used by ``normalize_stage_for_prompt_path`` to recover the canonical
+# token from a verbose ``## Current Stage`` line; the planner sometimes
+# writes things like ``prover (Iter-123: M1.b residual — Steps 1-4 ...)``
+# and the raw text breaks the prompt-file path resolution.
+_PROVER_STAGES = ("autoformalize", "prover", "polish")
+
+
+def normalize_stage_for_prompt_path(stage: str) -> str:
+    """Pick the canonical prover-stage token used in `prover-<stage>.md` paths.
+
+    The plan agent occasionally writes ``## Current Stage`` with descriptive
+    text appended after the stage token, e.g.::
+
+        ## Current Stage
+        prover (Iter-123: M1.b residual — Steps 1-4 of the IsLocalization.of_le)
+
+    The raw text contains parentheses, em-dashes and trailing fragments — when
+    embedded into ``.archon/prompts/prover-<stage>.md`` this produces a
+    non-existent filename and the prover wastes one boot pivoting back to the
+    canonical path. Match the first known prefix instead so the path is always
+    one of the three shipped prompts.
+    """
+    head = stage.strip().lower().lstrip("`*").lstrip()
+    for canonical in _PROVER_STAGES:
+        if head.startswith(canonical):
+            return canonical
+    return "prover"
 
 
 def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]:
@@ -161,6 +193,104 @@ def parse_objective_files(progress_file: Path, project_path: Path) -> list[Path]
     return _resolve_candidate_paths(project_path, candidates)
 
 
+def parse_objectives_with_modes(
+    progress_file: Path, project_path: Path,
+) -> list[tuple[Path, str | None]]:
+    """Like ``parse_objective_files`` but also returns the per-file mode tag.
+
+    Returns a list of ``(path, mode_name)`` pairs where ``mode_name`` is the
+    value of a ``[prover-mode: <name>]`` tag on the objective line, or ``None``
+    when no tag is present.
+    """
+    if not progress_file.exists():
+        return []
+
+    text = progress_file.read_text()
+    section_lines = _extract_section(text, "## Current Objectives")
+
+    use_headings = bool(_extract_heading_candidates(section_lines))
+
+    def _is_objective_start(line: str) -> bool:
+        if _has_stop_marker(line):
+            return False
+        if use_headings:
+            return bool(_OBJECTIVE_HEADING.search(line))
+        return bool(_OBJECTIVE_BULLET.search(line) or _OBJECTIVE_NUMBERED.search(line))
+
+    def _is_continuation(line: str) -> bool:
+        """True if this line is a non-empty indented/continuation line that
+        belongs to the preceding objective block (not a new objective start,
+        not a section heading, not a stop marker, not a blank line)."""
+        if not line.strip():
+            return False
+        if _has_stop_marker(line):
+            return False
+        if line.lstrip().startswith('#'):
+            return False
+        if _is_objective_start(line):
+            return False
+        return True
+
+    # Build (header_line, block_text) pairs: block_text includes the header
+    # line plus any continuation lines that follow before the next objective.
+    raw_blocks: list[tuple[str, str]] = []
+    i = 0
+    while i < len(section_lines):
+        line = section_lines[i]
+        if _is_objective_start(line):
+            block_lines = [line]
+            j = i + 1
+            while j < len(section_lines) and _is_continuation(section_lines[j]):
+                block_lines.append(section_lines[j])
+                j += 1
+            raw_blocks.append((line, "\n".join(block_lines)))
+            i = j
+        else:
+            i += 1
+
+    candidates: list[str] = []
+    modes: list[str | None] = []
+    for header_line, block_text in raw_blocks:
+        if use_headings:
+            m = _OBJECTIVE_HEADING.search(header_line)
+        else:
+            m = _OBJECTIVE_BULLET.search(header_line) or _OBJECTIVE_NUMBERED.search(header_line)
+        if not m:
+            continue
+        if not use_headings:
+            prefix = header_line[:m.start(1)]
+            if ':' in prefix:
+                continue
+        candidates.append(m.group(1).strip())
+        mode_m = _PROVER_MODE_TAG.search(block_text)
+        modes.append(mode_m.group(1).strip() if mode_m else None)
+
+    paths = _resolve_candidate_paths(project_path, candidates)
+    # Match paths back to their modes via candidate index. resolve may drop
+    # candidates that don't exist, so rebuild the mapping by candidate string.
+    cand_to_mode: dict[str, str | None] = {}
+    for cand, mode in zip(candidates, modes):
+        cand_to_mode[cand] = mode
+
+    # _resolve_candidate_paths resolves and deduplicates; we pair each
+    # resolved path back with the mode of the first matching candidate.
+    results: list[tuple[Path, str | None]] = []
+    seen: set[str] = set()
+    for cand, mode in zip(candidates, modes):
+        cand_norm = cand.replace("\\", "/").strip("/")
+        for p in paths:
+            ps = str(p)
+            if ps in seen:
+                continue
+            # Match: path ends with the candidate (basename or relative path).
+            if ps.replace("\\", "/").endswith(cand_norm) or ps.split("/")[-1] == cand_norm.split("/")[-1]:
+                seen.add(ps)
+                results.append((p, mode))
+                break
+
+    return results
+
+
 def auto_fix_objectives(
     progress_file: Path, project_path: Path,
 ) -> tuple[list[Path], list[str]]:
@@ -178,7 +308,7 @@ def auto_fix_objectives(
     parse if the heading were right, rename the heading in place. Any
     case the rewrites can't fix falls through with an empty
     ``objectives`` list so the caller (``validate_plan_output``) can log
-    a corrective hint for the next plan agent and skip prover dispatch.
+    a corrective auto-note for the next plan agent and skip prover dispatch.
     """
     objectives = parse_objective_files(progress_file, project_path)
     if objectives or not progress_file.exists():
@@ -188,7 +318,7 @@ def auto_fix_objectives(
 
     # If the canonical heading already exists but produced no
     # objectives, no rename will help — the issue is content, not
-    # heading. Fall through to caller's USER_HINTS feedback path.
+    # heading. Fall through to caller's AUTO_NOTES feedback path.
     if "## Current Objectives" in text:
         return [], []
 

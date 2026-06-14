@@ -62,7 +62,7 @@ export interface LogGroup {
     refactor?: { status: string; durationSecs?: number };
     prover?: { status: string; durationSecs?: number };
     review?: { status: string; durationSecs?: number };
-    provers?: Record<string, { file: string; status: string }>;
+    provers?: Record<string, { file: string; status: string; mode?: string }>;
     commit?: { sha: string; shortSha: string; subject: string; date: string };
   };
 }
@@ -142,6 +142,7 @@ export interface Milestone {
 export interface ProverMeta {
   file: string;
   status: 'running' | 'done' | 'error';
+  mode?: string;
 }
 
 export interface IterationMeta {

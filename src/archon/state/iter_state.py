@@ -33,6 +33,7 @@ SIDECAR_ROOT_NAME = "iter"
 PLAN_SIDECAR_NAME = "plan.md"
 REVIEW_SIDECAR_NAME = "review.md"
 OBJECTIVES_SIDECAR_NAME = "objectives.md"
+DAG_SIDECAR_NAME = "dag.md"
 
 
 # ── path helpers ─────────────────────────────────────────────────────
@@ -58,6 +59,15 @@ def review_sidecar_path(state_dir: Path, iter_num: int) -> Path:
 
 def objectives_sidecar_path(state_dir: Path, iter_num: int) -> Path:
     return iter_sidecar_dir(state_dir, iter_num) / OBJECTIVES_SIDECAR_NAME
+
+
+def dag_sidecar_path(state_dir: Path, iter_num: int) -> Path:
+    return iter_sidecar_dir(state_dir, iter_num) / DAG_SIDECAR_NAME
+
+
+def existing_iter_nums(state_dir: Path) -> list[int]:
+    """Return sorted list of all iter numbers that have a sidecar dir."""
+    return _existing_iter_nums(state_dir)
 
 
 # ── lifecycle ────────────────────────────────────────────────────────
@@ -197,12 +207,15 @@ __all__ = [
     "PLAN_SIDECAR_NAME",
     "REVIEW_SIDECAR_NAME",
     "OBJECTIVES_SIDECAR_NAME",
+    "DAG_SIDECAR_NAME",
     "IterSidecarSnapshot",
     "iter_sidecar_root",
     "iter_sidecar_dir",
     "plan_sidecar_path",
     "review_sidecar_path",
     "objectives_sidecar_path",
+    "dag_sidecar_path",
+    "existing_iter_nums",
     "init_iter_sidecar_dir",
     "read_recent_iter_sidecars",
     "format_recent_iter_sidecars_for_prompt",

@@ -36,7 +36,9 @@ from .iter_state import (
 from .progress import (
     auto_fix_objectives,
     is_complete,
+    normalize_stage_for_prompt_path,
     parse_objective_files,
+    parse_objectives_with_modes,
     read_stage,
     write_stage,
 )
@@ -57,7 +59,9 @@ __all__ = [
     "write_meta",
     "auto_fix_objectives",
     "is_complete",
+    "normalize_stage_for_prompt_path",
     "parse_objective_files",
+    "parse_objectives_with_modes",
     "read_stage",
     "write_stage",
     "IterSidecarSnapshot",

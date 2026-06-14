@@ -53,18 +53,16 @@ function parseTasksMarkdown(content: string, status: 'pending' | 'done'): Task[]
   return tasks.map((t, i) => ({ ...t, id: `task-${status}-${i}` }));
 }
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { projectPath, archonPath } = paths;
-  const taskResultsPath = path.join(archonPath, 'task_results');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Paths are resolved per-request (base project, or an allowed peer via
+  // `?project=`) from `req.paths` — set by the onRequest hook in index.ts.
+  fastify.get('/api/project', async (req) => {
+    const { projectPath, archonPath } = req.paths;
+    return { name: path.basename(projectPath), path: projectPath, archonPath };
+  });
 
-  fastify.get('/api/project', async () => ({
-    name: path.basename(projectPath),
-    path: projectPath,
-    archonPath,
-  }));
-
-  fastify.get('/api/progress', async () => {
-    const content = readFileOr(path.join(archonPath, 'PROGRESS.md'), '');
+  fastify.get('/api/progress', async (req) => {
+    const content = readFileOr(path.join(req.paths.archonPath, 'PROGRESS.md'), '');
     return parseProgressMarkdown(content);
   });
 
@@ -73,21 +71,23 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   // see the planner's current sketch of how the whole project lands. We
   // intentionally don't parse the file here — the schema is loose by
   // design, and the planner may add or rename sections at any iteration.
-  fastify.get('/api/strategy', async () => {
-    return { content: readFileOr(path.join(archonPath, 'STRATEGY.md'), '') };
+  fastify.get('/api/strategy', async (req) => {
+    return { content: readFileOr(path.join(req.paths.archonPath, 'STRATEGY.md'), '') };
   });
 
-  fastify.get('/api/tasks', async () => {
+  fastify.get('/api/tasks', async (req) => {
+    const { archonPath } = req.paths;
     const pending = parseTasksMarkdown(readFileOr(path.join(archonPath, 'task_pending.md'), ''), 'pending');
     const done = parseTasksMarkdown(readFileOr(path.join(archonPath, 'task_done.md'), ''), 'done');
     return [...pending, ...done];
   });
 
-  fastify.get('/api/sorry-count', async () => {
-    return countSorriesInProject(projectPath);
+  fastify.get('/api/sorry-count', async (req) => {
+    return countSorriesInProject(req.paths.projectPath);
   });
 
-  fastify.get('/api/task-results', async () => {
+  fastify.get('/api/task-results', async (req) => {
+    const taskResultsPath = path.join(req.paths.archonPath, 'task_results');
     if (!fs.existsSync(taskResultsPath)) return [];
     return fs.readdirSync(taskResultsPath).filter(f => f.endsWith('.md')).map(f => ({
       name: f,

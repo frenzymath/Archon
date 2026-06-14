@@ -1,9 +1,9 @@
 """`archon refactor draft` and `archon refactor run`.
 
 Two-phase design:
-  - `draft`  : launches Claude interactively to interview the user and
-               produce a well-formed REFACTOR_DIRECTIVE.md. The mathematician
-               reviews / edits the directive before step two.
+  - `draft`  : launches the configured harness interactively to interview the
+               user and produce a well-formed REFACTOR_DIRECTIVE.md. The
+               mathematician reviews / edits the directive before step two.
   - `run`    : reads the directive, invokes the refactor agent in autonomous
                mode, and commits the result to the inner git.
 
@@ -15,17 +15,18 @@ the directive can churn for hours.
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 from textwrap import dedent
+from typing import Optional
 
 import typer
 
 from archon import log
-from archon.agent import ClaudeAgent, DEFAULT_MODEL
+from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 from archon.commands.tooling.inner_git import InnerGit
 from archon.commands.tooling.iteration import commit_phase
 from archon.commands.tooling.version import warn_if_mismatch
+from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
 
 
 app = typer.Typer(
@@ -84,26 +85,31 @@ class RefactorDraftCommand:
         *,
         auto_run: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
+        harness: str | None = None,
     ) -> None:
         self.project_path = project_path
         self.auto_run = auto_run
         self.model = model
+        self.backend = backend
+        self.harness = harness
 
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
         warn_if_mismatch(resolved)
 
-        if not shutil.which("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
-
         log.header("archon refactor draft")
-        log.step("Launching Claude to interview you and write REFACTOR_DIRECTIVE.md.")
+        log.step("Launching the configured harness to interview you and write REFACTOR_DIRECTIVE.md.")
 
         prompt = self._build_prompt(resolved, state_dir)
-        ClaudeAgent(model=self.model, role="refactor-draft").run_interactive(
-            prompt, cwd=resolved,
-        )
+        cfg = load_project_config(resolved)
+        build_runner(
+            role="refactor-draft",
+            model=self.model,
+            cfg=cfg,
+            harness=self.harness,
+            backend=self.backend or ClaudeBackend(),
+        ).run_interactive(prompt, cwd=resolved)
 
         directive = _read_directive(state_dir)
         if directive is None:
@@ -143,18 +149,16 @@ class RefactorRunCommand:
         *,
         verbose_logs: bool = False,
         model: str = DEFAULT_MODEL,
+        backend: ClaudeBackend | None = None,
     ) -> None:
         self.project_path = project_path
         self.verbose_logs = verbose_logs
         self.model = model
+        self.backend = backend
 
     def run(self) -> None:
         resolved, state_dir = _resolve_project(self.project_path)
         warn_if_mismatch(resolved)
-
-        if not shutil.which("claude"):
-            log.error("Claude Code is not installed. Run: archon setup")
-            raise typer.Exit(1)
 
         directive = _read_directive(state_dir)
         if directive is None:
@@ -240,6 +244,7 @@ class RefactorRunCommand:
         sub = Subagent(
             descriptor, resolved,
             model=self.model, verbose_logs=self.verbose_logs,
+            backend=self.backend or ClaudeBackend(),
         )
         result = sub.run(
             directive=directive, slug=slug, iter_num=iter_num, log_base=log_base,
@@ -295,16 +300,34 @@ def draft(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness",
+        help="Override the interactive draft harness, e.g. codex.",
+    ),
 ) -> None:
     """Interview the user and write a REFACTOR_DIRECTIVE.md.
 
-    Claude walks the user through the five required sections (problem,
-    justification, changes, risk, rollback). The directive is written to
-    `.archon/REFACTOR_DIRECTIVE.md`. By default, the refactor agent is NOT
-    launched — the user is expected to review the directive first and
-    then run `archon refactor run`.
+    The configured harness walks the user through the five required sections
+    (problem, justification, changes, risk, rollback). The directive is written
+    to `.archon/REFACTOR_DIRECTIVE.md`. By default, the refactor agent is NOT
+    launched — the user is expected to review the directive first and then run
+    `archon refactor run`.
     """
-    RefactorDraftCommand(project_path, auto_run=auto_run, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    RefactorDraftCommand(
+        project_path, auto_run=auto_run, model=model, backend=backend, harness=harness,
+    ).run()
 
 
 @app.command("run")
@@ -321,6 +344,16 @@ def run(
             "Non-Anthropic (uses .archon/.env credentials): 'kimi', 'deepseek'."
         ),
     ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend",
+        help=(
+            "How 'claude -p' is invoked for every headless agent run. "
+            "'default': plain claude -p. "
+            "'vscode': sets CLAUDE_CODE_ENTRYPOINT=claude-vscode. "
+            "'desktop': sets CLAUDE_CODE_ENTRYPOINT=claude-desktop. "
+            "(default from .archon/config.json loop.claude_backend or 'default')"
+        ),
+    ),
 ) -> None:
     """Execute REFACTOR_DIRECTIVE.md with the refactor agent.
 
@@ -328,4 +361,6 @@ def run(
     `archon[NNN/refactor]: <summary>` (the agent phase commit). The
     outer (mathematician's) git repo is not touched.
     """
-    RefactorRunCommand(project_path, verbose_logs=verbose_logs, model=model).run()
+    project_config = load_project_config(Path(project_path))
+    backend = resolve_claude_backend(project_config, cli_value=claude_backend)
+    RefactorRunCommand(project_path, verbose_logs=verbose_logs, model=model, backend=backend).run()

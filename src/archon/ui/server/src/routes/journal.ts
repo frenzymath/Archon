@@ -5,16 +5,15 @@ import type { FastifyInstance } from 'fastify';
 import { readFileOr } from '../utils.js';
 import type { ProjectPaths } from './project.js';
 
-export function register(fastify: FastifyInstance, paths: ProjectPaths) {
-  const { archonPath } = paths;
-  const journalPath = path.join(archonPath, 'proof-journal');
-  const journalSessionsPath = path.join(journalPath, 'sessions');
+export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
+  // Per-request paths (base project or an allowed peer via `?project=`).
+  const sessionsRoot = (archonPath: string) => path.join(archonPath, 'proof-journal', 'sessions');
 
-  // Also scan current_session/ for in-progress data
-  function listSessions(): string[] {
-    if (!fs.existsSync(journalSessionsPath)) return [];
-    return fs.readdirSync(journalSessionsPath)
-      .filter(d => d.startsWith('session_') && fs.statSync(path.join(journalSessionsPath, d)).isDirectory())
+  function listSessions(archonPath: string): string[] {
+    const root = sessionsRoot(archonPath);
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root)
+      .filter(d => d.startsWith('session_') && fs.statSync(path.join(root, d)).isDirectory())
       .sort((a, b) => {
         const na = parseInt(a.replace('session_', ''), 10) || 0;
         const nb = parseInt(b.replace('session_', ''), 10) || 0;
@@ -22,15 +21,15 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
       });
   }
 
-  function sessionDir(id: string): string {
-    return path.join(journalSessionsPath, id);
+  function sessionDir(archonPath: string, id: string): string {
+    return path.join(sessionsRoot(archonPath), id);
   }
 
   // List all sessions with a summary of what files exist in each
-  fastify.get('/api/journal/sessions', async () => {
-    const sessions = listSessions();
-    return sessions.map(id => {
-      const dir = sessionDir(id);
+  fastify.get('/api/journal/sessions', async (req) => {
+    const { archonPath } = req.paths;
+    return listSessions(archonPath).map(id => {
+      const dir = sessionDir(archonPath, id);
       const hasMilestones = fs.existsSync(path.join(dir, 'milestones.jsonl'));
       const hasSummary = fs.existsSync(path.join(dir, 'summary.md'));
       const hasRecommendations = fs.existsSync(path.join(dir, 'recommendations.md'));
@@ -40,7 +39,7 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // Milestones — return empty array if file missing
   fastify.get<{ Params: { id: string } }>('/api/journal/sessions/:id/milestones', async (req) => {
-    const filePath = path.join(sessionDir(req.params.id), 'milestones.jsonl');
+    const filePath = path.join(sessionDir(req.paths.archonPath, req.params.id), 'milestones.jsonl');
     const content = readFileOr(filePath, '');
     if (!content) return [];
     return content.split('\n').filter(Boolean).map(line => {
@@ -50,22 +49,22 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
 
   // Summary — return empty content if file missing
   fastify.get<{ Params: { id: string } }>('/api/journal/sessions/:id/summary', async (req) => {
-    const filePath = path.join(sessionDir(req.params.id), 'summary.md');
+    const filePath = path.join(sessionDir(req.paths.archonPath, req.params.id), 'summary.md');
     return { content: readFileOr(filePath, '') };
   });
 
   // Recommendations — return empty content if file missing
   fastify.get<{ Params: { id: string } }>('/api/journal/sessions/:id/recommendations', async (req) => {
-    const filePath = path.join(sessionDir(req.params.id), 'recommendations.md');
+    const filePath = path.join(sessionDir(req.paths.archonPath, req.params.id), 'recommendations.md');
     return { content: readFileOr(filePath, '') };
   });
 
   // All milestones across all sessions (for cross-session aggregation)
-  fastify.get('/api/journal/all-milestones', async () => {
-    const sessions = listSessions();
+  fastify.get('/api/journal/all-milestones', async (req) => {
+    const { archonPath } = req.paths;
     const result: { sessionId: string; milestones: unknown[] }[] = [];
-    for (const id of sessions) {
-      const filePath = path.join(sessionDir(id), 'milestones.jsonl');
+    for (const id of listSessions(archonPath)) {
+      const filePath = path.join(sessionDir(archonPath, id), 'milestones.jsonl');
       const content = readFileOr(filePath, '');
       if (!content) continue;
       const milestones = content.split('\n').filter(Boolean).map(line => {
@@ -77,8 +76,8 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
   });
 
   // Project status
-  fastify.get('/api/journal/status', async () => {
-    const filePath = path.join(archonPath, 'PROJECT_STATUS.md');
+  fastify.get('/api/journal/status', async (req) => {
+    const filePath = path.join(req.paths.archonPath, 'PROJECT_STATUS.md');
     return { content: readFileOr(filePath, '') };
   });
 }

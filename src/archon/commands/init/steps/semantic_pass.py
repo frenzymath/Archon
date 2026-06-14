@@ -1,9 +1,9 @@
-"""Hand off to Claude for the narrow semantic tasks remaining after bootstrap.
+"""Hand off to the configured harness after deterministic bootstrap.
 
-Claude's job: verify the bootstrap, reorganize loose reference files,
-fill in README / summary.md prose, walk the user through
-archon-protected.yaml, and propose initial objectives. Everything
-deterministic has already happened.
+The semantic pass verifies the bootstrap, reorganizes loose reference files,
+fills in README / summary.md prose, walks the user through
+archon-protected.yaml, and proposes initial objectives. Everything
+deterministic has already happened before this step starts.
 """
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ import json
 import textwrap
 
 from archon import log
-from archon.agent import ClaudeAgent
+from archon.commands.tooling.project_config import load_project_config
+from archon.agent import build_runner
 from archon.commands.tooling import protect
 from archon.commands.tooling.project import ProjectLayout
 
@@ -21,7 +22,7 @@ from .base import InitStep
 
 
 class SemanticPassStep(InitStep):
-    name = "Claude semantic pass"
+    name = "Semantic pass"
     number = 7
 
     def run(self) -> None:
@@ -39,13 +40,13 @@ class SemanticPassStep(InitStep):
         layout = ProjectLayout.inspect(ctx.project_path)
 
         log.header(f"Initializing project: {project_name}")
-        log.step("Handing off to Claude for the semantic pass.")
+        log.step("Handing off to the configured harness for the semantic pass.")
 
         bootstrap_summary = self._build_bootstrap_summary(layout)
 
         prompt = textwrap.dedent(f"""\
             You are in the init stage for project '{project_name}' at {ctx.project_path}. \
-            Read {ctx.state_dir}/CLAUDE.md, then read {ctx.state_dir}/prompts/init.md and follow \
+            Read {ctx.state_dir}/AGENTS.md, then read {ctx.state_dir}/prompts/init.md and follow \
             its instructions. Project state files are in {ctx.state_dir}/. Write PROGRESS.md \
             and other state files there, not in the project directory.
 
@@ -63,9 +64,10 @@ class SemanticPassStep(InitStep):
             {json.dumps(bootstrap_summary, indent=2)}
             """)
 
-        ClaudeAgent(model=ctx.model, role="init").run_interactive(
-            prompt, cwd=ctx.project_path,
-        )
+        cfg = load_project_config(ctx.project_path)
+        build_runner(
+            role="init", model=ctx.model, cfg=cfg, backend=ctx.backend,
+        ).run_interactive(prompt, cwd=ctx.project_path)
 
         new_stage = parse_stage(progress_md)
         if new_stage == "init":

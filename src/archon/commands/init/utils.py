@@ -52,18 +52,21 @@ def _files_equal(a: Path, b: Path) -> bool:
         return False
 
 
-def copy_file(src: Path, dst: Path, overwrite: bool = False) -> None:
+def copy_file(src: Path, dst: Path, overwrite: bool = False) -> bool:
+    """Copy ``src`` to ``dst``. Returns True if the file was actually written.
+
+    Identical content is a silent no-op (returns False) so callers can
+    distinguish "file was refreshed" from "file was already up to date".
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    # Identical content → silent no-op. The previous behavior warned
-    # "Overwriting existing file: <name>" for every bundled template
-    # the user hadn't touched, which made re-init logs noisy and falsely
-    # implied lossy mutations.
     if dst.exists() and _files_equal(src, dst):
-        return
+        return False
     if dst.exists() and overwrite:
         log.warn(f"Overwriting existing file: {dst.name}")
     if overwrite or not dst.exists():
         shutil.copy2(src, dst)
+        return True
+    return False
 
 
 def parse_stage(progress_md: Path) -> str:

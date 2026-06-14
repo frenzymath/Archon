@@ -112,6 +112,7 @@ def _lane_from_raw(lane_raw: dict) -> LaneConfig:
         lane_id=lane_raw['lane_id'],
         label=lane_raw.get('label', lane_raw['lane_id']),
         provider=lane_raw.get('provider', 'unknown'),
+        harness=lane_raw.get('harness', 'claude-code'),
         claude_config_dir=lane_raw.get('claude_config_dir'),
         claude_settings_path=lane_raw.get('claude_settings_path'),
         env=dict(lane_raw.get('env', {}) or {}),
@@ -160,15 +161,16 @@ def multilane_config_from_simple(simple: dict) -> MultiLaneConfig:
     - worktree.sync_mode → ``hard-reset``
     """
     lanes_out: list[LaneConfig] = []
-    for raw in simple.get('lanes', []) or []:
-        normalized = dict(raw)
-        normalized.setdefault('worktree', {})
-        wt = normalized['worktree']
-        lane_id = str(normalized.get('lane_id') or normalized.get('provider') or 'lane')
-        wt.setdefault('path', f'.archon/lanes/{lane_id}')
-        wt.setdefault('branch', f'lane/{lane_id}')
-        wt.setdefault('sync_mode', 'hard-reset')
-        lanes_out.append(_lane_from_raw(normalized))
+    if simple.get('enabled', False):
+        for raw in simple.get('lanes', []) or []:
+            normalized = dict(raw)
+            normalized.setdefault('worktree', {})
+            wt = normalized['worktree']
+            lane_id = str(normalized.get('lane_id') or normalized.get('provider') or 'lane')
+            wt.setdefault('path', f'.archon/lanes/{lane_id}')
+            wt.setdefault('branch', f'lane/{lane_id}')
+            wt.setdefault('sync_mode', 'hard-reset')
+            lanes_out.append(_lane_from_raw(normalized))
     return MultiLaneConfig(
         enabled=bool(simple.get('enabled', False)),
         version=int(simple.get('version', 1)),

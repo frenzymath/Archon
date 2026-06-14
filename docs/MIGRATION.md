@@ -8,6 +8,9 @@ from scratch, you don't need this file — follow the
 - **Coming from a pre-CLI checkout?** Start with section 1 (v0.1.0 reworked
   installation around a single `archon` CLI) and continue through to
   section 6.
+- **Coming from v0.2.0 or earlier?** Skip to [section 8](#8-upgrading-to-v030) —
+  v0.3.0 adds a configurable Claude backend for alternative headless
+  entrypoints and hardens stage detection.
 - **Coming from v0.1.0?** Skip to [section 7](#7-upgrading-from-v010-to-v020) —
   v0.2.0 adds multi-lane proving, the refactor agent, inner-git
   versioning, `archon-protected.yaml`, an opt-in subagent system, a
@@ -72,7 +75,7 @@ symlinked cache. This meant:
   was symlinked to it.
 
 v0.1.0 uses **copies** instead. Each project gets its own independent copy
-of the prompts, `CLAUDE.md`, the informal agent, and the skills plugin.
+of the prompts, `AGENTS.md`, the informal agent, and the skills plugin.
 This removes the fragility and lets you safely edit prompts per-project,
 but it also means template updates no longer propagate automatically — you
 pull them in by re-running `archon init` and choosing **merge** or
@@ -93,9 +96,9 @@ It detects the existing setup and offers four choices:
 
 - **keep** — leave files alone; just refresh MCP / plugin registrations.
 - **merge** *(recommended)* — launch Claude Code in a focused diff session
-  and reconcile each prompt / `CLAUDE.md` file interactively.
+  and reconcile each prompt / `AGENTS.md` file interactively.
 - **overwrite** — replace all Archon files with the bundled versions
-  (discards local edits to prompts and `CLAUDE.md`).
+  (discards local edits to prompts and `AGENTS.md`).
 - **abort** — cancel without changes.
 
 User state (`PROGRESS.md`, `USER_HINTS.md`, `task_pending.md`, `task_done.md`,
@@ -146,7 +149,7 @@ This re-runs the installer against `main`.
 ### 2.3 Verify the install
 
 ```bash
-archon --help
+archon -h
 archon doctor
 ```
 
@@ -180,7 +183,7 @@ Back-up `.archon/` state files:
 cp -r .archon/ .archon-backup/
 ```
 
-If you have customizations under `.archon/prompts/` or in `.archon/CLAUDE.md`
+If you have customizations under `.archon/prompts/` or in `.archon/AGENTS.md`
 that you want to keep, be aware that currently `.archon/` is gitignored.
 
 ### 3.2 Run `archon init`
@@ -212,7 +215,7 @@ The right choice depends on what you've edited:
 
 | Situation | Choose |
 |-----------|--------|
-| You never edited anything under `.archon/prompts/` or `.archon/CLAUDE.md`. | **overwrite** |
+| You never edited anything under `.archon/prompts/` or `.archon/AGENTS.md`. | **overwrite** |
 | You edited some prompts and want to review the differences. | **merge** |
 | You want to keep your current setup and only refresh registrations. | **keep** |
 | You are not sure. | **merge** |
@@ -221,7 +224,7 @@ The right choice depends on what you've edited:
 
 When you pick `merge`, Archon:
 
-1. Copies the new bundled prompts and `CLAUDE.md` to a staging directory
+1. Copies the new bundled prompts and `AGENTS.md` to a staging directory
    (`.archon/.archon-incoming/`).
 2. Launches Claude Code with a focused prompt.
 3. For every file that differs, Claude summarizes the changes and asks you
@@ -234,7 +237,7 @@ When you pick `merge`, Archon:
 
 Claude is instructed to never touch `PROGRESS.md`, `USER_HINTS.md`,
 `task_pending.md`, `task_done.md`, `proof-journal/`, or any `.lean` file.
-Only prompts and `CLAUDE.md` are in scope.
+Only prompts and `AGENTS.md` are in scope.
 
 If Claude Code is not installed (it should be, if `archon setup` succeeded),
 the merge step falls back to a text-only diff summary.
@@ -360,7 +363,7 @@ one-line installer again — it is idempotent.
 
 ### 7.2 Re-run `archon init` in each project (recommended)
 
-The prompts and `CLAUDE.md` template gained several pieces of guidance in
+The prompts and `AGENTS.md` template gained several pieces of guidance in
 v0.2.0 — iteration-number canonicalization, LaTeX-macro hygiene, and a rule
 against listing off-limits files in `## Current Objectives`. The plan agent
 also now picks up the bundled dependency-graph script. To pull these into a
@@ -379,7 +382,7 @@ are never touched.
 | File | What it is | Edit? |
 |------|------------|------|
 | `.archon/git-dir/` | Inner git repo. Every agent phase commits here as `archon[NNN/phase]`. | No — managed by Archon. |
-| `.archon/config.json` | Per-project loop and multilane settings. Versioned with your project. | Yes — see [MULTILANE.md](https://github.com/frenzymath/Archon/blob/main/src/archon/.archon-src/archon-template/MULTILANE.md). |
+| `.archon/config.json` | Per-project loop and multilane settings. Versioned with your project. | Yes — see [MULTILANE.md](MULTILANE.md). |
 | `.archon/.env` | API keys for the informal agent and multilane providers. | Yes — gitignored, never commit. |
 | `.archon/REFACTOR_DIRECTIVE.md` | Where the plan agent writes refactor directives. Cleared after each refactor pass. | Plan agent writes; you can read for context. |
 | `.archon/STRATEGY.md` | Plan agent's living long-arc plan. | Plan agent owns; you can read. |
@@ -403,6 +406,11 @@ git so the whole team shares the protected surface.
 
 `archon init` writes an empty `archon-protected.yaml` if none exists; fill it
 in when you are ready.
+
+> **v0.3.0 extends this format.** The flat form above still works, but you can
+> now also protect blueprint (`.tex`) files and `\label{}` blocks, choose a
+> protection level (freeze the signature/statement vs. the whole declaration),
+> and use glob patterns. See the README's `archon-protected.yaml` section.
 
 ### 7.5 The CLI gained four commands
 
@@ -485,6 +493,80 @@ references, malformed (empty) annotations, stray `axiom` declarations, and
 review agent reads the report, and the next iteration's plan agent sees the
 findings inline under `## Blueprint doctor — live structural findings`. No
 configuration is needed — it's silently included in every iteration.
+
+---
+
+## 8. Upgrading to v0.3.0
+
+v0.3.0 adds a **modular engine system** (run roles/subagents on Claude Code or
+**OpenAI Codex** via named harnesses; pick a Claude **backend**, including the
+`claude-p` workaround for Anthropic's headless `claude -p` rate limits), the
+**`archon dag`** blueprint-writing loop grounded in
+[LeanDag](https://github.com/AxelDlv00/LeanDAG), **prover modes**,
+`archon extract`/`merge`, new dashboard views, and more. Most of it is opt-in —
+the default single-lane Claude Code loop is unchanged. The full feature list is
+in [CHANGELOG.md](CHANGELOG.md); the steps below are everything you must *do* to
+upgrade (almost all automatic).
+
+### 8.1 Reinstall the CLI
+
+```bash
+archon update
+```
+
+### 8.2 Modular engine system: harnesses + Claude backends
+
+v0.3.0 makes the engine that runs each role/subagent configurable. Two knobs:
+
+- **Harness** — *which* engine runs the work: the built-in Claude Code, or
+  **OpenAI Codex**. Set one harness for everything in one line
+  (`loop.harness: "codex"`), per role (`loop.roles.<plan|prover|review>`), or
+  per subagent (`subagents.<name>.harness`).
+- **Claude backend** — *how* the Claude engine is launched, via
+  `--claude-backend` or `loop.claude_backend`:
+  - `default`: plain `claude -p`
+  - `vscode` / `desktop`: sets `CLAUDE_CODE_ENTRYPOINT` accordingly
+  - `claude-p`: drives the Claude Code TUI headlessly via the
+    [claude-p](https://github.com/AxelDlv00/claude-p) wrapper — the recommended
+    workaround now that Anthropic rate-limits headless `claude -p` on
+    subscription plans
+  - `interactive`: foreground, human-driven (forces serial, disables multilane)
+
+The backend now also propagates to subagents automatically. See the full
+reference in **[docs/CONFIGURATION.md](CONFIGURATION.md)**.
+
+### 8.3 Blueprint DAG loop (`archon dag`)
+
+`archon dag` is a new, optional loop that writes a coherent LeanBlueprint
+dependency graph before (or partway through) the main proving loop. It grounds
+the planner and provers in the project's real DAG via the
+[leandag](https://github.com/AxelDlv00/LeanDAG) API rather than the LLM's fuzzy
+internal picture. **No action needed to upgrade**; run `archon dag <project>`
+when you want it (recommended at least once before `archon loop`, especially for
+projects starting from informal notes). See the README for details.
+
+### 8.4 Hardened stage detection
+
+Stage detection in `PROGRESS.md` is now more resilient. Human or agent
+annotations (e.g., dates or iteration numbers) appended after the stage token
+are ignored by the orchestrator, preventing the loop from stalling on
+unexpected input.
+
+### 8.5 `.archon/CLAUDE.md` renamed to `.archon/AGENTS.md`
+
+The bundled agent role doc is now `AGENTS.md` — the cross-tool convention
+auto-loaded by both Claude Code and Codex (which Archon also references
+explicitly in every prompt). **No action needed:** `archon init` / `archon
+update` removes the old `.archon/CLAUDE.md` and writes `.archon/AGENTS.md` for
+you. The file is a bundled reference, not a user-edited file, so nothing custom
+is lost. If you kept your own notes elsewhere, they're untouched.
+
+### 8.6 Automated validation notes moved out of `USER_HINTS.md`
+
+`USER_HINTS.md` is now strictly user-authored: the loop never writes to it.
+Automated plan-validation feedback (dropped/blocked/deferred objectives,
+format corrections) now lands in a separate, loop-managed `.archon/AUTO_NOTES.md`
+that is captured into the plan prompt and cleared each iteration.
 
 ---
 

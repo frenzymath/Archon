@@ -98,6 +98,7 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
 
     mandatory = _parse_mandatory(path, meta.get("mandatory"))
     dispatcher_notes = _parse_dispatcher_notes(path, meta.get("dispatcher_notes"))
+    harness = _parse_harness(path, meta.get("harness"))
 
     return SubagentDescriptor(
         name=name,
@@ -108,6 +109,7 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
         default_enabled=bool(meta.get("default_enabled", True)),
         mandatory=mandatory,
         dispatcher_notes=dispatcher_notes,
+        harness=harness,
         prompt_body=text[m.end():],
         source_path=path,
     )
@@ -170,6 +172,25 @@ def _parse_dispatcher_notes(path: Path, raw: object) -> str:
     )
 
 
+def _parse_harness(path: Path, raw: object) -> str:
+    """Parse the optional ``harness`` frontmatter field.
+
+    Accepts:
+    * Missing / null / empty → ``"claude-code"`` (the built-in default).
+    * Non-empty string → returned verbatim.
+
+    Raises ValueError on other shapes so a typo (e.g. a list) doesn't
+    silently fall back to the default engine.
+    """
+    if raw is None or raw == "":
+        return "claude-code"
+    if isinstance(raw, str):
+        return raw
+    raise ValueError(
+        f"{path}: `harness` must be a non-empty string or omitted."
+    )
+
+
 def load_descriptors_from_dir(directory: Path) -> dict[str, SubagentDescriptor]:
     """Load every ``*.md`` in ``directory`` as a descriptor.
 
@@ -198,7 +219,7 @@ def _builtin_dir() -> Path:
 def build_registry(
     project_path: Path,
     *,
-    enabled: list[str] | None = None,
+    enabled: list[str] | str | None = None,
     extra_dirs: list[Path] | None = None,
 ) -> SubagentRegistry:
     """Build a registry for ``project_path``.
@@ -213,6 +234,8 @@ def build_registry(
 
     * ``enabled is None`` → keep every descriptor whose
       ``default_enabled`` is True.
+    * ``enabled == "*"`` → keep every installed descriptor, regardless
+      of ``default_enabled`` (the "enable everything" shortcut).
     * ``enabled`` is a list → keep descriptors whose name appears
       there, regardless of ``default_enabled``.
     """
@@ -232,7 +255,11 @@ def build_registry(
 
     if enabled is None:
         kept = {n: d for n, d in merged.items() if d.default_enabled}
-    else:
+    elif enabled == "*":
+        kept = dict(merged)
+    elif isinstance(enabled, (list, tuple, set)):
         wanted = set(enabled)
         kept = {n: d for n, d in merged.items() if n in wanted}
+    else:
+        raise TypeError("enabled must be None, '*', or a list of subagent names")
     return SubagentRegistry(kept)

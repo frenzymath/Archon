@@ -551,6 +551,18 @@ export default function DiffPlayback() {
                 View log context →
               </button>
             )}
+            {selectedSlug && (
+              <>
+                <button className={styles.btn} title="Show this file's nodes on the DAG page"
+                  onClick={() => navigate(`/dag?file=${encodeURIComponent(selectedSlug.replace(/_/g, '/') + '.lean')}`)}>
+                  ⬡ Graph
+                </button>
+                <button className={styles.btn} title="Open this file's chapter on the Blueprint page"
+                  onClick={() => navigate(`/blueprint?slug=${encodeURIComponent(selectedSlug)}`)}>
+                  📖 Blueprint
+                </button>
+              </>
+            )}
           </div>
         )}
 
