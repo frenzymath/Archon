@@ -341,6 +341,7 @@ class LoopCommand:
                     data.totals_dict(),
                     data.model_rows() or None,
                 )
+                log.operations_table(data.operations)
         return True
 
     def _setup_iteration_dir(self, i: int) -> None:
@@ -530,6 +531,7 @@ class LoopCommand:
                 data.totals_dict(),
                 data.model_rows() or None,
             )
+            log.operations_table(data.operations)
 
         if ctx.dashboard_url:
             log.panel(

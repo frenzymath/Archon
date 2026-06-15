@@ -19,6 +19,7 @@ export interface LogEntry {
   num_turns?: number;
   input_tokens?: number;
   output_tokens?: number;
+  cache_read_input_tokens?: number;
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
   // prompt event fields — the initial prompt sent to claude (stamped right
@@ -90,6 +91,7 @@ export interface Task {
 
 // --- Session summary types ---
 export interface SessionSummary {
+  operation?: string;
   cost: number;
   duration: number;
   tokensIn: number;

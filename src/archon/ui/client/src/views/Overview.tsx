@@ -142,15 +142,30 @@ export default function Overview() {
           <div className={styles.tableScroll}>
             <table className={styles.table}>
               <thead>
-                <tr><th>Time</th><th>Model</th><th>Duration</th><th>Turns</th></tr>
+                <tr>
+                  <th>Time</th>
+                  <th>Operation</th>
+                  <th>Model</th>
+                  <th>Duration</th>
+                  <th>Turns</th>
+                  <th style={{ textAlign: 'right' }}>In Tokens</th>
+                  <th style={{ textAlign: 'right' }}>Out Tokens</th>
+                  <th style={{ textAlign: 'right' }}>Cost</th>
+                </tr>
               </thead>
               <tbody>
                 {summary.sessions.slice().reverse().map((s, i) => (
                   <tr key={i}>
                     <td>{fmtTime(s.timestamp)}</td>
+                    <td style={{ fontWeight: 'bold' }}>{s.operation || 'session'}</td>
                     <td>{s.model}</td>
                     <td>{fmtDuration(s.duration)}</td>
                     <td>{s.turns}</td>
+                    <td style={{ textAlign: 'right' }}>{s.tokensIn.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right' }}>{s.tokensOut.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', color: 'var(--green, #28a745)', fontWeight: 'bold' }}>
+                      ${s.cost.toFixed(4)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
