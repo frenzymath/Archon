@@ -8,7 +8,8 @@ from archon import log
 from archon.commands.tooling.project_config import DEFAULT_HARNESS, LOOP_ROLES
 
 _CODEX_HARNESS = "codex"
-_FLAG_CHOICES = ("claude-code", _CODEX_HARNESS, "mixed")
+_ANTIGRAVITY_HARNESS = "antigravity"
+_FLAG_CHOICES = ("claude-code", _CODEX_HARNESS, _ANTIGRAVITY_HARNESS, "mixed")
 _MIXED_ROLE_DEFAULTS = {
     "plan": DEFAULT_HARNESS,
     "prover": _CODEX_HARNESS,
@@ -23,7 +24,9 @@ def selection_from_choice(choice: str, role_choices: dict | None = None):
         return None
     if normalized in ("2", _CODEX_HARNESS, "x"):
         return _CODEX_HARNESS
-    if normalized in ("3", "mixed", "m"):
+    if normalized in ("3", _ANTIGRAVITY_HARNESS, "a"):
+        return _ANTIGRAVITY_HARNESS
+    if normalized in ("4", "mixed", "m"):
         roles = dict(role_choices or {})
         return {r: roles[r] for r in LOOP_ROLES if r in roles}
     raise ValueError(f"unknown harness choice {choice!r}")
@@ -41,7 +44,7 @@ def _prompt_role_choices() -> dict:
         default_letter = "x" if default_name == _CODEX_HARNESS else "c"
         while True:
             ans = typer.prompt(
-                f"  {role:6s} engine - [c] claude-code  [x] codex",
+                f"  {role:6s} engine - [c] claude-code  [x] codex  [a] antigravity",
                 default=default_letter,
             ).strip().lower()
             if ans in ("c", "claude-code", "claude"):
@@ -49,6 +52,9 @@ def _prompt_role_choices() -> dict:
                 break
             if ans in ("x", "codex"):
                 choices[role] = _CODEX_HARNESS
+                break
+            if ans in ("a", "antigravity"):
+                choices[role] = _ANTIGRAVITY_HARNESS
                 break
     return choices
 
@@ -59,17 +65,18 @@ def prompt_harness_selection():
     typer.echo("Which engine should run the loop's agents (plan / prover / review)?")
     typer.echo("  [1] Claude Code + Opus      - default")
     typer.echo("  [2] Codex CLI              - uses native ~/.codex login/default model")
-    typer.echo("  [3] Mixed                   - pick an engine per role")
+    typer.echo("  [3] Antigravity CLI        - deepmind native autonomous platform")
+    typer.echo("  [4] Mixed                  - choose per-role (e.g. plan/review=claude, prover=codex)")
     typer.echo("")
 
     while True:
-        choice = typer.prompt("Choice [1/2/3]", default="1").strip().lower()
+        choice = typer.prompt("Choice (1/2/3/4)", default="1").strip().lower()
         try:
-            if choice in ("3", "mixed", "m"):
-                return selection_from_choice("3", _prompt_role_choices())
+            if choice in ("4", "mixed", "m"):
+                return selection_from_choice("4", _prompt_role_choices())
             return selection_from_choice(choice)
         except ValueError:
-            typer.echo("Please answer 1, 2, or 3.")
+            typer.echo("Please answer 1, 2, 3, or 4.")
 
 
 def resolve_harness_selection(ctx):

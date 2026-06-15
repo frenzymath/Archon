@@ -49,6 +49,14 @@ def init(
             "(Codex CLI), or 'mixed' (pick per role)."
         ),
     ),
+    focus: Optional[str] = typer.Option(
+        None, "--focus",
+        help="Add a custom instruction/focus for the agent during the semantic pass.",
+    ),
+    headless: bool = typer.Option(
+        False, "--headless",
+        help="Run headlessly without asking the user questions or confirming objectives.",
+    ),
 ) -> None:
     """Initialize a new Archon project.
 
@@ -68,5 +76,5 @@ def init(
     )
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
     InitCommand(
-        project_path, force=force, model=model, backend=backend, harness=harness,
+        project_path, force=force, model=model, backend=backend, harness=harness, focus=focus, headless=headless,
     ).run()

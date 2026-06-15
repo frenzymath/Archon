@@ -1233,11 +1233,28 @@ def _peers_block(project_path: Path) -> str:
         "Reuse the *strategy / structure*; the proof must still compile in THIS "
         "project (different imports, Mathlib pin, namespaces).",
         "",
-        "**Read-only, always.** You may read any peer file and query its cached "
-        "graph — nothing more. Never write to a peer path, and never run a "
-        "graph-mutating command (`leandag build`, `archon dag-graph`) against a "
-        "peer (it would touch their `.leandag/`). Writes outside this project "
-        "are rejected anyway.",
+        "**Read-only, with two exceptions.** You may read any peer file and "
+        "query its cached graph. The *only* writes you may make to a peer are "
+        "leaving upstream PRs or Issues:\n"
+        "\n"
+        "1. **Pull Requests:** When reusing a peer's declaration forces you to reshape it "
+        "(e.g. you wrote a more general version in your own codebase), notify them so they can pull your code:\n"
+        "```bash\n"
+        "archon peers pr --target <peer> --lean-name <name> \\\n"
+        "  --code \"<the code of your generalization>\" --rationale \"<why, and where to find it in your project>\"\n"
+        "```\n"
+        "This is not a request for *them* to do work. It is a notification that "
+        "you have generalized their work locally and they should adopt your patch.\n"
+        "\n"
+        "2. **Issues:** When you find a mathematical or architectural bug in a peer project:\n"
+        "```bash\n"
+        "archon peers issue --target <peer> --title \"<Bug title>\" --body \"<Detailed description>\"\n"
+        "```\n"
+        "These commands append to the peer's `.archon/inbox/<this-project>.yaml` and "
+        "nothing else. Never write anywhere else in a peer, never edit their "
+        "files, and never run a graph-mutating command (`leandag build`, "
+        "`archon dag-graph`) against a peer (it would touch their `.leandag/`). "
+        "All other writes outside this project are rejected.",
     ]
 
     # Cross-project matches: declarations you still need, already proved next door.
@@ -1267,6 +1284,58 @@ def _peers_block(project_path: Path) -> str:
         shown = hits[:_CAP]
         extra = f" … (+{len(hits) - _CAP} more)" if len(hits) > _CAP else ""
         lines.append(f"- from **{p.name}**: " + ", ".join(f"`{h}`" for h in shown) + extra)
+
+    return "\n".join(lines) + "\n"
+
+
+def _peer_feedback_block(project_path: Path) -> str:
+    """Inject feedback peers left about THIS project's declarations.
+
+    Peers leave definition-improvement notes via ``archon peers note``; they
+    land in ``.archon/inbox/<author>.yaml``. This surfaces the still-``open``
+    ones, grouped by declaration — when several peers independently flag the
+    same declaration, that is a strong signal it should be generalized (and a
+    candidate to extract into a shared base project). Best-effort: degrades to
+    an empty string with no inbox, and never raises into the prompt.
+    """
+    try:
+        from archon.commands.tooling import inbox as inbox_mod
+        notes = inbox_mod.open_notes(project_path)
+    except Exception:
+        return ""
+    if not notes:
+        return ""
+
+    # Group by the declaration the note is about; many authors on one decl is
+    # the convergence signal worth foregrounding.
+    by_decl: dict[str, list[tuple[str, object]]] = {}
+    for author, note in notes:
+        by_decl.setdefault(note.lean_name, []).append((author, note))
+
+    lines = [
+        "",
+        "## Peer feedback on your declarations (inbox)",
+        "",
+        f"{len(notes)} open note(s) from peer projects suggest reshaping "
+        "declarations of yours they reused. Because peers cannot edit your files, "
+        "they have likely provided patches or generalized code from their own "
+        "codebases for you to upstream. Weigh them when you (re)work these "
+        "declarations — a definition several peers had to generalize is one "
+        "worth generalizing here. You are not obliged to follow a note, but "
+        "address the recurring ones. After acting (or deciding not to), the human "
+        "can mark a note resolved.",
+        "",
+    ]
+    for lean_name in sorted(by_decl):
+        entries = by_decl[lean_name]
+        authors = ", ".join(sorted({a for a, _ in entries}))
+        flag = "  ⚑ multiple peers" if len({a for a, _ in entries}) > 1 else ""
+        lines.append(f"- **`{lean_name}`** — from {authors}{flag}")
+        for _author, note in entries:
+            suggestion = getattr(note, "suggestion", "") or "(no suggestion text)"
+            rationale = getattr(note, "rationale", "")
+            why = f"  _why:_ {rationale}" if rationale else ""
+            lines.append(f"    - {suggestion}{why}")
 
     return "\n".join(lines) + "\n"
 
@@ -1339,7 +1408,7 @@ def build_plan_prompt(
     doctor_block = _blueprint_doctor_findings_block(state_dir, iter_num)
     axiom_sweep_block = _axiom_sweep_findings_block(state_dir, iter_num)
     frontier_block = _blueprint_frontier_block(project_path)
-    peers_block = _peers_block(project_path)
+    peers_block = _peers_block(project_path) + _peer_feedback_block(project_path)
     memory_block = _archon_memory_block(state_dir, writable=True)
     protected_block = _protected_block(project_path)
 
@@ -1538,7 +1607,7 @@ def build_dag_prompt(
     # place to seed durable cross-iteration knowledge (Mathlib gaps, dead
     # ends, protected invariants) that the later plan agent reads.
     memory_block = _archon_memory_block(state_dir, writable=True)
-    peers_block = _peers_block(project_path)
+    peers_block = _peers_block(project_path) + _peer_feedback_block(project_path)
 
     return dedent(f"""\
         You are the DAG elaboration agent for project '{project_name}'.

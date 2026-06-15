@@ -39,6 +39,7 @@ Archon is designed and optimized for **project-level formalization** — multi-f
     - [2.2 Backends and the new Claude rate limits](#22-backends-and-the-new-claude-rate-limits)
     - [2.3 `./archon-protected.yaml`](#23-archon-protectedyaml)
     - [2.4 Configure peer projects in `.archon/peers.yaml`](#24-configure-peer-projects-in-archonpeersyaml)
+    - [2.5 Monitor several projects with `archon scope`](#25-monitor-several-projects-with-archon-scope)
   - [3. Write blueprints to constitute a consistent DAG](#3-write-blueprints-to-constitute-a-consistent-dag)
   - [4. Start the automated loop](#4-start-the-automated-loop)
     - [4.1 Subagents (optional but highly recommended)](#41-subagents-optional-but-highly-recommended)
@@ -225,6 +226,34 @@ files:
 Please note that the next version of Archon may push this functionality further, or choose a different approach. The implementation is currently very basic, if it doesn't work as expected, keeping this file empty disables this feature.
 
 `peers.yaml` is a file where you can list other Archon projects whose DAGs Archon can read and reuse proofs from. For instance, if you are working on projects which require the same infrastructure to be built, or if you have divided your project into smaller subprojects, this can prevent work to be done multiple times. Besides, instead of launching several local dashboard, the dashboard gives you the possibility to switch between the dashboards of each project, display the merged DAG, etc.  
+
+Run `archon peers` to see what your globs resolve to.
+
+**Giving a peer feedback (the inbox).** Reuse is read-only with one exception: when reusing a peer's declaration forces you to reshape it (a more general statement, a cleaner signature), you can tell them so the definitions converge. This is the *only* sanctioned write into a peer — `archon peers note` appends to `<peer>/.archon/inbox/<your-project>.yaml` (one file per author, keyed by Lean name) and nothing else:
+
+```bash
+archon peers note --target core --lean-name MeasureTheory.foo \
+  --suggestion "generalize the σ-finite hypothesis" \
+  --rationale "this project had to re-prove it more generally"
+```
+
+On the receiving side, the plan/dag agent surfaces open notes about your own declarations (several peers flagging the same one is a strong generalization signal). You triage them with `archon peers inbox`, then `archon peers accept` / `archon peers decline`. A project's identity (the inbox file name, and how it signs its notes) is its folder name by default, overridable with a top-level `"name"` in `.archon/config.json`.
+
+#### 2.5 Monitor several projects with `archon scope`
+
+A *scope* is a directory that watches several Archon projects at once. Unlike a project's `.archon/peers.yaml` (which is one project's read permissions), a scope is a pure read-only lens: its members can live inside the folder or anywhere on the machine. Create one in any directory, list the members in its top-level `peers.yaml`, and operate on the whole set:
+
+```bash
+archon scope init ./archon-projects     # scaffold peers.yaml + .archon-scope/
+cd archon-projects
+# edit peers.yaml: read: [ "./*", "~/work/core" ]
+archon scope ls                         # the resolved member projects
+archon scope roadmap                    # deterministic cross-project analysis
+archon scope dashboard                  # the dashboard over all members (switcher + union DAG)
+archon scope discuss                    # an interactive session about global progress
+```
+
+`archon scope roadmap` builds the union *merge DAG* across members (one node per Lean name, with which projects declare/proved/need it) and reports, with no model in the loop: an **unblock matrix** (which project's progress would advance another, and on which declarations), **duplicated work** (declarations being proved in parallel — candidates to do once and share with `archon extract`), a **leverage ranking** (work here to advance the most), and **stalled** members (everything they need is already proved elsewhere in the scope). Output is written to `.archon-scope/roadmap.md` and `.archon-scope/roadmap.json`. `archon scope discuss` layers a conversation on top of those numbers to propose merges, extractions, and peer notes (read-only to the members; it only writes with your consent).
 
 ### 3. Write blueprints to constitute a consistent DAG
 

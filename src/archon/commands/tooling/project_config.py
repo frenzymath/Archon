@@ -28,6 +28,22 @@ def config_path(project_path: Path) -> Path:
     return project_path / '.archon' / CONFIG_FILENAME
 
 
+def project_name(project_path: Path) -> str:
+    """This project's stable identity (for peer inboxes and the scope).
+
+    Defaults to the project directory's basename; overridable by a top-level
+    ``"name"`` string in ``.archon/config.json``. It must be stable across
+    runs — a project signs the notes it leaves in a peer's inbox with this
+    name (``<peer>/.archon/inbox/<name>.yaml``), and one author keeps a single
+    file. Set ``name`` in config.json if you might rename or move the folder.
+    """
+    resolved = project_path.resolve()
+    name = load_project_config(project_path).raw.get('name')
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return resolved.name
+
+
 # ── default schema ────────────────────────────────────────────────────
 
 
@@ -223,6 +239,14 @@ def default_config() -> dict[str, Any]:
                     "and set those vars in .archon/.env."
                 ),
             },
+            'antigravity': {
+                'runner': 'antigravity',
+                'model': 'antigravity-native',
+                'prompt_variant': 'antigravity',
+                '_env': (
+                    "Runs the Antigravity CLI agent from Google DeepMind."
+                ),
+            },
             '_my_harness_example': {
                 '_help': (
                     "Template for a custom harness. Copy this to a real name "
@@ -260,7 +284,7 @@ def render_default_config() -> str:
 # ── harness selection (used by `archon init`) ─────────────────────────
 
 LOOP_ROLES = ('plan', 'prover', 'review')
-SHIPPED_HARNESSES = ('codex',)
+SHIPPED_HARNESSES = ('codex', 'antigravity')
 
 
 def apply_harness_selection(cfg: dict[str, Any], selection: Any) -> None:

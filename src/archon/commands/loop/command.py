@@ -68,10 +68,20 @@ class LoopCommand:
 
     def run(self) -> None:
         self._bootstrap_context()
+        ctx = self.ctx  # bound after _bootstrap_context
+        
+        if self.options.focus:
+            hints_file = ctx.state_dir / "USER_HINTS.md"
+            focus_line = f"- **CLI override:** {self.options.focus}\n"
+            if hints_file.exists():
+                text = hints_file.read_text(encoding="utf-8")
+                hints_file.write_text(f"{text.rstrip()}\n{focus_line}", encoding="utf-8")
+            else:
+                hints_file.write_text(focus_line, encoding="utf-8")
+            log.info("Appended --focus instruction to USER_HINTS.md")
+
         self._announce()
         self._start_services()
-
-        ctx = self.ctx  # bound after _bootstrap_context
         ctx.initial_sorry = count_sorries(ctx.project_path) if not ctx.dry_run else None
 
         if is_complete(ctx.progress_file, ctx.force_stage()):

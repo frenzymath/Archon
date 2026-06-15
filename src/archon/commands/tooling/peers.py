@@ -114,15 +114,18 @@ def _as_glob_list(value: object) -> list[str]:
     return []
 
 
-def load_with_problems(project_path: Path) -> tuple[PeersConfig, list[str]]:
-    """Parse ``.archon/peers.yaml``. Returns (config, schema-problems)."""
-    target = peers_file_path(project_path)
-    empty = PeersConfig(path=target)
-    if not target.exists():
+def parse_peers_file(path: Path) -> tuple[PeersConfig, list[str]]:
+    """Parse a peers.yaml at *path*. Returns (config, schema-problems).
+
+    Location-agnostic: works for a project's ``.archon/peers.yaml`` and for a
+    *scope* root's top-level ``peers.yaml`` (same schema, different home).
+    """
+    empty = PeersConfig(path=path)
+    if not path.exists():
         return empty, []
 
     try:
-        raw = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as e:
         return empty, [f"YAML parse error: {e}"]
 
@@ -139,7 +142,12 @@ def load_with_problems(project_path: Path) -> tuple[PeersConfig, list[str]]:
         if k not in ("read", "no-access", "no_access"):
             problems.append(f"unrecognized key {k!r} (expected `read` / `no-access`)")
 
-    return PeersConfig(path=target, read_globs=read, deny_globs=deny), problems
+    return PeersConfig(path=path, read_globs=read, deny_globs=deny), problems
+
+
+def load_with_problems(project_path: Path) -> tuple[PeersConfig, list[str]]:
+    """Parse ``.archon/peers.yaml``. Returns (config, schema-problems)."""
+    return parse_peers_file(peers_file_path(project_path))
 
 
 def load(project_path: Path) -> PeersConfig:
@@ -189,19 +197,20 @@ def _assign_names(paths: list[str]) -> dict[str, str]:
     return names
 
 
-def resolve_peers(project_path: Path) -> list[Peer]:
-    """Resolve peers.yaml globs to the set of allowed peer Archon projects.
-
-    Deny wins over allow; non-Archon dirs and the project itself are dropped;
+def resolve_config(cfg: PeersConfig, base: Path) -> list[Peer]:
+    """Resolve a parsed peers config against *base* (the directory its globs
+    are relative to). Excludes *base* itself and non-Archon dirs; deny wins;
     results are deduplicated and sorted by path.
+
+    Shared by per-project resolution (``base`` = the project) and *scope*
+    resolution (``base`` = the scope root holding the top-level peers.yaml).
     """
-    cfg = load(project_path)
     if not cfg.read_globs:
         return []
 
-    self_real = os.path.realpath(str(project_path))
-    allowed = _expand_dirs(cfg.read_globs, project_path)
-    denied = _expand_dirs(cfg.deny_globs, project_path)
+    self_real = os.path.realpath(str(base))
+    allowed = _expand_dirs(cfg.read_globs, base)
+    denied = _expand_dirs(cfg.deny_globs, base)
 
     kept = sorted(
         p for p in (allowed - denied)
@@ -209,6 +218,15 @@ def resolve_peers(project_path: Path) -> list[Peer]:
     )
     names = _assign_names(kept)
     return [Peer(name=names[p], path=p, has_dag=_has_dag(p)) for p in kept]
+
+
+def resolve_peers(project_path: Path) -> list[Peer]:
+    """Resolve peers.yaml globs to the set of allowed peer Archon projects.
+
+    Deny wins over allow; non-Archon dirs and the project itself are dropped;
+    results are deduplicated and sorted by path.
+    """
+    return resolve_config(load(project_path), project_path)
 
 
 # ── Reading a peer's DAG (read-only, never rebuilds) ────────────────────────
@@ -254,9 +272,33 @@ def needed_lean_names(dag: dict) -> set[str]:
     return out
 
 
+def declared_lean_names(dag: dict) -> set[str]:
+    """Every Lean name a project declares (proved or not), for the merge DAG.
+
+    Equivalent to ``available_lean_names(dag) | needed_lean_names(dag)`` but
+    computed in one pass. Nodes without a ``lean_name`` (e.g. exercises) are
+    skipped.
+    """
+    out: set[str] = set()
+    for node in dag.get("nodes", []) or []:
+        if isinstance(node, dict):
+            out.update(_split_lean_names(node.get("lean_name")))
+    return out
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
+peers_app = typer.Typer(
+    name="peers",
+    help="Peer projects this one may read, and the inbox to give them feedback.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+
+
+@peers_app.callback(invoke_without_command=True)
 def peers_cli(
+    ctx: typer.Context,
     project_path: str = typer.Option(".", "--project-path", help="Path to the Archon project"),
     as_json: bool = typer.Option(False, "--json", help="Emit the resolved peer list as JSON"),
 ) -> None:
@@ -264,8 +306,12 @@ def peers_cli(
 
     Validates the file, expands the read/no-access globs, and lists the Archon
     projects they resolve to — analogous to ``archon protect-check``. The
-    dashboard consumes ``--json`` to build its project switcher.
+    dashboard consumes ``--json`` to build its project switcher. Run
+    ``archon peers note`` to leave a peer feedback on one of its declarations.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     root = Path(project_path).resolve()
     cfg, problems = load_with_problems(root)
     peers = resolve_peers(root)
@@ -296,3 +342,139 @@ def peers_cli(
         print(f"- [{dag}] {p.name}  →  {p.path}")
     if problems:
         raise typer.Exit(1)
+
+
+def _match_target(peers: list[Peer], target: str) -> Peer | None:
+    """Resolve a ``--target`` (a peer name or a path) to a readable peer."""
+    for p in peers:
+        if p.name == target:
+            return p
+    real = os.path.realpath(os.path.expanduser(target))
+    for p in peers:
+        if os.path.realpath(p.path) == real:
+            return p
+    return None
+
+
+@peers_app.command("pr")
+def peers_pr(
+    target: str = typer.Option(..., "--target", "-t", help="Peer to address (its name from `archon peers`, or a path)"),
+    lean_name: str = typer.Option(..., "--lean-name", "-n", help="The peer declaration this PR generalizes"),
+    code: str = typer.Option(..., "--code", "-c", help="The generalized code from your codebase"),
+    rationale: str = typer.Option("", "--rationale", "-r", help="Why this generalization is needed"),
+    project_path: str = typer.Option(".", "--project-path", help="The authoring Archon project"),
+) -> None:
+    """Submit a code generalization (Pull Request) to a peer."""
+    _write_feedback(target, project_path, "pr", code, lean_name, rationale)
+
+@peers_app.command("issue")
+def peers_issue(
+    target: str = typer.Option(..., "--target", "-t", help="Peer to address (its name from `archon peers`, or a path)"),
+    title: str = typer.Option(..., "--title", help="Issue title"),
+    body: str = typer.Option(..., "--body", "-b", help="Issue description"),
+    lean_name: str = typer.Option("", "--lean-name", "-n", help="Optional: the peer declaration this issue is about"),
+    project_path: str = typer.Option(".", "--project-path", help="The authoring Archon project"),
+) -> None:
+    """Submit a mathematical or architectural issue to a peer."""
+    _write_feedback(target, project_path, "issue", f"{title}\n\n{body}", lean_name, rationale="")
+
+def _write_feedback(target: str, project_path: str, note_type: str, payload: str, lean_name: str, rationale: str):
+    from archon.commands.tooling import inbox, project_config
+
+    root = Path(project_path).resolve()
+    author = project_config.project_name(root)
+    peers = resolve_peers(root)
+    if not peers:
+        print("No peer projects in scope — nothing to address. "
+              "Declare peers in `.archon/peers.yaml` first.")
+        raise typer.Exit(1)
+
+    peer = _match_target(peers, target)
+    if peer is None:
+        names = ", ".join(p.name for p in peers) or "(none)"
+        print(f"'{target}' is not a peer you may read. In scope: {names}.")
+        raise typer.Exit(1)
+
+    written = inbox.write_note(
+        Path(peer.path), author, note_type, payload, lean_name, rationale,
+    )
+    print(f"Submitted {note_type.upper()} to '{peer.name}' (from '{author}'): {written}")
+
+
+@peers_app.command("inbox")
+def peers_inbox(
+    project_path: str = typer.Option(".", "--project-path", help="The project whose inbox to read"),
+    show_all: bool = typer.Option(False, "--all", help="Include resolved (accepted/declined) notes, not just open ones"),
+    as_json: bool = typer.Option(False, "--json", help="Emit the inbox as JSON"),
+) -> None:
+    """Show definition-improvement notes peers left for THIS project.
+
+    The receiving side of ``archon peers note``. Resolve a note you have acted
+    on (or won't) with ``archon peers accept`` / ``archon peers decline``.
+    """
+    from archon.commands.tooling import inbox
+
+    root = Path(project_path).resolve()
+    boxes = inbox.load_all(root)
+
+    if as_json:
+        print(json.dumps([
+            {
+                "author": b.author,
+                "notes": [
+                    {"lean_name": n.lean_name, "suggestion": n.suggestion,
+                     "rationale": n.rationale, "status": n.status}
+                    for n in b.notes
+                    if show_all or n.status == "open"
+                ],
+            }
+            for b in boxes
+        ], indent=2))
+        return
+
+    shown = 0
+    for b in boxes:
+        notes = [n for n in b.notes if show_all or n.status == "open"]
+        if not notes:
+            continue
+        print(f"\nfrom {b.author}:")
+        for n in notes:
+            badge = "" if n.status == "open" else f" [{n.status}]"
+            print(f"  - `{n.lean_name}`{badge}: {n.suggestion}")
+            if n.rationale:
+                print(f"      why: {n.rationale}")
+        shown += len(notes)
+    if shown == 0:
+        scope = "notes" if show_all else "open notes"
+        print(f"No {scope} in this project's inbox.")
+
+
+def _set_inbox_status(project_path: str, author: str, lean_name: str, status: str) -> None:
+    from archon.commands.tooling import inbox
+
+    root = Path(project_path).resolve()
+    if inbox.set_status(root, author, lean_name, status):
+        print(f"Marked `{lean_name}` from '{author}' as {status}.")
+    else:
+        print(f"No note about `{lean_name}` from '{author}' in this inbox.")
+        raise typer.Exit(1)
+
+
+@peers_app.command("accept")
+def peers_accept(
+    author: str = typer.Option(..., "--author", "-a", help="The peer project that left the note"),
+    lean_name: str = typer.Option(..., "--lean-name", "-n", help="The declaration the note is about"),
+    project_path: str = typer.Option(".", "--project-path", help="The project whose inbox to update"),
+) -> None:
+    """Mark a peer's note accepted (you acted on it). Stops surfacing it."""
+    _set_inbox_status(project_path, author, lean_name, "accepted")
+
+
+@peers_app.command("decline")
+def peers_decline(
+    author: str = typer.Option(..., "--author", "-a", help="The peer project that left the note"),
+    lean_name: str = typer.Option(..., "--lean-name", "-n", help="The declaration the note is about"),
+    project_path: str = typer.Option(".", "--project-path", help="The project whose inbox to update"),
+) -> None:
+    """Mark a peer's note declined (you won't act on it). Stops surfacing it."""
+    _set_inbox_status(project_path, author, lean_name, "declined")

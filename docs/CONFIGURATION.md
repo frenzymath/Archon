@@ -7,7 +7,7 @@ through an **engine**. By default that engine is Claude Code driving
 - **Backend** — *how* the Claude Code engine is launched (`claude -p`, the
   `claude-p` TUI wrapper, the VS Code / Desktop entrypoints, or a foreground
   interactive session). Claude-only.
-- **Harness** — *which* engine runs the work (`claude-code` or `codex`),
+- **Harness** — *which* engine runs the work (`claude-code`, `codex`, or `antigravity`),
   together with the model and engine-specific options. A harness is a named
   bundle you can assign to any role or subagent.
 
@@ -123,7 +123,7 @@ Fields:
 
 | Field | Applies to | Meaning |
 |-------|-----------|---------|
-| `runner` | all | Engine: `claude-code` (default) or `codex`. |
+| `runner` | all | Engine: `claude-code` (default), `codex`, or `antigravity`. |
 | `model` | all | Model id/alias (see §4). |
 | `backend` | claude-code | Per-harness backend override (`default`/`claude-p`/`vscode`/`desktop`/`interactive`). Beats the loop-wide backend. |
 | `effort` | codex | `model_reasoning_effort` (e.g. `xhigh`). |
@@ -133,7 +133,7 @@ Fields:
 | `base_url_env` / `key_env` | codex | Names of env vars holding the gateway base URL / API key. |
 | `wire_api` | codex | Wire protocol (default `responses`). |
 
-A built-in `codex` harness ships, so you can route to Codex without defining one
+Built-in `codex` and `antigravity` harnesses ship by default, so you can route to them without defining one
 yourself. To customize (or make a claude-code variant), copy the
 `_my_harness_example` block in `.archon/config.json`, rename it, and reference it.
 

@@ -1933,11 +1933,21 @@ def _runner_from_descriptor(
     if runner == "codex":
         from archon.agents.codex import CodexAgent
 
+        if not descriptor.model and model:
+            import dataclasses
+            descriptor = dataclasses.replace(descriptor, model=model)
+
         return CodexAgent(descriptor=descriptor, role=role)
+    if runner == "antigravity":
+        from archon.agents.antigravity import AntigravityAgent
+        # Antigravity CLI model defaults to something internal but can be overridden
+        # We assume the user configures the model via the dashboard or CLI flags.
+        return AntigravityAgent(descriptor=descriptor, role=role)
+        
     raise UnknownHarnessError(
         f"Harness {descriptor.name!r} requests runner {runner!r}, but the "
         f"runners available in this version of Archon are "
-        f"{DEFAULT_HARNESS!r} and 'codex'. Remove the harness override or "
+        f"{DEFAULT_HARNESS!r}, 'codex', and 'antigravity'. Remove the harness override or "
         f"set its runner to a supported value."
     )
 
