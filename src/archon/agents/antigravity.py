@@ -213,7 +213,7 @@ class AntigravityAgent(AgentRunner):
         max_attempts: int = 3,
         resume_session_id: str | None = None,
     ) -> bool:
-        """Headless Antigravity run with real-time SQLite polling."""
+        """Headless Antigravity run with real-time SQLite polling matching PID in logs."""
         log.info(f"Agent model: {self.model} [antigravity] ({self.role or 'default'})")
 
         env = dict(os.environ)
@@ -232,6 +232,10 @@ class AntigravityAgent(AgentRunner):
         _emit_session_start(jsonl, model=self.model, role=self.role)
         _emit_prompt(jsonl, prompt=prompt)
 
+        # Track log files and folders for target matching and fallback
+        log_path = Path("~/.gemini/antigravity-cli/cli.log").expanduser()
+        initial_log_size = log_path.stat().st_size if log_path.exists() else 0
+
         conv_dir = Path("~/.gemini/antigravity-cli/conversations").expanduser()
         existing_dbs = set(conv_dir.glob("*.db")) if conv_dir.exists() else set()
 
@@ -239,29 +243,48 @@ class AntigravityAgent(AgentRunner):
             process = subprocess.Popen(
                 argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, env=env
             )
+            pid = process.pid
 
-            # Discover the newly created SQLite database file
+            # Discover the newly created SQLite database file matching PID in logs
             active_db = None
             start_detect = time.time()
-            while time.time() - start_detect < 3.0:
-                if conv_dir.exists():
-                    current_dbs = set(conv_dir.glob("*.db"))
-                    new_dbs = current_dbs - existing_dbs
-                    if new_dbs:
-                        active_db = list(new_dbs)[0]
-                        break
-                time.sleep(0.2)
+            while time.time() - start_detect < 5.0:
+                if log_path.exists():
+                    try:
+                        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                            f.seek(initial_log_size)
+                            content = f.read()
+                            for line in content.splitlines():
+                                if str(pid) in line and "Created conversation" in line:
+                                    uuid_match = re.search(r"Created conversation ([a-f0-9-]+)", line)
+                                    if uuid_match:
+                                        conv_id = uuid_match.group(1)
+                                        candidate = conv_dir / f"{conv_id}.db"
+                                        if candidate.exists():
+                                            active_db = candidate
+                                            break
+                    except Exception:
+                        pass
+                if active_db:
+                    break
+                time.sleep(0.1)
 
+            # Fallback: Scan directory for folders/new databases
             if active_db is None and conv_dir.exists():
-                all_dbs = list(conv_dir.glob("*.db"))
-                if all_dbs:
-                    active_db = max(all_dbs, key=lambda p: p.stat().st_mtime)
+                current_dbs = set(conv_dir.glob("*.db"))
+                new_dbs = current_dbs - existing_dbs
+                if new_dbs:
+                    active_db = list(new_dbs)[0]
+                else:
+                    all_dbs = list(conv_dir.glob("*.db"))
+                    if all_dbs:
+                        active_db = max(all_dbs, key=lambda p: p.stat().st_mtime)
 
             # Spawn database monitor thread
             stop_event = threading.Event()
             monitor_thread = None
             if active_db:
-                log.info(f"Monitoring Antigravity SQLite DB: {active_db}")
+                log.info(f"Monitoring Antigravity SQLite DB (PID {pid}): {active_db}")
                 monitor_thread = threading.Thread(
                     target=poll_antigravity_db,
                     args=(active_db, jsonl, stop_event, self.model, self.role),
