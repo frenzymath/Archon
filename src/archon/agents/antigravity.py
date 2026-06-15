@@ -17,40 +17,107 @@ from archon.state.cost import estimate_cost_usd
 log = logging.getLogger("archon")
 
 
-def extract_json_or_text(blob: bytes) -> tuple[str, str | dict] | None:
-    """Extract JSON objects or ASCII text from raw protobuf bytes."""
-    if not blob:
-        return None
+def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
+    val = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        val |= (b & 0x7F) << shift
+        pos += 1
+        if not (b & 0x80):
+            return val, pos
+        shift += 7
+    return val, pos
 
-    # 1. Search for JSON structures (representing tool calls)
-    json_matches = re.findall(b"(\\{[^{}]*\\})", blob)
-    for m in json_matches:
+
+def extract_protobuf_fields(data: bytes, parent_path: str = "", depth: int = 0) -> dict[str, bytes]:
+    """Extract length-delimited fields from protobuf data and return a flat dict of field_path -> bytes."""
+    fields = {}
+    if depth > 10:
+        return fields
+    pos = 0
+    while pos < len(data):
         try:
-            decoded = m.decode("utf-8", errors="ignore")
-            parsed = json.loads(decoded)
-            if isinstance(parsed, dict) and parsed:
-                return ("json", parsed)
+            key, next_pos = decode_varint(data, pos)
+            if next_pos == pos:
+                break
+            pos = next_pos
+            wire_type = key & 0x07
+            field_num = key >> 3
+            
+            field_path = f"{parent_path}.{field_num}" if parent_path else str(field_num)
+            
+            if wire_type == 0:  # Varint
+                _, pos = decode_varint(data, pos)
+            elif wire_type == 1:  # 64-bit
+                pos += 8
+            elif wire_type == 2:  # Length-delimited
+                length, pos = decode_varint(data, pos)
+                if pos + length > len(data):
+                    break
+                val = data[pos : pos + length]
+                fields[field_path] = val
+                # Recursively parse nested messages
+                if len(val) > 0:
+                    nested = extract_protobuf_fields(val, field_path, depth + 1)
+                    fields.update(nested)
+                pos += length
+            elif wire_type == 5:  # 32-bit
+                pos += 4
+            else:
+                break
+        except Exception:
+            break
+    return fields
+
+
+def extract_tool_result(fields: dict[str, bytes], step_type: int) -> str | None:
+    """Extract clean tool result string from execution steps."""
+    if step_type == 9:  # ListDir
+        # Gather all entries under 15.3
+        entries = []
+        for path, val_bytes in sorted(fields.items()):
+            parts = path.split('.')
+            if len(parts) >= 2 and parts[-2] == '3' and parts[-3] == '15':
+                try:
+                    entries.append(val_bytes.decode('utf-8'))
+                except Exception:
+                    pass
+        if entries:
+            return "\n".join(entries)
+
+    # For other step types: find the longest valid UTF-8 string
+    # that is not under '5.*' and is not a UUID or system string.
+    best_str = None
+    best_len = -1
+    
+    for path, val_bytes in fields.items():
+        # Ignore fields under '5.*' (call metadata)
+        parts = path.split('.')
+        if parts[0] == '5':
+            continue
+            
+        try:
+            s = val_bytes.decode('utf-8')
+            if not s:
+                continue
+            # Ignore UUIDs
+            if len(s) == 36 and s.count('-') == 4:
+                continue
+            # Ignore sessionID or tracking tokens
+            if any(term in s for term in ('sessionID', 'google.rpc', 'RetryInfo', 'quotaReset')):
+                continue
+            # Ignore JSON strings
+            if s.startswith('{') and s.endswith('}'):
+                continue
+                
+            if len(s) > best_len:
+                best_len = len(s)
+                best_str = s
         except Exception:
             pass
-
-    # 2. Extract ASCII text strings (longest printable text)
-    ascii_seqs = re.findall(b"([\x20-\x7e\n\r\t]{10,})", blob)
-    valid_texts = []
-    for s in ascii_seqs:
-        try:
-            decoded = s.decode("utf-8").strip()
-            # Clean up junk signatures / system strings
-            if any(term in decoded for term in ["sessionID", "cascade", "trajectory", "b$", "google.rpc", "RetryInfo", "quotaReset"]):
-                continue
-            if decoded.startswith("@type") or decoded.startswith("type.googleapis.com"):
-                continue
-            if len(decoded) > 10:
-                valid_texts.append(decoded)
-        except Exception:
-            pass
-    if valid_texts:
-        return ("text", max(valid_texts, key=len))
-    return None
+            
+    return best_str
 
 
 def _emit_archon_event_static(jsonl_path: str, event_type: str, **kwargs) -> None:
@@ -75,18 +142,19 @@ def poll_antigravity_db(
     role: str | None,
 ) -> None:
     """Background thread to poll the SQLite steps table and emit live events."""
-    # Give the database a brief moment to initialize
     time.sleep(0.5)
 
     last_idx = -1
-    emitted_texts: set[str] = set()
+    last_emitted_thinking: dict[int, str] = {}
+    last_emitted_text: dict[int, str] = {}
+    last_emitted_result: dict[int, str] = {}
+    emitted_tool_calls: set[int] = set()
 
     total_in_chars = 15000
     turn_out_chars = 0
 
     conn = None
     try:
-        # Open SQLite in read-only WAL mode safely
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except Exception as e:
         log.error(f"Failed to connect to SQLite DB {db_path}: {e}")
@@ -95,78 +163,128 @@ def poll_antigravity_db(
     while not stop_event.is_set():
         try:
             cur = conn.cursor()
+            # Query steps that are new OR currently running (status = 2)
             cur.execute(
-                "SELECT idx, step_type, status, step_payload FROM steps WHERE idx > ? ORDER BY idx",
+                "SELECT idx, step_type, status, step_payload FROM steps WHERE idx > ? OR status = 2 ORDER BY idx",
                 (last_idx,),
             )
             rows = cur.fetchall()
             cur.close()
 
             for idx, step_type, status, payload in rows:
-                last_idx = idx
+                last_idx = max(last_idx, idx)
                 if not payload:
                     continue
 
-                parsed = extract_json_or_text(payload)
-                if not parsed:
+                fields = extract_protobuf_fields(payload)
+                if not fields:
                     continue
 
-                val_type, val = parsed
-                if val_type == "json":
-                    # Determine tool name from keys
-                    tool_name = "tool"
-                    if "CommandLine" in val:
-                        tool_name = "Bash"
-                    elif "DirectoryPath" in val:
-                        tool_name = "ListDir"
-                    elif "AbsolutePath" in val:
-                        tool_name = "ViewFile"
-                    elif "TargetFile" in val:
-                        tool_name = "EditFile"
-                    elif "Query" in val:
-                        tool_name = "GrepSearch"
-                    elif "Subagents" in val:
-                        tool_name = "InvokeSubagent"
-                    elif "Recipient" in val:
-                        tool_name = "SendMessage"
+                if step_type == 15:
+                    # Assistant turn
+                    # Find candidate content fields for thinking and text
+                    val_20_1 = fields.get("20.1") or fields.get("5.20.1")
+                    val_20_3 = fields.get("20.3") or fields.get("5.20.3")
+                    
+                    # Fallback to suffix matching for robustness
+                    if not val_20_1 or not val_20_3:
+                        for path, val_bytes in fields.items():
+                            if path == "20.1" or path.endswith(".20.1"):
+                                val_20_1 = val_bytes
+                            elif path == "20.3" or path.endswith(".20.3"):
+                                val_20_3 = val_bytes
 
-                    _emit_archon_event_static(jsonl_path, "tool_call", tool=tool_name, input=val)
-                    turn_out_chars += len(json.dumps(val))
+                    thinking_str = None
+                    text_str = None
+                    
+                    if val_20_1 and val_20_3:
+                        try:
+                            thinking_str = val_20_1.decode("utf-8", errors="ignore").strip()
+                        except Exception:
+                            pass
+                        try:
+                            text_str = val_20_3.decode("utf-8", errors="ignore").strip()
+                        except Exception:
+                            pass
+                    elif val_20_1:
+                        try:
+                            text_str = val_20_1.decode("utf-8", errors="ignore").strip()
+                        except Exception:
+                            pass
 
-                    # Emit turn usage on tool execution trigger
-                    if turn_out_chars > 0:
-                        in_t = int(total_in_chars / 4.0)
-                        out_t = int(turn_out_chars / 4.0)
-                        cost = estimate_cost_usd(model, in_t, out_t)
-                        _emit_archon_event_static(
-                            jsonl_path,
-                            "turn_usage",
-                            input_tokens=in_t,
-                            output_tokens=out_t,
-                            cost_usd=cost,
-                        )
-                        total_in_chars += turn_out_chars
-                        turn_out_chars = 0
+                    # Emit thinking
+                    if thinking_str:
+                        prev = last_emitted_thinking.get(idx, "")
+                        if thinking_str != prev:
+                            _emit_archon_event_static(jsonl_path, "thinking", content=thinking_str)
+                            last_emitted_thinking[idx] = thinking_str
+                            turn_out_chars += len(thinking_str) - len(prev)
+                            
+                    # Emit text
+                    if text_str:
+                        prev = last_emitted_text.get(idx, "")
+                        if text_str != prev:
+                            _emit_archon_event_static(jsonl_path, "text", content=text_str)
+                            last_emitted_text[idx] = text_str
+                            turn_out_chars += len(text_str) - len(prev)
 
-                else:  # val_type == 'text'
-                    if val in emitted_texts:
-                        continue
-                    emitted_texts.add(val)
+                    # Extract tool call
+                    val_20_7_3 = fields.get("20.7.3") or fields.get("5.20.7.3")
+                    if not val_20_7_3:
+                        for path, val_bytes in fields.items():
+                            if path == "20.7.3" or path.endswith(".20.7.3"):
+                                val_20_7_3 = val_bytes
+                                break
 
-                    if step_type in (14, 23):
-                        # User/system message
-                        pass
-                    elif step_type == 15:
-                        # Assistant thinking or text
-                        if len(val) > 200 or "\n" in val:
-                            _emit_archon_event_static(jsonl_path, "text", content=val)
-                        else:
-                            _emit_archon_event_static(jsonl_path, "thinking", content=val)
-                        turn_out_chars += len(val)
-                    elif step_type == 21:
-                        # Tool output
-                        _emit_archon_event_static(jsonl_path, "tool_result", content=val)
-                        total_in_chars += len(val)
+                    if val_20_7_3 and idx not in emitted_tool_calls:
+                        try:
+                            parsed_json = json.loads(val_20_7_3.decode("utf-8", errors="ignore"))
+                            if isinstance(parsed_json, dict) and parsed_json:
+                                tool_name = "tool"
+                                if "CommandLine" in parsed_json:
+                                    tool_name = "Bash"
+                                elif "DirectoryPath" in parsed_json:
+                                    tool_name = "ListDir"
+                                elif "AbsolutePath" in parsed_json:
+                                    tool_name = "ViewFile"
+                                elif "TargetFile" in parsed_json:
+                                    tool_name = "EditFile"
+                                elif "Query" in parsed_json:
+                                    tool_name = "GrepSearch"
+                                elif "Subagents" in parsed_json:
+                                    tool_name = "InvokeSubagent"
+                                elif "Recipient" in parsed_json:
+                                    tool_name = "SendMessage"
+                                    
+                                _emit_archon_event_static(jsonl_path, "tool_call", tool=tool_name, input=parsed_json)
+                                emitted_tool_calls.add(idx)
+                                turn_out_chars += len(json.dumps(parsed_json))
+                                
+                                # Emit turn usage on tool execution trigger
+                                in_t = int(total_in_chars / 4.0)
+                                out_t = int(turn_out_chars / 4.0)
+                                cost = estimate_cost_usd(model, in_t, out_t)
+                                _emit_archon_event_static(
+                                    jsonl_path,
+                                    "turn_usage",
+                                    input_tokens=in_t,
+                                    output_tokens=out_t,
+                                    cost_usd=cost,
+                                )
+                                total_in_chars += turn_out_chars
+                                turn_out_chars = 0
+                        except Exception:
+                            pass
+
+                elif step_type in (5, 7, 8, 9, 21, 23, 101, 132):
+                    # Tool execution step: extract and emit tool result
+                    result_str = extract_tool_result(fields, step_type)
+                    if result_str:
+                        prev = last_emitted_result.get(idx, "")
+                        if result_str != prev:
+                            _emit_archon_event_static(jsonl_path, "tool_result", content=result_str)
+                            last_emitted_result[idx] = result_str
+                            total_in_chars += len(result_str) - len(prev)
 
         except Exception:
             # Table locks / busy states are ignored
@@ -221,11 +339,11 @@ class AntigravityAgent(AgentRunner):
             env.update(env_overrides)
 
         bin_path = self.descriptor.raw.get("bin", "agy")
-        argv = [bin_path, "--dangerously-skip-permissions", "--print", prompt]
-        if extra_args:
-            argv.extend(extra_args)
 
         if log_base is None:
+            argv = [bin_path, "--dangerously-skip-permissions", "--print", prompt]
+            if extra_args:
+                argv.extend(extra_args)
             return subprocess.run(argv, cwd=cwd, env=env).returncode == 0
 
         jsonl = f"{log_base}.jsonl"
@@ -234,81 +352,157 @@ class AntigravityAgent(AgentRunner):
 
         # Track log files and folders for target matching and fallback
         log_path = Path("~/.gemini/antigravity-cli/cli.log").expanduser()
-        initial_log_size = log_path.stat().st_size if log_path.exists() else 0
-
         conv_dir = Path("~/.gemini/antigravity-cli/conversations").expanduser()
-        existing_dbs = set(conv_dir.glob("*.db")) if conv_dir.exists() else set()
+
+        active_db = None
+        conv_id = None
+        monitor_thread = None
+        stop_event = threading.Event()
+
+        current_prompt = prompt
+        use_resume = False
+        ok = True
 
         try:
-            process = subprocess.Popen(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, env=env
-            )
-            pid = process.pid
-
-            # Discover the newly created SQLite database file matching PID in logs
-            active_db = None
-            start_detect = time.time()
-            while time.time() - start_detect < 5.0:
-                if log_path.exists():
-                    try:
-                        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                            f.seek(initial_log_size)
-                            content = f.read()
-                            for line in content.splitlines():
-                                if str(pid) in line and "Created conversation" in line:
-                                    uuid_match = re.search(r"Created conversation ([a-f0-9-]+)", line)
-                                    if uuid_match:
-                                        conv_id = uuid_match.group(1)
-                                        candidate = conv_dir / f"{conv_id}.db"
-                                        if candidate.exists():
-                                            active_db = candidate
-                                            break
-                    except Exception:
-                        pass
-                if active_db:
-                    break
-                time.sleep(0.1)
-
-            # Fallback: Scan directory for folders/new databases
-            if active_db is None and conv_dir.exists():
-                current_dbs = set(conv_dir.glob("*.db"))
-                new_dbs = current_dbs - existing_dbs
-                if new_dbs:
-                    active_db = list(new_dbs)[0]
+            while True:
+                # Assemble argv for this run/resume
+                argv = [bin_path, "--dangerously-skip-permissions"]
+                if use_resume and conv_id:
+                    argv.extend([
+                        "--conversation", conv_id,
+                        "--print", "All background tasks and subagents have completed. Please read their reports and proceed."
+                    ])
                 else:
-                    all_dbs = list(conv_dir.glob("*.db"))
-                    if all_dbs:
-                        active_db = max(all_dbs, key=lambda p: p.stat().st_mtime)
+                    argv.extend(["--print", current_prompt])
 
-            # Spawn database monitor thread
-            stop_event = threading.Event()
-            monitor_thread = None
-            if active_db:
-                log.info(f"Monitoring Antigravity SQLite DB (PID {pid}): {active_db}")
-                monitor_thread = threading.Thread(
-                    target=poll_antigravity_db,
-                    args=(active_db, jsonl, stop_event, self.model, self.role),
-                    daemon=True,
+                if extra_args:
+                    argv.extend(extra_args)
+
+                initial_log_size = log_path.stat().st_size if log_path.exists() else 0
+                existing_dbs = set(conv_dir.glob("*.db")) if conv_dir.exists() else set()
+
+                process = subprocess.Popen(
+                    argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, env=env
                 )
-                monitor_thread.start()
+                pid = process.pid
 
-            # Read stdout to ensure process makes forward progress
-            if process.stdout:
-                for line in process.stdout:
-                    # Print to terminal output, but do not write to jsonl (DB polling handles jsonl events)
-                    print(line, end="", flush=True)
+                # Discover the newly created SQLite database file matching PID in logs
+                if not active_db:
+                    start_detect = time.time()
+                    while time.time() - start_detect < 5.0:
+                        if log_path.exists():
+                            try:
+                                with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                                    f.seek(initial_log_size)
+                                    content = f.read()
+                                    for line in content.splitlines():
+                                        if str(pid) in line and "Created conversation" in line:
+                                            uuid_match = re.search(r"Created conversation ([a-f0-9-]+)", line)
+                                            if uuid_match:
+                                                conv_id = uuid_match.group(1)
+                                                candidate = conv_dir / f"{conv_id}.db"
+                                                if candidate.exists():
+                                                    active_db = candidate
+                                                    break
+                            except Exception:
+                                pass
+                        if active_db:
+                            break
+                        time.sleep(0.1)
 
-            code = process.wait()
-            ok = code == 0
+                    # Fallback: Scan directory for folders/new databases
+                    if active_db is None and conv_dir.exists():
+                        current_dbs = set(conv_dir.glob("*.db"))
+                        new_dbs = current_dbs - existing_dbs
+                        if new_dbs:
+                            active_db = list(new_dbs)[0]
+                            conv_id = active_db.stem
+                        else:
+                            all_dbs = list(conv_dir.glob("*.db"))
+                            if all_dbs:
+                                active_db = max(all_dbs, key=lambda p: p.stat().st_mtime)
+                                conv_id = active_db.stem
 
-            # Stop database monitor thread
-            if monitor_thread:
-                stop_event.set()
-                monitor_thread.join(timeout=1.0)
+                # Spawn database monitor thread (only once!)
+                if active_db and not monitor_thread:
+                    log.info(f"Monitoring Antigravity SQLite DB (PID {pid}): {active_db}")
+                    monitor_thread = threading.Thread(
+                        target=poll_antigravity_db,
+                        args=(active_db, jsonl, stop_event, self.model, self.role),
+                        daemon=True,
+                    )
+                    monitor_thread.start()
+
+                # Read stdout to ensure process makes forward progress
+                if process.stdout:
+                    for line in process.stdout:
+                        print(line, end="", flush=True)
+
+                code = process.wait()
+                if code != 0:
+                    ok = False
+
+                # Check if there are active subagents or background tasks
+                if active_db:
+                    had_active = False
+                    start_wait = time.time()
+                    while True:
+                        active_subagents = False
+                        try:
+                            # Check for running archon-subagent.py processes matching this cwd
+                            res = subprocess.run(["pgrep", "-f", "archon-subagent.py"], capture_output=True, text=True)
+                            if res.returncode == 0:
+                                pids = res.stdout.strip().split()
+                                for p in pids:
+                                    try:
+                                        cmdline_path = Path(f"/proc/{p}/cmdline")
+                                        if cmdline_path.exists():
+                                            cmdline = cmdline_path.read_text().replace("\x00", " ")
+                                            if str(cwd) in cmdline:
+                                                active_subagents = True
+                                                break
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+
+                        active_db_tasks = False
+                        try:
+                            # Check steps table for status = 2
+                            conn = sqlite3.connect(f"file:{active_db}?mode=ro", uri=True)
+                            cur = conn.cursor()
+                            cur.execute("SELECT COUNT(*) FROM steps WHERE status = 2")
+                            count = cur.fetchone()[0]
+                            cur.close()
+                            conn.close()
+                            if count > 0:
+                                active_db_tasks = True
+                        except Exception:
+                            pass
+
+                        if not active_subagents and not active_db_tasks:
+                            break
+
+                        had_active = True
+                        # Print status periodically (every 30 seconds)
+                        if int(time.time() - start_wait) % 30 == 0:
+                            log.info("Waiting for background subagents or tasks to complete...")
+                        time.sleep(2.0)
+
+                    if had_active:
+                        use_resume = True
+                        continue
+
+                # No active tasks/subagents remain, so finish
+                break
 
         except Exception as e:
             log.error(f"Antigravity run failed: {e}")
             ok = False
+        finally:
+            if monitor_thread:
+                stop_event.set()
+                monitor_thread.join(timeout=1.0)
 
         _emit_interactive_session_end(jsonl, ok=ok, summary="Antigravity headless run complete")
         return ok
