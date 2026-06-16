@@ -55,7 +55,8 @@ export function installFetchScope(): void {
     if (
       typeof input === 'string' &&
       input.startsWith('/api/') &&
-      !input.startsWith('/api/peer-projects')
+      !input.startsWith('/api/peer-projects') &&
+      !input.startsWith('/api/scope')
     ) {
       return orig(withProjectScope(input), init);
     }

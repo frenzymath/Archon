@@ -11,6 +11,20 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 // --- Core ---
+export interface ScopeData {
+  inScope: boolean;
+  scopePath?: string;
+  readme?: string;
+  roadmap?: string;
+  members?: { name: string; path: string; has_dag: boolean }[];
+}
+
+export function useScope() {
+  return useQuery<ScopeData>({
+    queryKey: ['scope'], queryFn: () => fetchJson('/api/scope'), staleTime: 30000,
+  });
+}
+
 export function useProject() {
   return useQuery<{ name: string; path: string; archonPath: string }>({
     queryKey: ['project'], queryFn: () => fetchJson('/api/project'), staleTime: Infinity,

@@ -1,13 +1,15 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { useProject } from './hooks/useApi';
+import { useProject, useScope } from './hooks/useApi';
 import Overview from './views/Overview';
 import LogViewer from './views/LogViewer';
 import Journal from './views/Journal';
 import DiffPlayback from './views/DiffPlayback';
 import DagView from './views/DagView';
 import Blueprint from './views/Blueprint';
+import ScopeHome from './views/ScopeHome';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { isStaticDashboard } from './lib/staticMode';
+import { getProjectScope } from './lib/projectScope';
 // Vite's resolveJsonModule (enabled by default) lets us import the
 // version from package.json so the badge stays in sync with releases
 // without manual updates. If you move package.json or the build setup
@@ -30,7 +32,11 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
 
 export default function App() {
   const { data: project, isError } = useProject();
+  const { data: scope } = useScope();
   const isStatic = isStaticDashboard();
+  const inScopeMode = scope?.inScope;
+  const projectScope = getProjectScope();
+
   return (
     <div className="app">
       <ConnectionBanner isError={isError} />
@@ -43,6 +49,11 @@ export default function App() {
         {isStatic && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
         {!isStatic && <ProjectSwitcher />}
         <nav className="header-nav">
+          {inScopeMode && (
+            <NavLink to="/scope" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+              Scope Home
+            </NavLink>
+          )}
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
@@ -53,11 +64,15 @@ export default function App() {
       </header>
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<Overview />} />
+          <Route
+            path="/"
+            element={inScopeMode && !projectScope ? <Navigate to="/scope" replace /> : <Overview />}
+          />
           {/* The old proof-graph view is superseded by the DAG. */}
           <Route path="/graph" element={<Navigate to="/dag" replace />} />
           <Route path="/dag" element={<DagView />} />
           <Route path="/blueprint" element={<Blueprint />} />
+          <Route path="/scope" element={<ScopeHome />} />
           <Route path="/logs" element={isStatic ? <Navigate to="/" replace /> : <LogViewer />} />
           <Route path="/diffs" element={isStatic ? <Navigate to="/" replace /> : <DiffPlayback />} />
           <Route path="/journal" element={<Journal />} />

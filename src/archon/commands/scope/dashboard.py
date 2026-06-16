@@ -74,6 +74,7 @@ def scope_dashboard(
     # The server inherits this env (ServerProcess.spawn copies os.environ);
     # loadPeers prefers it over the host's own peers.yaml.
     os.environ[SCOPE_PEERS_ENV] = json.dumps(peers_payload)
+    os.environ["ARCHON_SCOPE_PATH"] = str(root)
 
     log.key_value({
         "Scope": str(root),

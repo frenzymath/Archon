@@ -184,6 +184,7 @@ class StaticDashboardExporter:
             "/api/dag/last-modified",
             "/api/blueprint/chapters",
             "/api/multilane",
+            "/api/scope",
         ]:
             self._enqueue(queue, endpoint)
 

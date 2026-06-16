@@ -52,6 +52,8 @@ class Roadmap:
     leverage: list[Leverage] = field(default_factory=list)
     stalled: list[str] = field(default_factory=list)
     no_dag: list[str] = field(default_factory=list)
+    needed_deps: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    needed_by_member: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +63,8 @@ class Roadmap:
             "leverage": [vars(lev) for lev in self.leverage],
             "stalled": self.stalled,
             "no_dag": self.no_dag,
+            "needed_deps": self.needed_deps,
+            "needed_by_member": self.needed_by_member,
         }
 
 
@@ -115,6 +119,56 @@ def build_roadmap(peers: list[peers_mod.Peer]) -> tuple[Roadmap, MergeDag]:
     ]
 
     no_dag = [m.name for m in mdag.members if not m.has_dag]
+
+    # Compute dependency tree for needed names in each project
+    needed_deps: dict[str, dict[str, list[str]]] = {}
+    needed_by_member: dict[str, list[str]] = {}
+    for p in peers:
+        needed_by_member[p.name] = sorted(list(by_name[p.name].needed)) if p.name in by_name else []
+        needed_deps[p.name] = {}
+        dag = peers_mod.read_peer_dag(p.path) if p.has_dag else None
+        if not dag:
+            continue
+        id_to_lean: dict[str, list[str]] = {}
+        id_to_proved: dict[str, bool] = {}
+        id_to_node: dict[str, dict] = {}
+        for node in dag.get("nodes", []):
+            nid = node.get("id")
+            if not nid:
+                continue
+            id_to_node[nid] = node
+            proved = bool(node.get("proved") or node.get("mathlib_ok"))
+            id_to_proved[nid] = proved
+            ln = node.get("lean_name")
+            if ln:
+                id_to_lean[nid] = [name.strip() for name in ln.split(",") if name.strip()]
+
+        for node in dag.get("nodes", []):
+            nid = node.get("id")
+            if not nid:
+                continue
+            proved = id_to_proved.get(nid, False)
+            if proved:
+                continue
+            lns = id_to_lean.get(nid, [])
+            if not lns:
+                continue
+
+            unproved_deps = []
+            for dep_id in node.get("uses", []):
+                dep_node = id_to_node.get(dep_id)
+                if not dep_node:
+                    continue
+                dep_proved = id_to_proved.get(dep_id, False)
+                if not dep_proved:
+                    dep_lns = id_to_lean.get(dep_id, [])
+                    unproved_deps.extend(dep_lns)
+
+            if unproved_deps:
+                unproved_deps = sorted(list(set(unproved_deps)))
+                for ln in lns:
+                    needed_deps[p.name][ln] = unproved_deps
+
     return Roadmap(
         members=names,
         unblock=unblock,
@@ -122,6 +176,8 @@ def build_roadmap(peers: list[peers_mod.Peer]) -> tuple[Roadmap, MergeDag]:
         leverage=leverage,
         stalled=stalled,
         no_dag=no_dag,
+        needed_deps=needed_deps,
+        needed_by_member=needed_by_member,
     ), mdag
 
 
@@ -143,7 +199,30 @@ def render_markdown(rm: Roadmap) -> str:
         out += ["", "> ⚠ No built DAG yet (excluded from analysis): "
                 + ", ".join(f"`{m}`" for m in rm.no_dag) + "."]
 
-    out += ["", "## Leverage — work here to advance the most", ""]
+    # Project checklists
+    out += ["", "## Project Status Checklists", ""]
+    for m in rm.members:
+        if m in rm.no_dag:
+            out.append(f"### {m} *(no DAG)*")
+            out.append("No built DAG yet.")
+            out.append("")
+            continue
+
+        out.append(f"### {m}")
+        needed_list = rm.needed_by_member.get(m, [])
+        if not needed_list:
+            out.append("- [x] All declarations completed!")
+        else:
+            for ln in needed_list:
+                deps = rm.needed_deps.get(m, {}).get(ln, [])
+                dep_str = ""
+                if deps:
+                    dep_names = ", ".join(f"`{d}`" for d in deps)
+                    dep_str = f" *(once {dep_names} is proven)*"
+                out.append(f"- [ ] `{ln}`{dep_str}")
+        out.append("")
+
+    out += ["## Leverage — work here to advance the most", ""]
     if rm.leverage:
         for lev in rm.leverage:
             out.append(f"- **{lev.member}** unblocks {lev.unblock_count} "
