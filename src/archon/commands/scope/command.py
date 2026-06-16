@@ -199,9 +199,9 @@ This has been calculated based on the member project dependency graphs:
 {md}
 
 ## Your Mission
-1. Work interactively with the mathematician to refine this roadmap.
-2. Build a clear, high-level math roadmap/checklist for each project (e.g. Cech Cohomology, Quot Schemes, etc.), complete with goals, status, and dependency relationships.
-3. Help the mathematician organize their goals and decide the order of proving lemmas/theorems.
+1. Work interactively with the mathematician to build a **condensed, high-level math roadmap/checklist** for each project (e.g., Cech Cohomology, Quot Schemes, etc.), complete with goals, status, and dependency relationships.
+2. **Abstract away exhaustive lists**: Instead of showing every single helper lemma or minor declaration, group them into high-level, mathematically meaningful objectives (e.g., `functoriality`, `refinement lemma`, `representability proof`). Use the exhaustive list in the "Current Deterministic Roadmap Draft" above as your source of truth, but present a condensed checklist.
+3. Add dependency remarks next to the high-level objectives where applicable (e.g., `(once functoriality is proven)`).
 4. You are authorized to write or update the following files in the scope root folder based on your discussion and mathematician's approval:
    - `README.md` (the general description of the scope and projects)
    - `.archon-scope/roadmap.md` (the checklist and dependency analysis)
