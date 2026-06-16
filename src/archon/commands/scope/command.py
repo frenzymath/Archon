@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 
 from archon import log
+from archon.agent import DEFAULT_MODEL
 
 from . import resolve as scope_mod
 from .dashboard import scope_dashboard
@@ -142,8 +144,18 @@ def scope_graph(
 def scope_roadmap(
     path: str = typer.Option(".", "--path", help="The scope directory"),
     as_json: bool = typer.Option(False, "--json", help="Print the roadmap as JSON instead of writing it"),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "--model", "-M",
+        help="Model alias: 'opus' (default), 'sonnet', 'haiku', or a full id.",
+    ),
+    claude_backend: Optional[str] = typer.Option(
+        None, "--claude-backend", help="How 'claude -p' is launched.",
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness", help="Override the interactive session harness.",
+    ),
 ) -> None:
-    """Analyze the scope: unblock matrix, duplication, leverage, stalled members."""
+    """Analyze the scope and launch an interactive agent session to refine the roadmap."""
     root = Path(path).resolve()
     _require_scope(root)
     members = scope_mod.resolve_members(root)
@@ -157,13 +169,76 @@ def scope_roadmap(
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "merge-dag.json").write_text(
         json.dumps(mdag.to_dict(), indent=2), encoding="utf-8")
+    
     md = render_markdown(rm)
-    (sdir / "roadmap.md").write_text(md, encoding="utf-8")
+    roadmap_path = sdir / "roadmap.md"
+    if not roadmap_path.exists():
+        roadmap_path.write_text(md, encoding="utf-8")
+        
     (sdir / "roadmap.json").write_text(
         json.dumps(rm.to_dict(), indent=2), encoding="utf-8")
 
-    print(md)
-    log.success(f"Roadmap written to {sdir / 'roadmap.md'}")
+    # Build the prompt for the roadmap agent
+    import textwrap
+    member_lines = "\n".join(
+        f"- **{m.name}** — `{m.path}`" + ("" if m.has_dag else "  *(no DAG built yet)*")
+        for m in members
+    )
+    prompt = textwrap.dedent(f"""\
+You are an Archon **scope roadmap advisor**. A *scope* is a set of related Archon
+Lean-formalization projects. The mathematician wants to interactively build and refine the
+scope-level roadmap and the README.md.
+
+Scope directory: {root}
+Member projects:
+{member_lines}
+
+## Current Deterministic Roadmap Draft
+This has been calculated based on the member project dependency graphs:
+
+{md}
+
+## Your Mission
+1. Work interactively with the mathematician to refine this roadmap.
+2. Build a clear, high-level math roadmap/checklist for each project (e.g. Cech Cohomology, Quot Schemes, etc.), complete with goals, status, and dependency relationships.
+3. Help the mathematician organize their goals and decide the order of proving lemmas/theorems.
+4. You are authorized to write or update the following files in the scope root folder based on your discussion and mathematician's approval:
+   - `README.md` (the general description of the scope and projects)
+   - `.archon-scope/roadmap.md` (the checklist and dependency analysis)
+   
+## Rules
+- **NEVER edit any member project's internal files** (e.g., `.lean` files, their individual blueprints, or their `.archon` state directories) without explicit permission.
+- You can read any file in the member projects to understand their mathematical definitions and progress.
+- Keep the scope `README.md` and `.archon-scope/roadmap.md` clean, standard markdown, and well-structured.
+- Proactively offer to update `README.md` and `.archon-scope/roadmap.md` when the mathematician makes a decision or refines a plan.
+
+## How to behave
+1. **Understand the mathematical context**: Ask the mathematician about the mathematical relation between the projects (e.g. Cech Cohomology, Picard groups, Quot schemes, Jacobians).
+2. **Build and refine the checklist**: Propose checklist items for each project and write/format them neatly.
+3. **Format clearly**: Format checkboxes as `- [ ]` for open tasks and `- [x]` for proved/done tasks, with dependencies clearly written like `(once X is proven)`.
+4. **Iterative updates**: Apply your file editing tools to update the scope `README.md` and `.archon-scope/roadmap.md` dynamically as decisions are made.""")
+
+    log.header("Archon Scope Roadmap Agent")
+    log.key_value({
+        "Scope": str(root),
+        "Members": ", ".join(m.name for m in members),
+        "Writable": "README.md, .archon-scope/roadmap.md",
+    })
+    log.info("Starting interactive roadmap session — Ctrl+C to exit")
+    log.rule()
+
+    from archon.agent import ClaudeBackend, build_runner
+    from archon.commands.tooling.project_config import load_project_config, resolve_claude_backend
+
+    cfg = load_project_config(root)
+    backend = resolve_claude_backend(cfg, cli_value=claude_backend)
+    try:
+        build_runner(
+            role="roadmap", model=model, cfg=cfg,
+            harness=harness, backend=backend or ClaudeBackend(),
+        ).run_interactive(prompt, cwd=root)
+    except KeyboardInterrupt:
+        log.info("Roadmap session ended")
 
 
 # Interactive + dashboard subcommands (defined in sibling modules).
