@@ -7,6 +7,7 @@ import DiffPlayback from './views/DiffPlayback';
 import DagView from './views/DagView';
 import Blueprint from './views/Blueprint';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
+import { isStaticDashboard } from './lib/staticMode';
 // Vite's resolveJsonModule (enabled by default) lets us import the
 // version from package.json so the badge stays in sync with releases
 // without manual updates. If you move package.json or the build setup
@@ -14,6 +15,7 @@ import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { version as APP_VERSION } from '../../package.json';
 
 function ConnectionBanner({ isError }: { isError: boolean }) {
+  if (isStaticDashboard()) return null;
   if (!isError) return null;
   return (
     <div style={{
@@ -28,6 +30,7 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
 
 export default function App() {
   const { data: project, isError } = useProject();
+  const isStatic = isStaticDashboard();
   return (
     <div className="app">
       <ConnectionBanner isError={isError} />
@@ -37,13 +40,14 @@ export default function App() {
           v{APP_VERSION}
         </span>
         {project && <span className="project-badge" title={project.path}>{project.name}</span>}
-        <ProjectSwitcher />
+        {isStatic && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
+        {!isStatic && <ProjectSwitcher />}
         <nav className="header-nav">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
-          <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
-          <NavLink to="/diffs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Diffs</NavLink>
+          {!isStatic && <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>}
+          {!isStatic && <NavLink to="/diffs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Diffs</NavLink>}
           <NavLink to="/journal" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Journal</NavLink>
         </nav>
       </header>
@@ -54,8 +58,8 @@ export default function App() {
           <Route path="/graph" element={<Navigate to="/dag" replace />} />
           <Route path="/dag" element={<DagView />} />
           <Route path="/blueprint" element={<Blueprint />} />
-          <Route path="/logs" element={<LogViewer />} />
-          <Route path="/diffs" element={<DiffPlayback />} />
+          <Route path="/logs" element={isStatic ? <Navigate to="/" replace /> : <LogViewer />} />
+          <Route path="/diffs" element={isStatic ? <Navigate to="/" replace /> : <DiffPlayback />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

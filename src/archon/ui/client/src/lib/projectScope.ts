@@ -10,7 +10,12 @@
  */
 const KEY = 'archon.projectScope';
 
+function staticDashboard(): boolean {
+  return !!window.__ARCHON_STATIC__;
+}
+
 export function getProjectScope(): string | null {
+  if (staticDashboard()) return null;
   try {
     return localStorage.getItem(KEY) || null;
   } catch {
@@ -44,6 +49,7 @@ export function withProjectScope(url: string): string {
  * lists the base project's peers regardless of which project is being viewed.
  */
 export function installFetchScope(): void {
+  if (staticDashboard()) return;
   const orig = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (

@@ -14,6 +14,7 @@ from archon import log
 from .build import build_client, check_node, install_if_needed, needs_build
 from .pidfile import PidFileRegistry
 from .server import ServerProcess
+from .static_export import StaticDashboardExporter
 
 
 def _data_path(sub_path: str = "") -> Path:
@@ -40,6 +41,9 @@ class DashboardCommand:
         port: int = 8080,
         dev: bool = False,
         build_only: bool = False,
+        static_build: bool = False,
+        out: str | None = None,
+        force: bool = False,
         open_browser: bool = False,
         restart: bool = False,
     ) -> None:
@@ -47,6 +51,9 @@ class DashboardCommand:
         self.port = port
         self.dev = dev
         self.build_only = build_only
+        self.static_build = static_build
+        self.out = out
+        self.force = force
         self.open_browser = open_browser
         self.restart = restart
 
@@ -62,6 +69,22 @@ class DashboardCommand:
         if not ui_dir.exists():
             log.error("UI files not found in package data — installation may be incomplete")
             raise typer.Exit(1)
+
+        if self.static_build:
+            if self.dev:
+                log.error("--static-build cannot be combined with --dev")
+                raise typer.Exit(1)
+            if self.build_only:
+                log.error("--static-build cannot be combined with --build")
+                raise typer.Exit(1)
+            out_dir = Path(self.out).expanduser() if self.out else resolved / "docs"
+            StaticDashboardExporter(
+                resolved,
+                out_dir=out_dir,
+                port=self.port,
+                force=self.force,
+            ).run()
+            return
 
         server_dir = ui_dir / "server"
         client_dir = ui_dir / "client"

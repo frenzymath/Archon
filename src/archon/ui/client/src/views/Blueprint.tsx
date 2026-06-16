@@ -18,6 +18,7 @@ import {
 import { useDag, useDagLastModified } from '../hooks/useDag';
 import { buildBlueprintModel, ChapterView, TitleInline } from '../components/BlueprintDoc';
 import { GitTimeline } from '../components/GitTimeline';
+import { isStaticDashboard } from '../lib/staticMode';
 import styles from './Blueprint.module.css';
 
 function useDragResize(initial: number, min: number, max: number) {
@@ -35,10 +36,12 @@ function useDragResize(initial: number, min: number, max: number) {
 }
 
 export default function Blueprint() {
+  const isStatic = isStaticDashboard();
   const [selectedSha, setSelectedSha] = useState('');
-  const { data, isLoading, error, isFetching } = useBlueprintChapters(selectedSha || undefined);
+  const effectiveSha = isStatic ? undefined : selectedSha || undefined;
+  const { data, isLoading, error, isFetching } = useBlueprintChapters(effectiveSha);
   const { data: gitData } = useGitLog();
-  const { data: dag } = useDag(selectedSha || undefined);
+  const { data: dag } = useDag(effectiveSha);
 
   const macros = data?.macros ?? {};
   const chapters = useMemo(() => data?.chapters ?? [], [data]);
@@ -235,19 +238,23 @@ export default function Blueprint() {
         </main>
       </div>
 
-      <div className={styles.gitResize} onMouseDown={git.onMouseDown} title="Drag to resize" />
-      <div className={styles.gitPanel} ref={gitPanelRef} style={{ height: git.size }}>
-        <div className={styles.gitHead}>
-          <span className={styles.gitTitle}>Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
-          {selectedSha && <button className={styles.gitLive} onClick={() => setSelectedSha('')}>← Live</button>}
-        </div>
-        <GitTimeline
-          commits={gitData?.commits ?? []}
-          selectedSha={selectedSha}
-          onSelect={(c: GitCommit) => setSelectedSha(prev => (prev === c.sha ? '' : c.sha))}
-          containerW={gitW}
-        />
-      </div>
+      {!isStatic && (
+        <>
+          <div className={styles.gitResize} onMouseDown={git.onMouseDown} title="Drag to resize" />
+          <div className={styles.gitPanel} ref={gitPanelRef} style={{ height: git.size }}>
+            <div className={styles.gitHead}>
+              <span className={styles.gitTitle}>Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
+              {selectedSha && <button className={styles.gitLive} onClick={() => setSelectedSha('')}>← Live</button>}
+            </div>
+            <GitTimeline
+              commits={gitData?.commits ?? []}
+              selectedSha={selectedSha}
+              onSelect={(c: GitCommit) => setSelectedSha(prev => (prev === c.sha ? '' : c.sha))}
+              containerW={gitW}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

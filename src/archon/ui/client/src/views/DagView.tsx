@@ -27,6 +27,7 @@ import { useDag, useUnionDags, useDagLastModified, type DagNode, type FileMod } 
 import { useGitLog, useBlueprintChapters, type GitCommit } from '../hooks/useGitLog';
 import { GitTimeline } from '../components/GitTimeline';
 import { buildBlueprintModel, TexFragment } from '../components/BlueprintDoc';
+import { isStaticDashboard } from '../lib/staticMode';
 // Effort/status colour scale (mirrors leandag.exporters) + per-project encoding
 // for the multi-project union overlay.
 import {
@@ -178,10 +179,12 @@ const QUERY_LABEL: Record<DagQuery, string> = {
 };
 
 export default function DagView() {
+  const isStatic = isStaticDashboard();
   // Time-travel: when a commit is selected, the DAG is built at that commit
   // (server-side, in-memory — never overwriting the live .leandag/ files).
   const [selectedSha, setSelectedSha] = useState<string>('');
-  const { data, isLoading, error, refetch, isFetching } = useDag(selectedSha || undefined);
+  const effectiveSha = isStatic ? undefined : selectedSha || undefined;
+  const { data, isLoading, error, refetch, isFetching } = useDag(effectiveSha);
   const { data: gitData } = useGitLog();
   const commits = gitData?.commits ?? [];
   const navigate = useNavigate();
@@ -220,7 +223,7 @@ export default function DagView() {
   // The blueprint label map (cheap numbering pass over all chapters) so the
   // node panel renders statements/proofs exactly like the Blueprint page —
   // \cref{} resolved — and can deep-link into it. Same commit as the graph.
-  const { data: bpData } = useBlueprintChapters(selectedSha || undefined);
+  const { data: bpData } = useBlueprintChapters(effectiveSha);
   const bpLabels = useMemo(
     () => buildBlueprintModel(bpData?.chapters ?? [], true).labels,
     [bpData],
@@ -987,23 +990,27 @@ export default function DagView() {
         </aside>
       </div>
 
-      {/* Temporal axis — same commit rail as the Graph view. Click a commit to
-          rebuild the DAG as it was at that commit (in-memory, never cached). */}
-      <div className="dv-resize-h" onMouseDown={botResize.onMouseDown} title="Drag to resize" />
-      <div className="dv-git-panel" ref={gitPanelRef} style={{ height: botResize.size }}>
-        <div className="dv-git-head">
-          <span className="dv-git-title">Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
-          {selectedSha && (
-            <button className="dv-git-live" onClick={() => setSelectedSha('')}>← Live</button>
-          )}
-        </div>
-        <GitTimeline
-          commits={commits}
-          selectedSha={selectedSha}
-          onSelect={(c: GitCommit) => setSelectedSha((prev) => (prev === c.sha ? '' : c.sha))}
-          containerW={gitW}
-        />
-      </div>
+      {!isStatic && (
+        <>
+          {/* Temporal axis — same commit rail as the Graph view. Click a commit to
+              rebuild the DAG as it was at that commit (in-memory, never cached). */}
+          <div className="dv-resize-h" onMouseDown={botResize.onMouseDown} title="Drag to resize" />
+          <div className="dv-git-panel" ref={gitPanelRef} style={{ height: botResize.size }}>
+            <div className="dv-git-head">
+              <span className="dv-git-title">Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
+              {selectedSha && (
+                <button className="dv-git-live" onClick={() => setSelectedSha('')}>← Live</button>
+              )}
+            </div>
+            <GitTimeline
+              commits={commits}
+              selectedSha={selectedSha}
+              onSelect={(c: GitCommit) => setSelectedSha((prev) => (prev === c.sha ? '' : c.sha))}
+              containerW={gitW}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
