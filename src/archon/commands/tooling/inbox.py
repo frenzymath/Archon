@@ -1,10 +1,10 @@
 """Peer inbox — the one sanctioned way to write *into* a peer project.
 
 A project is otherwise strictly read-only to its peers (see
-``archon.commands.tooling.peers``). The single exception is a
-**definition-improvement note**: after reading a peer's declaration, you may
-leave structured feedback — "I had to reshape ``Foo.bar`` like this, here's
-why" — so peers converge on definitions general enough for everyone.
+``archon.commands.tooling.peers``). The single exception is a peer leaving an
+upstream **PR** ("I had to reshape ``Foo.bar`` like this, here's the code") or
+**issue** ("this declaration looks wrong") — so peers converge on definitions
+general enough for everyone.
 
 Layout (machine-local, gitignored like the rest of ``.archon/``)::
 
@@ -17,19 +17,22 @@ time. Schema::
     from: picard-3                 # the author project's stable name
     notes:
       - type: pr                   # pr | issue
-        lean_name: MeasureTheory.foo  # optional
+        id: 1a2b3c4d               # stable content hash (resolve handle)
+        lean_name: MeasureTheory.foo  # optional (issues may omit it)
         payload: "generalize the σ-finite hypothesis to ..."
         rationale: "picard-3 had to re-prove this in a more general form"
         status: open               # open | accepted | declined
 
-Ownership is split: the **author** owns a note's ``suggestion`` / ``rationale``
+Ownership is split: the **author** owns a note's ``payload`` / ``rationale``
 (they wrote it); the **target** project owns ``status`` (it decides whether to
-act). The plan/dag loop of the target surfaces ``open`` notes against its own
-declarations; ``archon peers note`` is the only sanctioned writer.
+act, then marks it ``accepted`` / ``declined``). The plan/dag loop of the
+target surfaces ``open`` notes against its own declarations; ``archon peers
+pr`` / ``archon peers issue`` are the only sanctioned writers.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +52,18 @@ class Note:
     lean_name: str = ""
     rationale: str = ""
     status: str = "open"
+
+    @property
+    def id(self) -> str:
+        """Stable short handle the target uses to resolve this note.
+
+        Content-addressed (type + declaration + payload), so re-noting the same
+        thing keeps the same id while an edited payload becomes a new note.
+        """
+        digest = hashlib.sha1(
+            f"{self.type}\x00{self.lean_name}\x00{self.payload}".encode("utf-8")
+        )
+        return digest.hexdigest()[:8]
 
 
 @dataclass
@@ -78,14 +93,20 @@ def author_file(project_path: Path, author: str) -> Path:
 def _parse_note(raw: object) -> Note | None:
     if not isinstance(raw, dict):
         return None
-    lean_name = raw.get("lean_name")
-    if not isinstance(lean_name, str) or not lean_name.strip():
-        return None
+    payload = raw.get("payload")
+    if not isinstance(payload, str) or not payload.strip():
+        return None  # a note with no body is meaningless; drop it
+    note_type = str(raw.get("type") or "pr").strip().lower()
+    if note_type not in ("pr", "issue"):
+        note_type = "pr"
     status = raw.get("status")
     status = status if status in VALID_STATUSES else "open"
+    lean_name = raw.get("lean_name")
+    lean_name = lean_name.strip() if isinstance(lean_name, str) else ""
     return Note(
-        lean_name=lean_name.strip(),
-        suggestion=str(raw.get("suggestion") or "").strip(),
+        type=note_type,
+        payload=payload.strip(),
+        lean_name=lean_name,
         rationale=str(raw.get("rationale") or "").strip(),
         status=status,
     )
@@ -133,9 +154,10 @@ def open_notes(project_path: Path) -> list[tuple[str, Note]]:
 
 def _dump(author: str, notes: list[Note]) -> str:
     header = (
-        f"# Definition-improvement notes from peer project '{author}'.\n"
-        f"# Written by `archon peers note`. THIS project owns each note's\n"
-        f"# `status` (open | accepted | declined); the author owns the rest.\n\n"
+        f"# Upstream PRs / issues from peer project '{author}'.\n"
+        f"# Written by `archon peers pr` / `archon peers issue`. THIS project owns\n"
+        f"# each note's `status` (open | accepted | declined); the author owns the\n"
+        f"# rest. Resolve one with `archon peers accept|decline --id <id>`.\n\n"
     )
     body = yaml.safe_dump(
         {
@@ -143,6 +165,7 @@ def _dump(author: str, notes: list[Note]) -> str:
             "notes": [
                 {
                     "type": n.type,
+                    "id": n.id,
                     "lean_name": n.lean_name,
                     "payload": n.payload,
                     "rationale": n.rationale,
@@ -167,22 +190,33 @@ def write_note(
 ) -> Path:
     """Idempotently append or update a note in the target's inbox for this author.
 
-    Matches existing open notes by `lean_name` and `type` (for PRs) or just appends.
-    Returns the written file path.
+    A declaration-scoped note (``lean_name`` given — typically a PR) *updates*
+    the existing note for that declaration; a free issue (no ``lean_name``)
+    dedupes only on identical text, otherwise appends. Either way the (re)written
+    note lands ``open``, so re-noting something the target had resolved
+    re-surfaces it. Returns the written file path.
     """
     path = author_file(target_project, author)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     inbox = load_author_inbox(path)
     notes = list(inbox.notes) if inbox else []
-    
+    new_note = Note(
+        type=note_type,
+        payload=payload.strip(),
+        lean_name=lean_name.strip(),
+        rationale=rationale.strip(),
+    )
+
     target_idx = -1
     for i, n in enumerate(notes):
-        if n.status == "open" and n.type == note_type and n.lean_name == lean_name.strip():
+        if n.type != note_type:
+            continue
+        same_decl = bool(new_note.lean_name) and n.lean_name == new_note.lean_name
+        same_text = not new_note.lean_name and n.payload == new_note.payload
+        if same_decl or same_text:
             target_idx = i
             break
-
-    new_note = Note(type=note_type, lean_name=lean_name.strip(), payload=payload.strip(), rationale=rationale.strip())
 
     if target_idx >= 0:
         notes[target_idx] = new_note
@@ -196,9 +230,11 @@ def write_note(
 def set_status(
     target_project: Path, author: str, lean_name: str, status: str,
 ) -> bool:
-    """Target-side: mark one note ``accepted`` / ``declined`` / ``open``.
+    """Target-side: mark every note from *author* about *lean_name*.
 
-    Returns True if a matching note was found and updated.
+    Convenient for PRs (which always carry a ``lean_name``). For issues, or to
+    pin one specific note, prefer :func:`set_status_by_id`. Returns True if a
+    matching note was found and updated.
     """
     if status not in VALID_STATUSES:
         raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
@@ -214,3 +250,32 @@ def set_status(
     if changed:
         path.write_text(_dump(ib.author, ib.notes), encoding="utf-8")
     return changed
+
+
+def find_note_by_id(
+    project_path: Path, note_id: str,
+) -> tuple[AuthorInbox, Note] | None:
+    """Locate a note across every author inbox by its stable ``id``."""
+    note_id = note_id.strip()
+    for ib in load_all(project_path):
+        for n in ib.notes:
+            if n.id == note_id:
+                return ib, n
+    return None
+
+
+def set_status_by_id(project_path: Path, note_id: str, status: str) -> bool:
+    """Target-side: resolve one note (PR or issue) by its ``id``.
+
+    The universal handle the receiving agent uses to mark a note ``accepted`` /
+    ``declined`` once it has acted (or won't). Returns True if found.
+    """
+    if status not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
+    hit = find_note_by_id(project_path, note_id)
+    if hit is None:
+        return False
+    ib, note = hit
+    note.status = status
+    ib.path.write_text(_dump(ib.author, ib.notes), encoding="utf-8")
+    return True

@@ -307,7 +307,8 @@ def peers_cli(
     Validates the file, expands the read/no-access globs, and lists the Archon
     projects they resolve to — analogous to ``archon protect-check``. The
     dashboard consumes ``--json`` to build its project switcher. Run
-    ``archon peers note`` to leave a peer feedback on one of its declarations.
+    ``archon peers pr`` / ``archon peers issue`` to leave a peer upstream
+    feedback on one of its declarations.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -407,10 +408,11 @@ def peers_inbox(
     show_all: bool = typer.Option(False, "--all", help="Include resolved (accepted/declined) notes, not just open ones"),
     as_json: bool = typer.Option(False, "--json", help="Emit the inbox as JSON"),
 ) -> None:
-    """Show definition-improvement notes peers left for THIS project.
+    """Show PRs / issues peers left for THIS project.
 
-    The receiving side of ``archon peers note``. Resolve a note you have acted
-    on (or won't) with ``archon peers accept`` / ``archon peers decline``.
+    The receiving side of ``archon peers pr`` / ``archon peers issue``. Each note
+    prints its short id; resolve one you have acted on (or won't) with
+    ``archon peers accept --id <id>`` / ``archon peers decline --id <id>``.
     """
     from archon.commands.tooling import inbox
 
@@ -422,8 +424,9 @@ def peers_inbox(
             {
                 "author": b.author,
                 "notes": [
-                    {"lean_name": n.lean_name, "suggestion": n.suggestion,
-                     "rationale": n.rationale, "status": n.status}
+                    {"id": n.id, "type": n.type, "lean_name": n.lean_name,
+                     "payload": n.payload, "rationale": n.rationale,
+                     "status": n.status}
                     for n in b.notes
                     if show_all or n.status == "open"
                 ],
@@ -440,7 +443,8 @@ def peers_inbox(
         print(f"\nfrom {b.author}:")
         for n in notes:
             badge = "" if n.status == "open" else f" [{n.status}]"
-            print(f"  - `{n.lean_name}`{badge}: {n.suggestion}")
+            scope = f"`{n.lean_name}` " if n.lean_name else ""
+            print(f"  - [{n.type}] {scope}({n.id}){badge}: {n.payload}")
             if n.rationale:
                 print(f"      why: {n.rationale}")
         shown += len(notes)
@@ -449,32 +453,34 @@ def peers_inbox(
         print(f"No {scope} in this project's inbox.")
 
 
-def _set_inbox_status(project_path: str, author: str, lean_name: str, status: str) -> None:
+def _set_inbox_status(project_path: str, note_id: str, status: str) -> None:
     from archon.commands.tooling import inbox
 
     root = Path(project_path).resolve()
-    if inbox.set_status(root, author, lean_name, status):
-        print(f"Marked `{lean_name}` from '{author}' as {status}.")
-    else:
-        print(f"No note about `{lean_name}` from '{author}' in this inbox.")
+    hit = inbox.find_note_by_id(root, note_id)
+    if hit is None:
+        print(f"No note with id '{note_id}' in this project's inbox. "
+              "Run `archon peers inbox` to see ids.")
         raise typer.Exit(1)
+    ib, note = hit
+    inbox.set_status_by_id(root, note_id, status)
+    label = f"`{note.lean_name}`" if note.lean_name else f"{note.type}"
+    print(f"Marked {label} ({note_id}) from '{ib.author}' as {status}.")
 
 
 @peers_app.command("accept")
 def peers_accept(
-    author: str = typer.Option(..., "--author", "-a", help="The peer project that left the note"),
-    lean_name: str = typer.Option(..., "--lean-name", "-n", help="The declaration the note is about"),
+    note_id: str = typer.Option(..., "--id", "-i", help="The note id (from `archon peers inbox`)"),
     project_path: str = typer.Option(".", "--project-path", help="The project whose inbox to update"),
 ) -> None:
     """Mark a peer's note accepted (you acted on it). Stops surfacing it."""
-    _set_inbox_status(project_path, author, lean_name, "accepted")
+    _set_inbox_status(project_path, note_id, "accepted")
 
 
 @peers_app.command("decline")
 def peers_decline(
-    author: str = typer.Option(..., "--author", "-a", help="The peer project that left the note"),
-    lean_name: str = typer.Option(..., "--lean-name", "-n", help="The declaration the note is about"),
+    note_id: str = typer.Option(..., "--id", "-i", help="The note id (from `archon peers inbox`)"),
     project_path: str = typer.Option(".", "--project-path", help="The project whose inbox to update"),
 ) -> None:
     """Mark a peer's note declined (you won't act on it). Stops surfacing it."""
-    _set_inbox_status(project_path, author, lean_name, "declined")
+    _set_inbox_status(project_path, note_id, "declined")

@@ -1,0 +1,128 @@
+.root {
+  display: flex;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+.sidebar {
+  width: 340px;
+  background-color: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  min-height: 0;
+  font-size: 13px;
+}
+
+.sidebarTitle {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin: 0 0 8px 0;
+}
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tree summary {
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: #334155;
+  font-weight: 500;
+  user-select: none;
+}
+
+.tree summary:hover {
+  background-color: #f1f5f9;
+}
+
+.tree details > div {
+  padding-left: 14px;
+  border-left: 1px dashed #e2e8f0;
+  margin-left: 6px;
+}
+
+.fileButton {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  color: #1e293b;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.fileButton:hover {
+  background-color: #f1f5f9;
+}
+
+.fileButton.active {
+  background-color: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.content {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.contentHeader {
+  padding: 14px 24px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 13px;
+  color: #475569;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.contentBody {
+  flex-grow: 1;
+  overflow: auto;
+  background: #fcfcfc;
+}
+
+.code {
+  margin: 0;
+  padding: 16px 24px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  color: #0f172a;
+}
+
+.placeholder {
+  padding: 60px 24px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.error {
+  padding: 24px;
+  color: #b91c1c;
+}

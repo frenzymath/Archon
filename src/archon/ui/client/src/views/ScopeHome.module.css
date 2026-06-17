@@ -1,6 +1,10 @@
 .root {
   display: flex;
-  min-height: calc(100vh - 64px);
+  /* Lock to viewport so the sidebar (members) and content (README/Roadmap)
+     each get their own independent overflow-y instead of the page scrolling
+     as a whole. */
+  height: calc(100vh - 64px);
+  overflow: hidden;
   background-color: #f8fafc;
   color: #0f172a;
   font-family: 'Inter', -apple-system, sans-serif;
@@ -15,6 +19,9 @@
   flex-direction: column;
   gap: 16px;
   flex-shrink: 0;
+  /* Independent vertical scroll for a long member list. */
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .sidebarTitle {
@@ -90,7 +97,9 @@
   display: flex;
   flex-direction: column;
   gap: 32px;
+  /* Independent vertical scroll for long README + Roadmap content. */
   overflow-y: auto;
+  min-height: 0;
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;

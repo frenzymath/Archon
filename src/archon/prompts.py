@@ -1289,12 +1289,12 @@ def _peers_block(project_path: Path) -> str:
 
 
 def _peer_feedback_block(project_path: Path) -> str:
-    """Inject feedback peers left about THIS project's declarations.
+    """Inject PRs / issues peers left about THIS project's declarations.
 
-    Peers leave definition-improvement notes via ``archon peers note``; they
-    land in ``.archon/inbox/<author>.yaml``. This surfaces the still-``open``
-    ones, grouped by declaration — when several peers independently flag the
-    same declaration, that is a strong signal it should be generalized (and a
+    Peers leave them via ``archon peers pr`` / ``archon peers issue``; they land
+    in ``.archon/inbox/<author>.yaml``. This surfaces the still-``open`` ones,
+    grouped by declaration — when several peers independently flag the same
+    declaration, that is a strong signal it should be generalized (and a
     candidate to extract into a shared base project). Best-effort: degrades to
     an empty string with no inbox, and never raises into the prompt.
     """
@@ -1316,26 +1316,34 @@ def _peer_feedback_block(project_path: Path) -> str:
         "",
         "## Peer feedback on your declarations (inbox)",
         "",
-        f"{len(notes)} open note(s) from peer projects suggest reshaping "
+        f"{len(notes)} open PR(s) / issue(s) from peer projects about "
         "declarations of yours they reused. Because peers cannot edit your files, "
-        "they have likely provided patches or generalized code from their own "
-        "codebases for you to upstream. Weigh them when you (re)work these "
-        "declarations — a definition several peers had to generalize is one "
-        "worth generalizing here. You are not obliged to follow a note, but "
-        "address the recurring ones. After acting (or deciding not to), the human "
-        "can mark a note resolved.",
+        "a **pr** carries generalized code from their codebase for you to "
+        "upstream; an **issue** flags a mathematical or architectural problem. "
+        "Weigh them when you (re)work these declarations — a definition several "
+        "peers had to generalize is one worth generalizing here. You are not "
+        "obliged to follow a note, but address the recurring ones.",
+        "",
+        "**Close the loop.** Once you have acted on a note (or decided not to), "
+        "resolve it by its id so it stops resurfacing:",
+        "```bash",
+        "archon peers accept --id <id>    # you adopted it",
+        "archon peers decline --id <id>   # you won't act on it",
+        "```",
         "",
     ]
+    # Group by declaration; free issues (no lean_name) collect under one bucket.
     for lean_name in sorted(by_decl):
         entries = by_decl[lean_name]
         authors = ", ".join(sorted({a for a, _ in entries}))
         flag = "  ⚑ multiple peers" if len({a for a, _ in entries}) > 1 else ""
-        lines.append(f"- **`{lean_name}`** — from {authors}{flag}")
+        header = f"`{lean_name}`" if lean_name else "_(general issues)_"
+        lines.append(f"- **{header}** — from {authors}{flag}")
         for _author, note in entries:
-            suggestion = getattr(note, "suggestion", "") or "(no suggestion text)"
+            payload = (getattr(note, "payload", "") or "").strip() or "(no text)"
             rationale = getattr(note, "rationale", "")
             why = f"  _why:_ {rationale}" if rationale else ""
-            lines.append(f"    - {suggestion}{why}")
+            lines.append(f"    - [{note.type}] ({note.id}) {payload}{why}")
 
     return "\n".join(lines) + "\n"
 

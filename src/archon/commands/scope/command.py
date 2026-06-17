@@ -169,12 +169,15 @@ def scope_roadmap(
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "merge-dag.json").write_text(
         json.dumps(mdag.to_dict(), indent=2), encoding="utf-8")
-    
+
     md = render_markdown(rm)
-    roadmap_path = sdir / "roadmap.md"
+    # roadmap.md lives at the scope root (next to README.md) so it's visible
+    # alongside the project's other top-level docs and rendered on the Pages
+    # site's home view. .archon-scope/ keeps the machine-readable cache only.
+    roadmap_path = root / "roadmap.md"
     if not roadmap_path.exists():
         roadmap_path.write_text(md, encoding="utf-8")
-        
+
     (sdir / "roadmap.json").write_text(
         json.dumps(rm.to_dict(), indent=2), encoding="utf-8")
 
@@ -204,25 +207,25 @@ This has been calculated based on the member project dependency graphs:
 3. Add dependency remarks next to the high-level objectives where applicable (e.g., `(once functoriality is proven)`).
 4. You are authorized to write or update the following files in the scope root folder based on your discussion and mathematician's approval:
    - `README.md` (the general description of the scope and projects)
-   - `.archon-scope/roadmap.md` (the checklist and dependency analysis)
+   - `roadmap.md` (the checklist and dependency analysis)
    
 ## Rules
 - **NEVER edit any member project's internal files** (e.g., `.lean` files, their individual blueprints, or their `.archon` state directories) without explicit permission.
 - You can read any file in the member projects to understand their mathematical definitions and progress.
-- Keep the scope `README.md` and `.archon-scope/roadmap.md` clean, standard markdown, and well-structured.
-- Proactively offer to update `README.md` and `.archon-scope/roadmap.md` when the mathematician makes a decision or refines a plan.
+- Keep the scope `README.md` and `roadmap.md` clean, standard markdown, and well-structured.
+- Proactively offer to update `README.md` and `roadmap.md` when the mathematician makes a decision or refines a plan.
 
 ## How to behave
 1. **Understand the mathematical context**: Ask the mathematician about the mathematical relation between the projects (e.g. Cech Cohomology, Picard groups, Quot schemes, Jacobians).
 2. **Build and refine the checklist**: Propose checklist items for each project and write/format them neatly.
 3. **Format clearly**: Format checkboxes as `- [ ]` for open tasks and `- [x]` for proved/done tasks, with dependencies clearly written like `(once X is proven)`.
-4. **Iterative updates**: Apply your file editing tools to update the scope `README.md` and `.archon-scope/roadmap.md` dynamically as decisions are made.""")
+4. **Iterative updates**: Apply your file editing tools to update the scope `README.md` and `roadmap.md` dynamically as decisions are made.""")
 
     log.header("Archon Scope Roadmap Agent")
     log.key_value({
         "Scope": str(root),
         "Members": ", ".join(m.name for m in members),
-        "Writable": "README.md, .archon-scope/roadmap.md",
+        "Writable": "README.md, roadmap.md (both at scope root)",
     })
     log.info("Starting interactive roadmap session — Ctrl+C to exit")
     log.rule()

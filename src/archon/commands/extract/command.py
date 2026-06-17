@@ -29,7 +29,12 @@ from archon import log
 from archon.commands.tooling.project_config import load_project_config
 from archon.agent import ClaudeBackend, DEFAULT_MODEL, build_runner
 
-from .duplicate import DuplicateReport, duplicate_project
+from .duplicate import (
+    DuplicateReport,
+    InPlaceReport,
+    duplicate_project,
+    prepare_in_place,
+)
 from .verify import read_manifest, verify_sandbox
 
 
@@ -131,20 +136,23 @@ class ExtractCommand:
     def __init__(
         self,
         parent: str,
-        dest: str,
+        dest: str | None,
         *,
         merge_source: str | None = None,
         union: bool = False,
         prefer: str = "source",
         lake_mode: str = "hardlink",
         resume: bool = False,
+        in_place: bool = False,
         build_check: bool = False,
         model: str = DEFAULT_MODEL,
         backend: ClaudeBackend | None = None,
         harness: str | None = None,
     ) -> None:
         self.parent = Path(parent).resolve()
-        self.dest = Path(dest).resolve()
+        self.in_place = in_place
+        # In-place edits the target itself; there is no separate sandbox dir.
+        self.dest = self.parent if in_place else Path(dest).resolve()
         self.merge_source = Path(merge_source).resolve() if merge_source else None
         self.mode = "merge" if self.merge_source else "extract"
         self.union = union
@@ -162,7 +170,16 @@ class ExtractCommand:
         self._preflight()
 
         if self.resume:
-            log.info(f"Resuming carve session in existing sandbox {self.dest}")
+            where = "project" if self.in_place else "sandbox"
+            log.info(f"Resuming {self.mode} session in existing {where} {self.dest}")
+        elif self.in_place:
+            report = prepare_in_place(
+                self.parent,
+                merge_source=self.merge_source,
+                union=self.union,
+                prefer=self.prefer,
+            )
+            self._announce_in_place(report)
         else:
             report = duplicate_project(
                 self.parent, self.dest,
@@ -197,6 +214,10 @@ class ExtractCommand:
         if not (self.parent / ".archon").is_dir():
             log.error(f"{self.parent} is not an archon project (no .archon/)")
             raise typer.Exit(1)
+        if self.in_place and self.mode != "merge":
+            log.error("--in-place is only supported for `archon merge` "
+                      "(an in-place extract would destroy the parent)")
+            raise typer.Exit(1)
         if self.resume:
             if read_manifest(self.dest) is None:
                 log.error(
@@ -205,11 +226,17 @@ class ExtractCommand:
                 )
                 raise typer.Exit(1)
             return
-        if self.dest.exists() and any(self.dest.iterdir()):
+        # In-place edits the target directly — there is no empty sandbox to
+        # demand; the pre-merge inner-git snapshot is the safety net instead.
+        if not self.in_place and self.dest.exists() and any(self.dest.iterdir()):
             log.error(f"Destination {self.dest} exists and is not empty "
                       f"(use --resume to re-enter an existing sandbox)")
             raise typer.Exit(1)
         if self.merge_source is not None:
+            if self.merge_source == self.parent:
+                log.error("--from and the target are the same project — "
+                          "nothing to merge")
+                raise typer.Exit(1)
             if not (self.merge_source / ".archon").is_dir():
                 log.error(f"{self.merge_source} is not an archon project")
                 raise typer.Exit(1)
@@ -223,6 +250,20 @@ class ExtractCommand:
                     f"Align the pins first."
                 )
                 raise typer.Exit(1)
+
+    def _announce_in_place(self, report: InPlaceReport) -> None:
+        log.header("Archon Merge — in-place (editing the target directly)")
+        fields = {
+            "Target (edited in place)": str(self.parent),
+            "Merge source (read-only)": str(self.merge_source),
+            "On overlap": (f"prefer {self.prefer}"
+                           + (" · union" if self.union else " · enrich target")),
+            "Pre-merge snapshot": (
+                f"{report.snapshot_sha[:12]} (inner git — revert point)"
+                if report.snapshot_sha else "unavailable (no git)"),
+            "Manifest": str(report.manifest_path),
+        }
+        log.key_value(fields)
 
     def _announce_duplicate(self, report: DuplicateReport) -> None:
         target_label = "Target (read-only from here)" if self.mode == "merge" \
@@ -293,8 +334,22 @@ class ExtractCommand:
                 {rows}
                 """)
 
-        target_label = "Target project (READ-ONLY)" if mode == "merge" \
-            else "Parent project (READ-ONLY)"
+        if self.in_place:
+            domain_lines = (
+                f"- Write domain (edited IN PLACE): `{self.parent}`\n"
+                "- This is an **in-place merge**: you are editing the real target "
+                "project, not a sandbox copy. A pre-merge snapshot is committed in "
+                "the inner git (`.archon/git-dir`) as the revert point, and the "
+                "result is committed there once the verify gate passes — so work "
+                "deliberately and keep the target buildable."
+            )
+        else:
+            target_label = "Target project (READ-ONLY)" if mode == "merge" \
+                else "Parent project (READ-ONLY)"
+            domain_lines = (
+                f"- Sandbox (your write domain): `{self.dest}`\n"
+                f"- {target_label}: `{self.parent}`"
+            )
         merge_block = ""
         if self.merge_source:
             scope = ("**union** — also import the source's own cones, keeping the "
@@ -325,9 +380,8 @@ class ExtractCommand:
 
         # Session context (injected)
 
-        - Mode: **{mode}**
-        - Sandbox (your write domain): `{self.dest}`
-        - {target_label}: `{self.parent}`
+        - Mode: **{mode}**{" (in-place)" if self.in_place else ""}
+        {domain_lines}
         - Manifest: `.archon/extract-manifest.json`
         {merge_block}
         {siblings_block}
@@ -353,11 +407,20 @@ class ExtractCommand:
                      "unavailable) — closure is verified, but degradation vs the "
                      "parent could not be diffed.")
         if not res.ok:
-            log.error("Verify gate FAILED — sandbox left as-is (inner git has "
-                      "the session's commits):")
+            if self.in_place:
+                log.error("Verify gate FAILED — the in-place merge is NOT "
+                          "committed. The working tree holds the partial merge; "
+                          "fix it and re-run, or revert to the pre-merge snapshot "
+                          "via `archon branch` / inner git:")
+            else:
+                log.error("Verify gate FAILED — sandbox left as-is (inner git has "
+                          "the session's commits):")
             for p in res.problems:
                 log.step(p)
-            if self.mode == "merge":
+            if self.in_place:
+                log.info(f"Fix and re-enter: archon merge {self.parent} "
+                         f"--from {self.merge_source} --in-place --resume")
+            elif self.mode == "merge":
                 log.info(f"Fix and re-enter: archon merge {self.parent} "
                          f"--from {self.merge_source} --dest {self.dest} --resume")
             else:
@@ -365,11 +428,44 @@ class ExtractCommand:
                          f"--dest {self.dest} --resume")
             raise typer.Exit(1)
 
+        if self.in_place:
+            self._finalize_in_place()
+            log.success(
+                f"Merge verified and committed in place into {self.parent}. "
+                f"Review with `git status` / `archon branch`, then commit to your "
+                f"own (outer) git when satisfied."
+            )
+            return
+
         self._init_outer_git()
         log.success(
             f"{self.mode.capitalize()} verified. Sandbox at {self.dest} is a "
             f"standalone archon project — run `archon dag` / `archon loop` there."
         )
+
+    def _finalize_in_place(self) -> None:
+        """Commit the merged result to the target's inner git (`.archon/git-dir`)."""
+        from archon.commands.tooling.inner_git import InnerGit
+
+        if not InnerGit.available():
+            log.warn("`git` not on PATH — merged result NOT committed to inner git")
+            return
+        inner = InnerGit(self.parent)
+        if not inner.is_initialized():
+            log.warn("inner git missing — merged result left uncommitted")
+            return
+        src = self.merge_source.name if self.merge_source else "source"
+        msg = f"archon[merge]: merged {src} into {self.parent.name} (in-place)"
+        try:
+            made = inner.commit(msg)
+        except Exception as e:
+            log.warn(f"inner-git commit skipped: {e}")
+            return
+        if made:
+            log.step(f"Committed merge to inner git ({inner.head_sha()}) — "
+                     f"revert with `archon branch` if needed")
+        else:
+            log.info("No file changes to commit to inner git")
 
     def _init_outer_git(self) -> None:
         """Fresh outer git history for the new project (idempotent)."""

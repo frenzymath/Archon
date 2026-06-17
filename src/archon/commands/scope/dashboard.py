@@ -6,6 +6,10 @@ the normal dashboard bound to a *host* member, but injects the scope's full
 membership as the peer set (via ``ARCHON_SCOPE_PEERS``, which the server's
 ``loadPeers`` prefers). The host shows as the current project; the others are
 the switchable peers, and the union view spans the whole scope.
+
+``--static-build`` snapshots the same view to ``<scope>/docs`` so it can be
+deployed to GitHub Pages: the home page shows the scope README + roadmap, and
+the other pages (DAG, Blueprint, Journal) keep working across members.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import typer
 
 from archon import log
 from archon.commands.dashboard.command import DashboardCommand
+from archon.commands.dashboard.static_export import StaticDashboardExporter
 
 from . import resolve as scope_mod
 
@@ -53,6 +58,18 @@ def scope_dashboard(
     port: int = typer.Option(8080, "--port", "-p", help="Starting port (next free is used if busy)."),
     open_browser: bool = typer.Option(False, "--open", help="Open the browser after starting."),
     restart: bool = typer.Option(False, "--restart", help="Replace a previous dashboard on this port."),
+    static_build: bool = typer.Option(
+        False, "--static-build",
+        help="Export a static dashboard snapshot of the whole scope (GitHub Pages ready).",
+    ),
+    out: Optional[str] = typer.Option(
+        None, "--out",
+        help="Output directory for --static-build (default: <scope>/docs).",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Allow --static-build to replace a non-empty output directory.",
+    ),
 ) -> None:
     """Launch the dashboard over the scope (project switcher + union DAG across members)."""
     root = Path(path).resolve()
@@ -81,6 +98,24 @@ def scope_dashboard(
         "Host project": f"{host.name}  ({host.path})",
         "Peers in switcher": ", ".join(p["name"] for p in peers_payload) or "(none)",
     })
+
+    if static_build:
+        if restart or open_browser:
+            log.warn("--restart/--open are ignored with --static-build")
+        out_dir = Path(out).expanduser() if out else root / "docs"
+        all_members = [
+            {"name": m.name, "path": m.path, "has_dag": m.has_dag}
+            for m in members
+        ]
+        StaticDashboardExporter(
+            Path(host.path),
+            out_dir=out_dir,
+            port=port,
+            force=force,
+            members=all_members,
+            scope_path=root,
+        ).run()
+        return
 
     DashboardCommand(
         host.path,

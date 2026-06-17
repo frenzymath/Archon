@@ -23,6 +23,16 @@ export default function ScopeHome() {
 
   const handleSwitchProject = (path: string | null) => {
     setProjectScope(path);
+    // Stay on Scope Home so the README/Roadmap on the right is unaffected by
+    // the left-panel selection. The reload clears react-query's cache so any
+    // subsequent navigation (DAG, Blueprint…) refetches with the new scope.
+    // HashRouter (static export) and BrowserRouter (live) need different URL
+    // forms; pick whichever style is currently in use.
+    if (window.location.hash.startsWith('#/')) {
+      window.location.hash = '#/scope';
+    } else {
+      window.history.replaceState(null, '', '/scope');
+    }
     window.location.reload();
   };
 

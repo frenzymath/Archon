@@ -7,6 +7,12 @@
  * (installed at app start) appends `?project=` to every `/api/*` call, so all
  * existing hooks switch with no per-call changes. Selecting "this project"
  * clears the scope.
+ *
+ * Static mode (GitHub Pages export) participates too when the snapshot was
+ * generated for a *scope*: `__ARCHON_STATIC__.scopePath` is set, and per-member
+ * API responses are pre-snapshotted under URLs that carry `?project=<path>`.
+ * The fetch wrapper here appends the scope, and the static-fetch wrapper in
+ * `staticMode.ts` then resolves the resulting URL to the matching JSON file.
  */
 const KEY = 'archon.projectScope';
 
@@ -14,8 +20,19 @@ function staticDashboard(): boolean {
   return !!window.__ARCHON_STATIC__;
 }
 
+/** True when the deployed static dashboard was built from a scope. */
+export function isStaticScope(): boolean {
+  return !!window.__ARCHON_STATIC__?.scopePath;
+}
+
+/** Scope switching is wired whenever the runtime can serve per-member data:
+ *  live server (not static), or a static export that was built for a scope. */
+function scopeSwitchingEnabled(): boolean {
+  return !staticDashboard() || isStaticScope();
+}
+
 export function getProjectScope(): string | null {
-  if (staticDashboard()) return null;
+  if (!scopeSwitchingEnabled()) return null;
   try {
     return localStorage.getItem(KEY) || null;
   } catch {
@@ -49,7 +66,7 @@ export function withProjectScope(url: string): string {
  * lists the base project's peers regardless of which project is being viewed.
  */
 export function installFetchScope(): void {
-  if (staticDashboard()) return;
+  if (!scopeSwitchingEnabled()) return;
   const orig = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (

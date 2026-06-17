@@ -30,12 +30,20 @@ export function register(fastify: FastifyInstance, paths: ProjectPaths) {
     }
 
     let roadmap = '';
-    const roadmapPath = path.join(scopePath, '.archon-scope', 'roadmap.md');
-    if (fs.existsSync(roadmapPath)) {
-      try {
-        roadmap = fs.readFileSync(roadmapPath, 'utf8');
-      } catch {
-        // ignore
+    // roadmap.md lives at the scope root (next to README.md). For backward
+    // compatibility, fall back to the old .archon-scope/ location.
+    const roadmapCandidates = [
+      path.join(scopePath, 'roadmap.md'),
+      path.join(scopePath, '.archon-scope', 'roadmap.md'),
+    ];
+    for (const rp of roadmapCandidates) {
+      if (fs.existsSync(rp)) {
+        try {
+          roadmap = fs.readFileSync(rp, 'utf8');
+          break;
+        } catch {
+          // ignore
+        }
       }
     }
 

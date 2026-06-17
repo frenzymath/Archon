@@ -42,7 +42,8 @@ class ScopeSessionTest(unittest.TestCase):
         # The deterministic unblock finding is carried into the prompt.
         self.assertIn("Unblock matrix", prompt)
         # Read-only-with-consent contract is stated.
-        self.assertIn("archon peers note", prompt)
+        self.assertIn("archon peers pr", prompt)
+        self.assertIn("archon peers issue", prompt)
 
     def test_pick_host_prefers_member_with_dag(self):
         host = _pick_host(self.members, None)

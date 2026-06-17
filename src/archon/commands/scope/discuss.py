@@ -3,9 +3,9 @@
 The deterministic roadmap (unblock matrix, duplication, leverage) is the
 backbone; this is the soft layer on top. The session opens with the rendered
 roadmap pre-loaded and reasons across projects: what to work next, what to
-extract into a shared base, where to leave a peer a definition note. It is
+extract into a shared base, where to leave a peer an upstream PR or issue. It is
 read-only to the member projects — its only writes are, with your consent,
-leaving inbox notes (``archon peers note``) or proposing concrete
+leaving inbox notes (``archon peers pr`` / ``archon peers issue``) or proposing concrete
 ``archon extract`` / ``archon merge`` invocations for you to run.
 """
 
@@ -50,8 +50,10 @@ Member projects:
 - **NEVER run `archon loop`, `archon init`, `lake build`, or any graph-mutating
   command** against a member.
 - You MAY, after stating exactly what and why and getting a "yes":
-  - leave a peer a definition note —
-    `archon peers note --target <member> --lean-name <X> --suggestion "..." --rationale "..."`
+  - leave a peer an upstream PR (a generalization they should adopt) —
+    `archon peers pr --target <member> --lean-name <X> --code "..." --rationale "..."`
+    — or an issue (a problem you spotted) —
+    `archon peers issue --target <member> --title "..." --body "..." --lean-name <X>`
     (when one project's declaration should be reshaped to serve the others);
   - propose a concrete `archon extract` / `archon merge` invocation for the
     mathematician to run (you draft the exact command; you do not run it).
@@ -77,7 +79,7 @@ Member projects:
    into a shared base project they all peer-read — draft the `archon extract`.
 3. **Drive convergence**: when projects re-prove the *same* declaration in
    different shapes, that is a generalization signal — offer to leave the owner
-   a `peers note` so the definition converges.
+   a `peers pr` (or `peers issue`) so the definition converges.
 4. **Be concrete and honest**: cite member names and Lean names; verify a claim
    with `dag-query` before relying on it; if two projects' same-named decls have
    different statements, flag the divergence rather than assuming reuse is safe.

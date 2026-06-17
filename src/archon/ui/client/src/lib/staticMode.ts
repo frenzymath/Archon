@@ -4,15 +4,23 @@ declare global {
       generatedAt?: string;
       projectPath?: string;
       endpointCount?: number;
+      /** Set when the static export was built from a scope (archon scope dashboard --static-build). */
+      scopePath?: string;
+      scopeMembers?: { name?: string; path?: string; has_dag?: boolean }[];
     };
   }
 }
 
-function apiKey(path: string): string {
+async function apiKey(path: string): Promise<string> {
+  // SHA-256 hex — must match Python's hashlib.sha256(...).hexdigest() so the
+  // generated JSON files line up. crypto.subtle.digest is available in every
+  // modern browser under both http://localhost and the https:// Pages origin.
   const bytes = new TextEncoder().encode(path);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const view = new Uint8Array(digest);
+  let hex = '';
+  for (const b of view) hex += b.toString(16).padStart(2, '0');
+  return hex;
 }
 
 function apiPath(input: RequestInfo | URL): string | null {
@@ -54,10 +62,11 @@ export function isStaticDashboard(): boolean {
 export function installStaticFetch(): void {
   if (!isStaticDashboard()) return;
   const orig = window.fetch.bind(window);
-  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = apiPath(input);
     if (!path) return orig(input, init);
-    return orig(`./data/api/${apiKey(path)}.json`, init);
+    const key = await apiKey(path);
+    return orig(`./data/api/${key}.json`, init);
   }) as typeof window.fetch;
 }
 
