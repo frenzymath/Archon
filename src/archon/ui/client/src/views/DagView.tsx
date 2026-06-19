@@ -8,8 +8,8 @@
  *  - force-directed (forceAtlas2) layout, direction shown by arrows;
  *  - per-node status glyphs (✓ Lean proof · ⚠ sorry · λ Lean decl · ★ LaTeX
  *    proof · § statement);
- *  - clicking a node lights up its whole transitive cone; double-click focuses
- *    it (filters to the cone); search jumps to any id;
+ *  - clicking a node lights up its direct dependencies; double-click focuses
+ *    its transitive dependency cone; search jumps to any id;
  *  - a project-stats overlay (proved %, sorry/ready/gaps, effort done/remaining);
  *  - filters by node-set (all / blueprint / Lean), component, chapter, isolated;
  *  - a rich sidebar with KaTeX-rendered statement/proof and Lean syntax
@@ -162,8 +162,8 @@ type DagQuery =
   | 'sorry'      // has a sorry/admit
   | 'gaps'       // ∞ effort: no informal proof (roadmap hole)
   | 'unproved'   // not \leanok and not \mathlibok
-  | 'leaves'     // nothing depends on it (rdep_count 0)
-  | 'roots'      // depends on nothing (dep_count 0)
+  | 'leaves'     // sink: nothing depends on it (rdep_count 0)
+  | 'roots'      // source: depends on nothing (dep_count 0)
   | 'isolated';  // no edges at all (dep 0 and rdep 0) — possibly dead
 
 const QUERY_LABEL: Record<DagQuery, string> = {
@@ -173,8 +173,8 @@ const QUERY_LABEL: Record<DagQuery, string> = {
   sorry: 'Has sorry',
   gaps: '∞ effort (no proof)',
   unproved: 'Unproved',
-  leaves: 'Leaves (nothing uses)',
-  roots: 'Roots (no deps)',
+  leaves: 'Sinks (nothing uses)',
+  roots: 'Sources (no deps)',
   isolated: 'Isolated (dead?)',
 };
 
@@ -414,7 +414,7 @@ export default function DagView() {
   }, [baseVisNodes]);
 
   // Adjacency, degree.
-  const { succ, pred, deg } = useMemo(() => {
+  const { pred, deg } = useMemo(() => {
     const succ = new Map<string, string[]>(), pred = new Map<string, string[]>(), deg = new Map<string, number>();
     for (const id of allNodes.keys()) { succ.set(id, []); pred.set(id, []); deg.set(id, 0); }
     for (const e of edges) {
@@ -423,7 +423,7 @@ export default function DagView() {
       deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
       deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
     }
-    return { succ, pred, deg };
+    return { pred, deg };
   }, [allNodes, edges]);
 
   const isOrphan = useCallback((id: string) => !((deg.get(id) ?? 0) > 0), [deg]);
@@ -465,16 +465,22 @@ export default function DagView() {
     return m;
   }, [allProjects]);
 
-  // Cone (ancestors ∪ descendants ∪ self) and ancestors-only walkers.
+  // Transitive dependency cone, direct dependencies, and ancestors-only walkers.
   const coneOf = useCallback((id: string) => {
     const out = new Set<string>([id]);
-    const walk = (adj: Map<string, string[]>, start: string) => {
-      const st = [start];
-      while (st.length) { const x = st.pop()!; for (const y of adj.get(x) ?? []) if (!out.has(y)) { out.add(y); st.push(y); } }
-    };
-    walk(pred, id); walk(succ, id);
+    const st = [...(pred.get(id) ?? [])];
+    while (st.length) {
+      const x = st.pop()!;
+      if (out.has(x)) continue;
+      out.add(x);
+      for (const y of pred.get(x) ?? []) st.push(y);
+    }
     return out;
-  }, [pred, succ]);
+  }, [pred]);
+
+  const directDepsOf = useCallback((id: string) => (
+    new Set<string>([id, ...(pred.get(id) ?? [])])
+  ), [pred]);
 
   const ancestorsOf = useCallback((id: string) => {
     const out = new Set<string>(); const st = [...(pred.get(id) ?? [])];
@@ -579,21 +585,21 @@ export default function DagView() {
     recomputeBounds();
   }, [recomputeBounds]);
 
-  const highlightCone = useCallback((id: string) => {
+  const highlightDirectDeps = useCallback((id: string) => {
     const nodesDS = nodesDSRef.current, edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS) return;
-    const cone = coneOf(id);
+    const directDeps = directDepsOf(id);
     // Custom (union) nodes ignore DataSet colour updates — dim via the ref +
     // redraw; standard nodes dim by colour-swapping as before.
-    if (merged.active) { dimRef.current = cone; netRef.current?.redraw(); }
+    if (merged.active) { dimRef.current = directDeps; netRef.current?.redraw(); }
     else nodesDS.update((nodesDS.getIds() as string[]).map((nid) =>
-      cone.has(nid) ? baseVisById.get(nid)
+      directDeps.has(nid) ? baseVisById.get(nid)
         : { id: nid, color: { background: '#e5e7eb', border: '#d1d5db' }, font: { color: '#cbd5e1' } }));
     edgesDS.update((edgesDS.get() as any[]).map((e) => {
-      const on = cone.has(e.from) && cone.has(e.to);
+      const on = e.to === id && directDeps.has(e.from);
       return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2.5 : 1 };
     }));
-  }, [coneOf, baseVisById, merged.active]);
+  }, [directDepsOf, baseVisById, merged.active]);
 
   // Base skin (no node cone selected): honour the highlight overlay if one is
   // active (dim non-matches but keep them on canvas), else full colour.
@@ -678,17 +684,17 @@ export default function DagView() {
     const id = jumpRef.current;
     if (id && (nodesDS.getIds() as string[]).includes(id)) {
       net.selectNodes([id]); net.focus(id, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } } as any);
-      highlightCone(id); jumpRef.current = null;
+      highlightDirectDeps(id); jumpRef.current = null;
     } else if (selIdRef.current && (nodesDS.getIds() as string[]).includes(selIdRef.current)) {
-      highlightCone(selIdRef.current);
+      highlightDirectDeps(selIdRef.current);
     }
-  }, [highlightCone]);
+  }, [highlightDirectDeps]);
   doJumpRef.current = doJump;
 
   // Keep latest imperative callbacks reachable from the once-registered handlers.
   useEffect(() => {
     cbRef.current = {
-      click: (p) => { const id = p?.nodes?.[0]; if (id) { setSelId(String(id)); highlightCone(String(id)); } else { setSelId(''); clearHighlight(); } },
+      click: (p) => { const id = p?.nodes?.[0]; if (id) { setSelId(String(id)); highlightDirectDeps(String(id)); } else { setSelId(''); clearHighlight(); } },
       dbl: (p) => { const id = p?.nodes?.[0]; if (id && allNodes.has(String(id))) { setFocus(String(id)); setSelId(String(id)); jumpRef.current = String(id); } },
       wheel: (e) => {
         const net = netRef.current; if (!net) return;
@@ -784,8 +790,9 @@ export default function DagView() {
   const stats = useMemo(() => {
     const vals = [...allNodes.values()];
     const bp = vals.filter((n) => n.type !== 'lean_aux');
-    const proved = bp.filter((n) => n.proved || n.mathlib_ok).length;
+    const proved = bp.filter((n) => n.proved).length;
     const mathlib = bp.filter((n) => n.mathlib_ok).length;
+    const complete = bp.filter(isDoneNode).length;
     const sorry = vals.filter((n) => n.has_sorry).length;
     const ready = bp.filter((n) => !isDoneNode(n) && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d))).length;
     const gaps = bp.filter((n) => !n.lean_name && !n.mathlib_ok).length;
@@ -797,10 +804,11 @@ export default function DagView() {
     let done = 0, remLower = 0, infNodes = 0;
     for (const n of vals) {
       if (n.proof_size_lean != null) done += n.proof_size_lean;
+      if (isDoneNode(n)) continue;
       if (n.effort_local == null) infNodes++; else remLower += n.effort_local;
     }
-    const pct = bp.length ? Math.round((100 * proved) / bp.length) : 0;
-    return { provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes, leaves, roots, isolated };
+    const pct = bp.length ? Math.round((100 * complete) / bp.length) : 0;
+    return { completeN: complete, provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes, leaves, roots, isolated };
   }, [allNodes, isDoneNode, doneIds]);
 
   const sel = selId ? allNodes.get(selId) : undefined;
@@ -946,9 +954,10 @@ export default function DagView() {
               <h4>Project</h4>
               <button className="dv-stats-toggle" title="Minimize" onClick={() => setStatsOpen(false)}>–</button>
             </div>
-            <div className="row"><span>Proved (\leanok)</span><span className="v done">{stats.provedN}/{stats.bpN} · {stats.pct}%</span></div>
+            <div className="row"><span>Complete</span><span className="v done">{stats.completeN}/{stats.bpN} · {stats.pct}%</span></div>
             <div className="bar"><span style={{ width: `${stats.pct}%` }} /></div>
-            {stats.mathlib > 0 && <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>}
+            <div className="row"><span>Lean-proved</span><span className="v done">{stats.provedN}</span></div>
+            <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>
             {qRow('With sorry', stats.sorry, 'sorry', stats.sorry ? 'inf' : '')}
             {qRow('Ready to formalize', stats.ready, 'frontier')}
             <div className="row"><span>Needs \lean{'{}'}</span><span className="v">{stats.gaps}</span></div>
@@ -956,8 +965,8 @@ export default function DagView() {
             <div className="sep" />
             <h4>Structure</h4>
             <div className="row"><span>Components</span><span className="v">{components.length}</span></div>
-            {qRow('Leaves', stats.leaves, 'leaves')}
-            {qRow('Roots', stats.roots, 'roots')}
+            {qRow('Sinks', stats.leaves, 'leaves')}
+            {qRow('Sources', stats.roots, 'roots')}
             {qRow('Isolated', stats.isolated, 'isolated', stats.isolated ? 'inf' : '')}
             <div className="sep" />
             <h4>Effort (chars)</h4>
@@ -1129,7 +1138,7 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, presence, o
           <div className="degree"><span className="degree-val">{n.rdep_count}</span><span className="degree-label">used by</span></div>
         </div>
         <div className="deps-sub">direct dependencies</div>
-        <DepList key={`direct-${n.id}`} items={n.uses} empty="none — axiom" onGoTo={onGoTo} />
+        <DepList key={`direct-${n.id}`} items={n.uses} empty="none - source" onGoTo={onGoTo} />
         <div className="deps-sub">indirect (transitive) dependencies</div>
         <DepList key={`indirect-${n.id}`} items={indirect} empty="none beyond the direct ones" onGoTo={onGoTo} />
       </div>

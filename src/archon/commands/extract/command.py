@@ -206,7 +206,15 @@ class ExtractCommand:
         except KeyboardInterrupt:
             log.info("Session ended")
 
-        self._gate_and_finalize()
+        try:
+            self._gate_and_finalize()
+        except KeyboardInterrupt:
+            # The verify gate (esp. `lake build`, on by default for merge) can
+            # run for minutes; a Ctrl+C here lands BEFORE finalize, so nothing
+            # is committed. Without a word the user is left wondering where —
+            # or whether — their merge went. Say exactly where it is.
+            self._announce_gate_interrupted()
+            raise typer.Exit(130)
 
     # ── private ─────────────────────────────────────────────────────────
 
@@ -442,6 +450,46 @@ class ExtractCommand:
             f"{self.mode.capitalize()} verified. Sandbox at {self.dest} is a "
             f"standalone archon project — run `archon dag` / `archon loop` there."
         )
+
+    def _announce_gate_interrupted(self) -> None:
+        """Explain where the work is when the gate is Ctrl+C'd before finalize.
+
+        The gate runs *after* the session, outside the interactive try/except,
+        and can take minutes (``lake build``). Interrupting it skips finalize,
+        so the in-place edits sit uncommitted in the working tree and the
+        sandbox carve sits in its inner git — neither is lost, but neither was
+        announced. Point the user straight at it.
+        """
+        log.rule()
+        log.warn("Verify gate interrupted (Ctrl+C) before it finished — "
+                 "nothing was finalized.")
+        if self.in_place:
+            log.info(
+                f"Your merged edits are LIVE in the working tree at "
+                f"{self.parent} — the in-place session edits the target "
+                f"directly. They were NOT committed to inner git (the gate "
+                f"didn't pass). Review with `git status` / `git diff` there."
+            )
+            src = f" --from {self.merge_source}" if self.merge_source else ""
+            log.info(
+                f"Verify + commit without rebuilding (skips the slow part): "
+                f"archon merge {self.parent}{src} --in-place --resume --no-build"
+            )
+            log.info(
+                "Or discard the merge and return to the pre-merge state: "
+                "`archon branch` (revert to the pre-merge snapshot in inner git)."
+            )
+        else:
+            log.info(
+                f"The carve is in the sandbox {self.dest} (the session's "
+                f"commits are in its inner git). Re-enter to retry the gate: "
+                f"archon merge {self.parent} --from {self.merge_source} "
+                f"--dest {self.dest} --resume --no-build"
+                if self.mode == "merge" else
+                f"The carve is in the sandbox {self.dest}. Re-enter to retry "
+                f"the gate: archon extract {self.parent} --dest {self.dest} "
+                f"--resume"
+            )
 
     def _finalize_in_place(self) -> None:
         """Commit the merged result to the target's inner git (`.archon/git-dir`)."""

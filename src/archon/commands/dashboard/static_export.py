@@ -305,8 +305,6 @@ class StaticDashboardExporter:
             mpath = member.get("path") if isinstance(member, dict) else None
             if not mpath:
                 continue
-            if Path(mpath).resolve() == self.project_path:
-                continue
             alias = self._alias_for(mpath)
             for endpoint in PER_PROJECT_ENDPOINTS:
                 self._enqueue(

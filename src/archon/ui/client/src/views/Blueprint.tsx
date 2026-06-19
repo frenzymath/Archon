@@ -137,7 +137,7 @@ export default function Blueprint() {
   const toggleOpen = useCallback((slug: string) => setOpen(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
   const toggleExpand = useCallback((slug: string) => setExpanded(v => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
 
-  const git = useDragResize(160, 70, 520);
+  const git = useDragResize(70, 70, 520);
   const [gitW, setGitW] = useState(800);
   const gitPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

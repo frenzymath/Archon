@@ -34,10 +34,20 @@ function scopeSwitchingEnabled(): boolean {
 export function getProjectScope(): string | null {
   if (!scopeSwitchingEnabled()) return null;
   try {
-    return localStorage.getItem(KEY) || null;
+    const stored = localStorage.getItem(KEY);
+    if (stored) {
+      if (!isStaticScope()) return stored;
+      const members = window.__ARCHON_STATIC__?.scopeMembers ?? [];
+      if (members.some((m) => m.path === stored)) return stored;
+    }
   } catch {
-    return null;
+    /* fall through to the static default */
   }
+  // Static scope exports snapshot member APIs under ?project=<public alias>.
+  // Treat the exported host project as the selected project from first load so
+  // Overview/DAG/Blueprint hit the same scoped URLs as the project switcher.
+  if (isStaticScope()) return window.__ARCHON_STATIC__?.projectPath || null;
+  return null;
 }
 
 export function setProjectScope(path: string | null): void {

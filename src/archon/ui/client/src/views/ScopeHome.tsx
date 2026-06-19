@@ -3,6 +3,71 @@ import { setProjectScope, getProjectScope } from '../lib/projectScope';
 import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './ScopeHome.module.css';
 
+interface ScopeMember {
+  name: string;
+  path: string;
+  has_dag: boolean;
+}
+
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]+/).filter(Boolean);
+}
+
+function isStrictPathAncestor(parent: string, child: string): boolean {
+  const pp = pathParts(parent);
+  const cp = pathParts(child);
+  return pp.length < cp.length && pp.every((part, i) => cp[i] === part);
+}
+
+function dropContainerMembers(members: ScopeMember[]): ScopeMember[] {
+  return members.filter((m) => m.has_dag || !members.some((n) => isStrictPathAncestor(m.path, n.path)));
+}
+
+function commonPrefixLen(items: string[][]): number {
+  if (items.length === 0) return 0;
+  let n = items[0].length;
+  for (const parts of items.slice(1)) {
+    let i = 0;
+    while (i < n && i < parts.length && parts[i] === items[0][i]) i += 1;
+    n = i;
+  }
+  return n;
+}
+
+function groupForMember(member: ScopeMember, commonLen: number): string {
+  const rel = pathParts(member.path).slice(commonLen);
+  return rel.length > 1 ? rel[0] : 'Projects';
+}
+
+type MemberRow =
+  | { type: 'folder'; key: string; label: string; depth: number }
+  | { type: 'member'; member: ScopeMember; tail: string[] };
+
+function tailForMember(member: ScopeMember, commonLen: number): string[] {
+  const rel = pathParts(member.path).slice(commonLen);
+  return rel.length > 1 ? rel.slice(1) : [member.name];
+}
+
+function rowsForMembers(members: ScopeMember[], commonLen: number): MemberRow[] {
+  const rows: MemberRow[] = [];
+  const seenFolders = new Set<string>();
+  for (const member of members) {
+    const tail = tailForMember(member, commonLen);
+    for (let i = 0; i < tail.length - 1; i += 1) {
+      const key = tail.slice(0, i + 1).join('/');
+      if (seenFolders.has(key)) continue;
+      seenFolders.add(key);
+      rows.push({ type: 'folder', key, label: tail[i], depth: i });
+    }
+    rows.push({ type: 'member', member, tail });
+  }
+  return rows;
+}
+
+function labelForMember(tail: string[]): string {
+  return tail[tail.length - 1];
+}
+
 export default function ScopeHome() {
   const { data: scope, isLoading } = useScope();
 
@@ -20,6 +85,16 @@ export default function ScopeHome() {
   }
 
   const activeScope = getProjectScope();
+  const members = dropContainerMembers((scope.members ?? []) as ScopeMember[])
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const commonLen = commonPrefixLen(members.map((m) => pathParts(m.path)));
+  const groups = members.reduce<Map<string, ScopeMember[]>>((acc, m) => {
+    const group = groupForMember(m, commonLen);
+    const groupMembers = acc.get(group) ?? [];
+    groupMembers.push(m);
+    acc.set(group, groupMembers);
+    return acc;
+  }, new Map());
 
   const handleSwitchProject = (path: string | null) => {
     setProjectScope(path);
@@ -41,43 +116,33 @@ export default function ScopeHome() {
       <aside className={styles.sidebar}>
         <h2 className={styles.sidebarTitle}>Member Projects</h2>
         <div className={styles.projectList}>
-          <button
-            className={`${styles.projectButton} ${!activeScope ? styles.active : ''}`}
-            onClick={() => handleSwitchProject(null)}
-          >
-            <div className={styles.projectName}>Meta Scope View (Union)</div>
-            <div className={styles.projectPath}>{scope.scopePath}</div>
-          </button>
-          {scope.members?.map((m) => (
-            <button
-              key={m.path}
-              className={`${styles.projectButton} ${activeScope === m.path ? styles.active : ''}`}
-              onClick={() => handleSwitchProject(m.path)}
-            >
-              <div className={styles.projectName}>
-                {m.name} {!m.has_dag && <span className={styles.noDagBadge}>no DAG</span>}
-              </div>
-              <div className={styles.projectPath}>{m.path}</div>
-            </button>
+          {[...groups.entries()].map(([group, groupMembers]) => (
+            <div key={group} className={styles.projectGroup}>
+              <div className={styles.projectGroupTitle}>{group}</div>
+              {rowsForMembers(groupMembers, commonLen).map((row) => row.type === 'folder' ? (
+                <div
+                  key={`folder-${row.key}`}
+                  className={styles.projectFolderTitle}
+                >
+                  {row.label}
+                </div>
+              ) : (
+                <button
+                  key={row.member.path}
+                  className={`${styles.projectButton} ${activeScope === row.member.path ? styles.active : ''}`}
+                  onClick={() => handleSwitchProject(row.member.path)}
+                >
+                  <div className={styles.projectName}>
+                    {labelForMember(row.tail)} {!row.member.has_dag && <span className={styles.noDagBadge}>no DAG</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       </aside>
 
       <section className={styles.content}>
-        {scope.readme ? (
-          <div className={styles.card}>
-            <h2 className={styles.cardTitle}>Scope README</h2>
-            <div className={styles.markdownWrapper}>
-              <MarkdownBlock content={scope.readme} />
-            </div>
-          </div>
-        ) : (
-          <div className={`${styles.card} ${styles.placeholderCard}`}>
-            <h2 className={styles.cardTitle}>Scope README</h2>
-            <p className={styles.placeholderText}>No README.md found in the scope root folder.</p>
-          </div>
-        )}
-
         {scope.roadmap ? (
           <div className={styles.card}>
             <h2 className={styles.cardTitle}>Scope Roadmap</h2>
@@ -89,6 +154,21 @@ export default function ScopeHome() {
           <div className={`${styles.card} ${styles.placeholderCard}`}>
             <h2 className={styles.cardTitle}>Scope Roadmap</h2>
             <p className={styles.placeholderText}>No roadmap generated yet. Run <code>archon scope roadmap</code> in the scope directory to create it.</p>
+          </div>
+        )}
+
+
+        {scope.readme ? (
+          <div className={styles.card}>
+            <h2 className={styles.cardTitle}>Scope README</h2>
+            <div className={styles.markdownWrapper}>
+              <MarkdownBlock content={scope.readme} />
+            </div>
+          </div>
+        ) : (
+          <div className={`${styles.card} ${styles.placeholderCard}`}>
+            <h2 className={styles.cardTitle}>Scope README</h2>
+            <p className={styles.placeholderText}>No README.md found in the scope root folder.</p>
           </div>
         )}
       </section>

@@ -23,6 +23,20 @@ async function apiKey(path: string): Promise<string> {
   return hex;
 }
 
+function unscopedDefaultProjectPath(path: string): string | null {
+  const cfg = window.__ARCHON_STATIC__;
+  if (!cfg?.scopePath || !cfg.projectPath) return null;
+  try {
+    const url = new URL(path, window.location.origin);
+    if (url.searchParams.get('project') !== cfg.projectPath) return null;
+    url.searchParams.delete('project');
+    const search = url.searchParams.toString();
+    return `${url.pathname}${search ? `?${search}` : ''}`;
+  } catch {
+    return null;
+  }
+}
+
 function apiPath(input: RequestInfo | URL): string | null {
   if (typeof input === 'string') {
     if (input.startsWith('/api/')) return input;
@@ -66,7 +80,12 @@ export function installStaticFetch(): void {
     const path = apiPath(input);
     if (!path) return orig(input, init);
     const key = await apiKey(path);
-    return orig(`./data/api/${key}.json`, init);
+    const res = await orig(`./data/api/${key}.json`, init);
+    if (res.ok) return res;
+    const fallback = unscopedDefaultProjectPath(path);
+    if (!fallback) return res;
+    const fallbackKey = await apiKey(fallback);
+    return orig(`./data/api/${fallbackKey}.json`, init);
   }) as typeof window.fetch;
 }
 

@@ -36,7 +36,9 @@ export default function App() {
   const { data: scope } = useScope();
   const isStatic = isStaticDashboard();
   const staticScope = isStaticScope();
-  const inScopeMode = scope?.inScope;
+  const inScopeMode = !!scope?.inScope;
+  const showScopeHome = inScopeMode;
+  const showCode = isStatic;
   const projectScope = getProjectScope();
   // In live mode the project switcher always shows. In static mode it only
   // shows when the snapshot was built for a scope (and thus has per-member
@@ -55,7 +57,7 @@ export default function App() {
         {isStatic && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
         {showProjectSwitcher && <ProjectSwitcher />}
         <nav className="header-nav">
-          {inScopeMode && (
+          {showScopeHome && (
             <NavLink to="/scope" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
               Scope Home
             </NavLink>
@@ -63,7 +65,7 @@ export default function App() {
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
-          <NavLink to="/code" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Code</NavLink>
+          {showCode && <NavLink to="/code" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Code</NavLink>}
           {!isStatic && <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>}
           {!isStatic && <NavLink to="/diffs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Diffs</NavLink>}
           <NavLink to="/journal" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Journal</NavLink>
@@ -79,8 +81,8 @@ export default function App() {
           <Route path="/graph" element={<Navigate to="/dag" replace />} />
           <Route path="/dag" element={<DagView />} />
           <Route path="/blueprint" element={<Blueprint />} />
-          <Route path="/code" element={<CodeView />} />
-          <Route path="/scope" element={<ScopeHome />} />
+          <Route path="/code" element={showCode ? <CodeView /> : <Navigate to="/diffs" replace />} />
+          <Route path="/scope" element={showScopeHome ? <ScopeHome /> : <Navigate to="/" replace />} />
           <Route path="/logs" element={isStatic ? <Navigate to="/" replace /> : <LogViewer />} />
           <Route path="/diffs" element={isStatic ? <Navigate to="/" replace /> : <DiffPlayback />} />
           <Route path="/journal" element={<Journal />} />
