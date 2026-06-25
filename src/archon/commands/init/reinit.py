@@ -187,6 +187,7 @@ class PromptMerger:
         log.phase(0, "Reconciling local vs. bundled Archon files")
         log.step("Launching the configured harness to walk you through the differences file by file.")
 
+        project_path = self.state_dir.parent
         cfg = load_project_config(project_path)
         harness = resolve_role_harness(cfg, "init-merge")
         descriptor = load_harness_descriptor(cfg, harness)
@@ -198,7 +199,6 @@ class PromptMerger:
             self._print_diff_summary(staging)
             return
 
-        project_path = self.state_dir.parent
         legacy_agents_dir = project_path / ".claude" / "agents"
         legacy_agents = [
             legacy_agents_dir / f"{name}.md"
