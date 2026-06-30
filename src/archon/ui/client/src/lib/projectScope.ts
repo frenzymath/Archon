@@ -8,6 +8,8 @@
  * existing hooks switch with no per-call changes. Selecting "this project"
  * clears the scope.
  */
+import { apiUrl } from '../utils/constants';
+
 const KEY = 'archon.projectScope';
 
 export function getProjectScope(): string | null {
@@ -46,12 +48,12 @@ export function withProjectScope(url: string): string {
 export function installFetchScope(): void {
   const orig = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    if (
-      typeof input === 'string' &&
-      input.startsWith('/api/') &&
-      !input.startsWith('/api/peer-projects')
-    ) {
-      return orig(withProjectScope(input), init);
+    if (typeof input === 'string' && input.startsWith('/api/')) {
+      // /api/peer-projects is never scoped (the switcher always lists the base
+      // project's peers); everything else is scoped to the selected peer.
+      const scoped = input.startsWith('/api/peer-projects') ? input : withProjectScope(input);
+      // Prefix the reverse-proxy base so /api/* works under a path prefix.
+      return orig(apiUrl(scoped), init);
     }
     return orig(input, init);
   }) as typeof window.fetch;
