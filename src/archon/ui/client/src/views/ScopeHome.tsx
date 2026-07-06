@@ -1,5 +1,6 @@
 import { useScope } from '../hooks/useApi';
 import { setProjectScope, getProjectScope } from '../lib/projectScope';
+import { apiUrl } from '../utils/constants';
 import MarkdownBlock from '../components/MarkdownBlock';
 import styles from './ScopeHome.module.css';
 
@@ -106,7 +107,9 @@ export default function ScopeHome() {
     if (window.location.hash.startsWith('#/')) {
       window.location.hash = '#/scope';
     } else {
-      window.history.replaceState(null, '', '/scope');
+      // apiUrl keeps the URL under BASE_URL, so a path-prefix reverse proxy
+      // (and the router basename) is preserved rather than jumping to origin root.
+      window.history.replaceState(null, '', apiUrl('/scope'));
     }
     window.location.reload();
   };

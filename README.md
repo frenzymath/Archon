@@ -231,11 +231,11 @@ Please note that the next version of Archon may push this functionality further,
 
 Run `archon peers` to see what your globs resolve to.
 
-**Giving a peer feedback (the inbox).** Reuse is read-only with one exception: when reusing a peer's declaration forces you to reshape it (a more general statement, a cleaner signature), you can tell them so the definitions converge. This is the *only* sanctioned write into a peer — `archon peers note` appends to `<peer>/.archon/inbox/<your-project>.yaml` (one file per author, keyed by Lean name) and nothing else:
+**Giving a peer feedback (the inbox).** Reuse is read-only with one exception: when reusing a peer's declaration forces you to reshape it (a more general statement, a cleaner signature), you can tell them so the definitions converge. This is the *only* sanctioned write into a peer — `archon peers pr` (submit a generalized declaration) and `archon peers issue` (raise a mathematical/architectural concern) append to `<peer>/.archon/inbox/<your-project>.yaml` (one file per author, keyed by Lean name) and nothing else:
 
 ```bash
-archon peers note --target core --lean-name MeasureTheory.foo \
-  --suggestion "generalize the σ-finite hypothesis" \
+archon peers pr --target core --lean-name MeasureTheory.foo \
+  --code "<the generalized declaration from your project>" \
   --rationale "this project had to re-prove it more generally"
 ```
 
@@ -255,7 +255,7 @@ archon scope dashboard                  # the dashboard over all members (switch
 archon scope discuss                    # an interactive session about global progress
 ```
 
-`archon scope roadmap` builds the union *merge DAG* across members (one node per Lean name, with which projects declare/proved/need it) and reports, with no model in the loop: an **unblock matrix** (which project's progress would advance another, and on which declarations), **duplicated work** (declarations being proved in parallel — candidates to do once and share with `archon extract`), a **leverage ranking** (work here to advance the most), and **stalled** members (everything they need is already proved elsewhere in the scope). Output is written to `.archon-scope/roadmap.md` and `.archon-scope/roadmap.json`. `archon scope discuss` layers a conversation on top of those numbers to propose merges, extractions, and peer notes (read-only to the members; it only writes with your consent).
+`archon scope roadmap` builds the union *merge DAG* across members (one node per Lean name, with which projects declare/proved/need it) and reports, with no model in the loop: an **unblock matrix** (which project's progress would advance another, and on which declarations), **duplicated work** (declarations being proved in parallel — candidates to do once and share with `archon extract`), a **leverage ranking** (work here to advance the most), and **stalled** members (everything they need is already proved elsewhere in the scope). Output is written to `roadmap.md` at the scope root (next to `README.md`, and rendered on the Pages home view) and `.archon-scope/roadmap.json`. `archon scope discuss` layers a conversation on top of those numbers to propose merges, extractions, and peer notes (read-only to the members; it only writes with your consent).
 
 ### 3. Write blueprints to constitute a consistent DAG
 

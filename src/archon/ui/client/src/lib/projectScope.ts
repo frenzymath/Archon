@@ -88,8 +88,12 @@ export function installFetchScope(): void {
       const noScope =
         input.startsWith('/api/peer-projects') || input.startsWith('/api/scope');
       const scoped = noScope ? input : withProjectScope(input);
-      // Prefix the reverse-proxy base so /api/* works under a path prefix.
-      return orig(apiUrl(scoped), init);
+      // Live mode: prefix the reverse-proxy base so /api/* works under a path
+      // prefix. Static scope export: keep the URL rooted at /api so the
+      // static-fetch wrapper in staticMode.ts (it matches on a /api/ pathname)
+      // maps it to ./data/api/*.json instead of hitting the network — apiUrl()
+      // would base-prefix it (e.g. /repo/api/…) and bypass that matcher.
+      return orig(staticDashboard() ? scoped : apiUrl(scoped), init);
     }
     return orig(input, init);
   }) as typeof window.fetch;
