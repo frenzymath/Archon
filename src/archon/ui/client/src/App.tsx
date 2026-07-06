@@ -62,7 +62,7 @@ export default function App() {
               Scope Home
             </NavLink>
           )}
-          <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
+          <NavLink to={inScopeMode ? '/overview' : '/'} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
           {showCode && <NavLink to="/code" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Code</NavLink>}
@@ -77,6 +77,12 @@ export default function App() {
             path="/"
             element={inScopeMode && !projectScope ? <Navigate to="/scope" replace /> : <Overview />}
           />
+          {/* Explicit Overview route so the host/current project's Overview is
+              reachable in scope mode. Selecting the host clears the project
+              scope to null, which makes "/" redirect to Scope Home; the nav
+              link targets this route instead so Overview opens for every
+              project (host included), not just peers. */}
+          <Route path="/overview" element={<Overview />} />
           {/* The old proof-graph view is superseded by the DAG. */}
           <Route path="/graph" element={<Navigate to="/dag" replace />} />
           <Route path="/dag" element={<DagView />} />
