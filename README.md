@@ -353,6 +353,8 @@ If you disabled the auto-launched dashboard, or want to look at a project after 
 archon dashboard /path/to/your-lean-project -p <port>
 ```
 
+The dashboard also works **behind a path-prefix reverse proxy** — e.g. JupyterHub's `jupyter-server-proxy`, code-server's `/proxy/<port>/`, or an nginx / k8s-ingress sub-path. It detects the mount prefix at runtime and routes its API/WebSocket calls through it, so no configuration is needed; served at the origin root (the usual `localhost:<port>` case) it behaves exactly as before.
+
 #### Lean blueprint
 
 The planner maintains blueprints with [leanblueprint](https://github.com/PatrickMassot/leanblueprint), which `archon setup` and `archon init` install and configure. [Terence Tao's blog post](https://terrytao.wordpress.com/2023/11/18/formalizing-the-proof-of-pfr-in-lean4-using-blueprint-a-short-tour/) explains how blueprints work and why they help.
