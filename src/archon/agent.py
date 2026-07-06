@@ -1623,6 +1623,37 @@ def _terminate_process(proc: subprocess.Popen, *, sig: int = signal.SIGTERM) -> 
             pass
 
 
+_SPAWN_RETRIES = 5
+
+
+def _spawn_agent_proc(cmd: list[str], **popen_kwargs) -> subprocess.Popen:
+    """``subprocess.Popen`` that rides out a CLI auto-update binary swap.
+
+    The Claude Code CLI updates itself in the background by replacing its
+    launcher on disk. A spawn that lands in that brief window raises
+    ``FileNotFoundError`` for ``claude`` even though it is installed and on
+    ``PATH`` the whole time — and left unhandled it takes the entire loop
+    down mid-run (issue #30). Retry a few times with a short exponential
+    backoff so the swap completes and the spawn succeeds; a genuinely
+    missing binary still surfaces the same error after ~4s.
+    """
+    delay = 0.25
+    for attempt in range(_SPAWN_RETRIES):
+        try:
+            return subprocess.Popen(cmd, **popen_kwargs)
+        except FileNotFoundError:
+            if attempt == _SPAWN_RETRIES - 1:
+                raise
+            log.warn(
+                f"spawn of {cmd[0]!r} failed with FileNotFoundError "
+                f"(likely a CLI auto-update binary swap) — retrying in "
+                f"{delay:.2f}s ({attempt + 1}/{_SPAWN_RETRIES - 1})"
+            )
+            time.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 # ── streamed-run supervisor ───────────────────────────────────────────
 
 
@@ -1701,7 +1732,7 @@ def supervise_streamed_run(
 
     with open(stderr_dest, "a") as stderr_file:
         if parser_cmd is not None:
-            agent_proc = subprocess.Popen(
+            agent_proc = _spawn_agent_proc(
                 agent_cmd,
                 # stdin=DEVNULL is load-bearing for the codex runner: `codex
                 # exec [PROMPT]` treats a piped (non-TTY) stdin as "read more
@@ -1729,7 +1760,7 @@ def supervise_streamed_run(
             watched = parser_proc
         else:
             stdout_file = open(stdout_dest, "a")  # type: ignore[arg-type]
-            agent_proc = subprocess.Popen(
+            agent_proc = _spawn_agent_proc(
                 agent_cmd,
                 stdin=subprocess.DEVNULL,  # see note above — codex blocks on inherited stdin
                 stdout=stdout_file,
