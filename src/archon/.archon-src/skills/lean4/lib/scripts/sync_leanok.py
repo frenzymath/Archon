@@ -167,7 +167,7 @@ def _scan_lean_decls(project_path: Path) -> dict[str, Path]:
     for lean in project_path.rglob('*.lean'):
         # Skip dependencies and build artefacts.
         parts = lean.parts
-        if any(p in {'.lake', 'lake-packages', '_target', 'build'} for p in parts):
+        if any(p in {'.lake', 'lake-packages', '_target', 'build', '.archon'} for p in parts):
             continue
         try:
             text = lean.read_text(encoding='utf-8', errors='ignore')
