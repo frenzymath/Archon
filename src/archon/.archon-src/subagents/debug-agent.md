@@ -1,6 +1,6 @@
 ---
 name: debug-agent
-default_enabled: true
+default_enabled: false
 write_domain: "."
 dispatcher_notes: "Launch this agent when you encounter a persistent infrastructure, model capability, or environmental error (e.g. model disabled, rate limits, mysterious python/setup errors) that is not a pure Lean syntax error. It will investigate the error, check Archon's config/source, and apply non-destructive fixes or report a detailed diagnosis."
 ---

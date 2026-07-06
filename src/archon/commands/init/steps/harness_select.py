@@ -91,7 +91,7 @@ def resolve_harness_selection(ctx):
             )
             raise typer.Exit(1)
         if normalized == "mixed":
-            return selection_from_choice("3", _prompt_role_choices())
+            return selection_from_choice("4", _prompt_role_choices())
         return selection_from_choice(normalized)
     return prompt_harness_selection()
 

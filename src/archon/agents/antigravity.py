@@ -110,7 +110,13 @@ def extract_tool_result(fields: dict[str, bytes], step_type: int) -> str | None:
             # Ignore JSON strings
             if s.startswith('{') and s.endswith('}'):
                 continue
-                
+            # A clean tool result is human-readable text. Protobuf framing
+            # bytes (e.g. the b"\x0a\x06" length prefix wrapping b"hello\n")
+            # decode to strings carrying control characters; skip them so the
+            # decoded inner field wins over its raw framed container.
+            if any(ord(ch) < 0x20 and ch not in '\t\n\r' for ch in s):
+                continue
+
             if len(s) > best_len:
                 best_len = len(s)
                 best_str = s

@@ -2015,10 +2015,9 @@ def _runner_from_descriptor(
     if runner == "codex":
         from archon.agents.codex import CodexAgent
 
-        if not descriptor.model and model:
-            import dataclasses
-            descriptor = dataclasses.replace(descriptor, model=model)
-
+        # Don't leak the ambient Claude default model (e.g. "opus") into codex:
+        # it uses its own native ~/.codex default unless the descriptor names a
+        # codex-compatible model. Passing a Claude id here would emit `-m opus`.
         return CodexAgent(descriptor=descriptor, role=role)
     if runner == "antigravity":
         from archon.agents.antigravity import AntigravityAgent
