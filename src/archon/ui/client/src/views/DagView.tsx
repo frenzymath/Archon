@@ -5,7 +5,10 @@
  *
  *  - nodes are dots whose colour encodes *local effort* (green = done/0,
  *    yellow→orange ramp for growing draft effort, red = ∞ no-proof);
- *  - force-directed (forceAtlas2) layout, direction shown by arrows;
+ *  - two layouts (toolbar toggle): force-directed (forceAtlas2), which shows
+ *    how central/heavily-used a node is, and layered-by-depth, which ranks
+ *    nodes by longest dependency chain and stacks them top-down so foundations
+ *    sit above the results that rest on them; direction shown by arrows;
  *  - per-node status glyphs (✓ Lean proof · ⚠ sorry · λ Lean decl · ★ LaTeX
  *    proof · § statement);
  *  - clicking a node lights up its direct dependencies; double-click focuses
@@ -153,6 +156,55 @@ const PHYSICS_OPTS = {
 const ZOOM_MAX = 3.0;
 const FIT_FLOOR = 0.34;
 
+type LayoutMode = 'force' | 'layered';
+
+// Layered-by-depth layout. Ranks each node by its longest dependency chain
+// (Kahn longest-path: foundations that depend on nothing sit at rank 0),
+// stacks ranks top-down, and centres each rank on a shared vertical axis, so
+// every node is drawn above the things that depend on it. Positions are
+// computed once and pinned (physics stays off). Cross-layer edges are drawn
+// straight — legible layers are the goal, not crossing-free routing.
+const LAYER_GAP = 165;   // vertical gap between ranks
+const NODE_GAP = 90;     // horizontal gap between nodes within a rank
+function layeredPositions(
+  ids: string[],
+  usesOf: (id: string) => string[],
+): Map<string, { x: number; y: number }> {
+  const idset = new Set(ids);
+  const rank = new Map<string, number>();
+  const state = new Map<string, 1 | 2>();  // 1 = in progress, 2 = done
+  const visit = (id: string): number => {
+    const st = state.get(id);
+    if (st === 2) return rank.get(id)!;
+    if (st === 1) return 0;                 // cycle guard: treat back-edge as rank 0
+    state.set(id, 1);
+    let r = 0;
+    for (const u of usesOf(id)) {
+      if (u === id || !idset.has(u)) continue;
+      r = Math.max(r, visit(u) + 1);
+    }
+    state.set(id, 2);
+    rank.set(id, r);
+    return r;
+  };
+  for (const id of ids) visit(id);
+
+  const byRank = new Map<number, string[]>();
+  for (const id of ids) {
+    const r = rank.get(id) ?? 0;
+    let layer = byRank.get(r);
+    if (!layer) { layer = []; byRank.set(r, layer); }
+    layer.push(id);
+  }
+  const pos = new Map<string, { x: number; y: number }>();
+  for (const [r, layer] of byRank) {
+    layer.sort();  // deterministic left-to-right order within a rank
+    const offset = (layer.length - 1) / 2;
+    layer.forEach((id, i) => pos.set(id, { x: (i - offset) * NODE_GAP, y: r * LAYER_GAP }));
+  }
+  return pos;
+}
+
 type NodeSet = 'union' | 'blueprint' | 'lean';
 // Review-oriented graph queries (what to do next / what's wrong / what's dead).
 type DagQuery =
@@ -264,6 +316,7 @@ export default function DagView() {
   const doJumpRef = useRef<() => void>(() => {});
 
   // Filter / selection state.
+  const [layout, setLayout] = useState<LayoutMode>('force');
   const [nodeset, setNodeset] = useState<NodeSet>('union');
   const [componentSel, setComponentSel] = useState<number | null>(null);
   const [chapterSel, setChapterSel] = useState<string>('');
@@ -751,13 +804,27 @@ export default function DagView() {
     const nodes = baseVisNodes.filter((n) => visibleSet.has(n.id as string));
     const es = edges.filter((e) => visibleSet.has(e.from) && visibleSet.has(e.to)).map((e, i) => ({ id: i, from: e.from, to: e.to, arrows: 'to' }));
     nodesDS.clear(); edgesDS.clear();
-    nodesDS.add(nodes); edgesDS.add(es);
-    if (nodes.length > 1) net.setOptions({ physics: PHYSICS_OPTS as any });
-    else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0); }
+    if (layout === 'layered' && nodes.length > 1) {
+      // Pinned layered layout: compute ranks from the visible subgraph and
+      // fix each node's position, then keep physics off so nothing drifts.
+      const ids = nodes.map((n) => n.id as string);
+      const pos = layeredPositions(ids, (id) => allNodes.get(id)?.uses ?? []);
+      const placed = nodes.map((n) => {
+        const p = pos.get(n.id as string);
+        return p ? { ...n, x: p.x, y: p.y, fixed: { x: true, y: true } } : n;
+      });
+      nodesDS.add(placed); edgesDS.add(es);
+      net.setOptions({ physics: false });
+      setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0);
+    } else {
+      nodesDS.add(nodes); edgesDS.add(es);
+      if (nodes.length > 1) net.setOptions({ physics: PHYSICS_OPTS as any });
+      else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0); }
+    }
     // Deps intentionally exclude selection-derived callbacks (fitFloored/doJump
     // are stable) so the canvas only rebuilds on real filter/data changes, not
     // when a node is clicked. eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleSet, baseVisNodes, edges]);
+  }, [visibleSet, baseVisNodes, edges, layout, allNodes]);
 
   // Re-skin when the highlight overlay changes (slider / file / type / query),
   // unless a node cone is currently selected (that takes visual precedence).
@@ -898,6 +965,10 @@ export default function DagView() {
             </div>
           </details>
         )}
+        <select className="dv-select" value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)} title="Graph layout: force-directed shows centrality; layered stacks nodes by dependency depth">
+          <option value="force">Force-directed</option>
+          <option value="layered">Layered · by depth</option>
+        </select>
         <select className="dv-select" value={nodeset} onChange={(e) => { setNodeset(e.target.value as NodeSet); setFocus(null); }} title="Which declarations to include">
           <option value="union">All declarations</option>
           <option value="blueprint">Blueprint only</option>
