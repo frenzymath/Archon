@@ -167,7 +167,7 @@ class StaticDashboardExporter:
 
     def _build_path_alias(self) -> dict[str, str]:
         alias: dict[str, str] = {}
-        host_alias = self.project_path.name
+        host_alias = self._public_path_alias(self.project_path)
         alias[str(self.project_path)] = host_alias
         if self.scope_path is not None:
             alias[str(self.scope_path)] = self.scope_path.name
@@ -175,13 +175,21 @@ class StaticDashboardExporter:
             if not isinstance(m, dict):
                 continue
             mp = m.get("path")
-            name = m.get("name")
-            if mp and name:
-                alias[str(Path(mp).resolve())] = name
+            if mp:
+                alias[str(Path(mp).resolve())] = self._public_path_alias(Path(mp))
         return alias
 
+    def _public_path_alias(self, path: Path) -> str:
+        resolved = path.resolve()
+        if self.scope_path is not None:
+            try:
+                return resolved.relative_to(self.scope_path).as_posix()
+            except ValueError:
+                pass
+        return resolved.name
+
     def _alias_for(self, abs_path: str) -> str:
-        """Return the public ID for ``abs_path`` (member name, or its basename)."""
+        """Return the public ID for ``abs_path`` (scope-relative, or basename)."""
         resolved = str(Path(abs_path).resolve())
         return self.path_alias.get(resolved) or Path(abs_path).name
 

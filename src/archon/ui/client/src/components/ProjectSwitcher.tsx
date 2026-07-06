@@ -53,36 +53,13 @@ function groupForProject(p: ProjectOption, commonLen: number): string {
   return rel.length > 1 ? rel[0] : 'Projects';
 }
 
-type ProjectRow =
-  | { type: 'folder'; key: string; label: string; depth: number }
-  | { type: 'project'; project: ProjectOption; tail: string[] };
-
-const SELECT_INDENT = '\u00a0\u00a0\u00a0\u00a0';
-
 function tailForProject(p: ProjectOption, commonLen: number): string[] {
   const rel = pathParts(p.path).slice(commonLen);
   return rel.length > 1 ? rel.slice(1) : [p.name];
 }
 
-function rowsForProjects(projects: ProjectOption[], commonLen: number): ProjectRow[] {
-  const rows: ProjectRow[] = [];
-  const seenFolders = new Set<string>();
-  for (const p of projects) {
-    const tail = tailForProject(p, commonLen);
-    for (let i = 0; i < tail.length - 1; i += 1) {
-      const key = tail.slice(0, i + 1).join('/');
-      if (seenFolders.has(key)) continue;
-      seenFolders.add(key);
-      rows.push({ type: 'folder', key, label: tail[i], depth: i });
-    }
-    rows.push({ type: 'project', project: p, tail });
-  }
-  return rows;
-}
-
 function labelForProject(p: ProjectOption, tail: string[]): string {
-  const prefix = tail.length > 1 ? SELECT_INDENT.repeat(tail.length - 1) : '';
-  return `${prefix}${tail[tail.length - 1]}${p.current ? ' (this project)' : ''}${p.has_dag ? '' : ' - no DAG'}`;
+  return `${tail.join('/')}${p.current ? ' (this project)' : ''}${p.has_dag ? '' : ' - no DAG'}`;
 }
 
 export function ProjectSwitcher() {
@@ -128,15 +105,14 @@ export function ProjectSwitcher() {
     >
       {[...groups.entries()].map(([group, members]) => (
         <optgroup key={group} label={group}>
-          {rowsForProjects(members, commonLen).map(row => row.type === 'folder' ? (
-            <option key={`folder-${row.key}`} disabled>
-              {SELECT_INDENT.repeat(row.depth)}{row.label}
+          {members.map(project => {
+            const tail = tailForProject(project, commonLen);
+            return (
+              <option key={project.path} value={project.path} title={project.path}>
+                {labelForProject(project, tail)}
             </option>
-          ) : (
-            <option key={row.project.path} value={row.project.path} title={row.project.path}>
-              {labelForProject(row.project, row.tail)}
-            </option>
-          ))}
+            );
+          })}
         </optgroup>
       ))}
     </select>
