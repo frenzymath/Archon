@@ -14,7 +14,9 @@ import typer
 
 from archon import log
 from archon.agent import ClaudeBackend, DEFAULT_MODEL
+from archon.commands.tooling.stage import scan_project
 from archon.commands.tooling.version import warn_if_mismatch
+from archon.state import write_stage
 
 from .context import InitContext
 from .reinit import PromptMerger, ReinitController
@@ -32,7 +34,7 @@ from .steps import (
     StateDirStep,
     VersionStampStep,
 )
-from .utils import fail_permission, has
+from .utils import fail_permission, has, parse_stage
 
 
 class InitCommand:
@@ -177,7 +179,35 @@ class InitCommand:
             GitHooksStep, VersionStampStep,
         ):
             step_cls(self.ctx).run()
+        self._reconcile_stage_if_stuck()
         log.success("Verification complete.")
+
+    def _reconcile_stage_if_stuck(self) -> None:
+        """Advance PROGRESS.md out of 'init' when the project already has Lean content.
+
+        A re-init (keep/merge/overwrite) never runs the interactive semantic
+        pass, so a project whose PROGRESS.md was left at 'init' — but which
+        already has declarations on disk — would otherwise stay wedged there
+        and `archon loop` / `archon dag` would refuse to run. Bootstrap only
+        *logs* the detected stage; here we actually write it. Empty projects
+        (no declarations) are left at 'init' so a proper init can set them up.
+        """
+        ctx = self.ctx
+        progress_md = ctx.state_dir / "PROGRESS.md"
+        if parse_stage(progress_md) != "init":
+            return
+        report = scan_project(ctx.project_path)
+        if report.decl_count > 0 and report.stage != "init":
+            log.warn(
+                f"Project already has {report.decl_count} declaration(s) but "
+                f"PROGRESS.md was stuck at 'init' — advancing to '{report.stage}'."
+            )
+            log.step(
+                f"If that's not what you expected, edit the '## Current Stage' "
+                f"section of {progress_md} and set the stage manually "
+                f"(one of: init, autoformalize, prover, polish)."
+            )
+            write_stage(progress_md, report.stage)
 
     def _run_full_init(self) -> None:
         """Deterministic setup -> optional semantic pass -> final stamps."""
@@ -193,6 +223,7 @@ class InitCommand:
         if ctx.fresh:
             SemanticPassStep(ctx).run()
         else:
+            self._reconcile_stage_if_stuck()
             log.success("Merge-based re-init complete.")
             log.step(f"Next: archon loop {ctx.project_path}")
 

@@ -419,15 +419,24 @@ def _add_leanok(body: str) -> str:
     return ''.join(lines[:insert_at]) + new_line + ''.join(lines[insert_at:])
 
 
-_LEANOK_LINE_RE = re.compile(r'^[ \t]*\\leanok\b[^\n]*\n?', re.MULTILINE)
+# A line whose *only* content is ``\leanok`` (optionally indented, with
+# trailing whitespace). We deliberately anchor the end of the line so we never
+# swallow whatever follows the macro — a ``\leanok \(x = y\)`` form must keep
+# its math, or we orphan the closing delimiter and crash plastex.
+_LEANOK_LINE_RE = re.compile(r'^[ \t]*\\leanok[ \t]*$\n?', re.MULTILINE)
 
 
 def _remove_leanok(body: str) -> str:
-    """Drop ``\\leanok`` and any inline trailing whitespace it sat on."""
+    """Drop ``\\leanok`` without disturbing surrounding prose or math.
+
+    Whole-line form (``\\leanok`` alone on its line) takes the line with it.
+    Otherwise only the bare macro token is stripped, leaving any trailing
+    text and math delimiters on that line intact.
+    """
     new = _LEANOK_LINE_RE.sub('', body)
     if new != body:
         return new
-    # Inline form (rare): just strip the macro itself.
+    # Inline form: strip just the macro, keep the rest of the line.
     return _LEANOK_RE.sub('', body)
 
 

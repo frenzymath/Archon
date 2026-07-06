@@ -9,6 +9,7 @@ description = "Autonomous Lean 4 formalization system"
 requires-python = ">=3.10"
 dependencies = [
     "typer",
+    "click",
     "pydantic",
     "PyYAML",
     "leandag @ git+https://github.com/AxelDlv00/LeanDAG.git@v0.1.0",
