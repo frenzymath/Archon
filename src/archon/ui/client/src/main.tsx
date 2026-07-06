@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
+import { BASE_URL } from './utils/constants';
 import App from './App';
 import { installFetchScope } from './lib/projectScope';
 import { installStaticFetch, isStaticDashboard } from './lib/staticMode';
@@ -14,6 +15,12 @@ installStaticFetch();
 installFetchScope();
 
 const Router = isStaticDashboard() ? HashRouter : BrowserRouter;
+// The live dashboard may sit behind a path-prefix reverse proxy, so the
+// BrowserRouter needs the derived base as its basename. The static export
+// uses HashRouter (routes live in the fragment) and needs no basename.
+const routerBasename = isStaticDashboard()
+  ? undefined
+  : BASE_URL.replace(/\/+$/, '') || '/';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,7 +34,8 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <Router basename={routerBasename}>
+
         <App />
       </Router>
     </QueryClientProvider>

@@ -14,6 +14,8 @@
  * The fetch wrapper here appends the scope, and the static-fetch wrapper in
  * `staticMode.ts` then resolves the resulting URL to the matching JSON file.
  */
+import { apiUrl } from '../utils/constants';
+
 const KEY = 'archon.projectScope';
 
 function staticDashboard(): boolean {
@@ -79,13 +81,15 @@ export function installFetchScope(): void {
   if (!scopeSwitchingEnabled()) return;
   const orig = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    if (
-      typeof input === 'string' &&
-      input.startsWith('/api/') &&
-      !input.startsWith('/api/peer-projects') &&
-      !input.startsWith('/api/scope')
-    ) {
-      return orig(withProjectScope(input), init);
+    if (typeof input === 'string' && input.startsWith('/api/')) {
+      // /api/peer-projects and /api/scope are never scoped to a peer (the
+      // switcher always lists the base project's peers; scope is global);
+      // everything else is scoped to the selected peer.
+      const noScope =
+        input.startsWith('/api/peer-projects') || input.startsWith('/api/scope');
+      const scoped = noScope ? input : withProjectScope(input);
+      // Prefix the reverse-proxy base so /api/* works under a path prefix.
+      return orig(apiUrl(scoped), init);
     }
     return orig(input, init);
   }) as typeof window.fetch;

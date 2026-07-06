@@ -10,6 +10,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { LogEntry } from '../types';
 import { getProjectScope } from '../lib/projectScope';
 import { isStaticDashboard } from '../lib/staticMode';
+import { wsUrl } from '../utils/constants';
 
 const POLL_INTERVAL = 3000;
 
@@ -84,12 +85,11 @@ export function useLogStream(selectedFile: string): UseLogStreamResult {
     }
 
     // --- WebSocket ---
-    // Scope the stream to the selected peer project (the fetch wrapper only
-    // covers REST calls, not WebSocket URLs).
+    // Scope the stream to the selected peer project. wsUrl() applies the
+    // reverse-proxy base so streaming works behind a path-prefix proxy.
     const scope = getProjectScope();
     const scopeQ = scope ? `?project=${encodeURIComponent(scope)}` : '';
-    const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/log-stream/${selectedFile}${scopeQ}`;
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl(`/api/log-stream/${selectedFile}${scopeQ}`));
     wsRef.current = ws;
 
     ws.onopen = () => {
