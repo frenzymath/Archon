@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -167,17 +168,52 @@ class StaticDashboardExporter:
 
     def _build_path_alias(self) -> dict[str, str]:
         alias: dict[str, str] = {}
-        host_alias = self._public_path_alias(self.project_path)
-        alias[str(self.project_path)] = host_alias
+        used: set[str] = set()
+
+        def assign(path: Path, candidate: str) -> None:
+            key = str(path)
+            # The host project is typically also listed as a member; assign each
+            # distinct path once so a path never collides with its own alias.
+            if key in alias:
+                return
+            unique = self._disambiguate_alias(candidate, used, path)
+            alias[key] = unique
+            used.add(unique)
+
+        assign(self.project_path, self._public_path_alias(self.project_path))
         if self.scope_path is not None:
-            alias[str(self.scope_path)] = self.scope_path.name
+            assign(self.scope_path, self.scope_path.name)
         for m in self.members:
             if not isinstance(m, dict):
                 continue
             mp = m.get("path")
             if mp:
-                alias[str(Path(mp).resolve())] = self._public_path_alias(Path(mp))
+                p = Path(mp).resolve()
+                assign(p, self._public_path_alias(p))
         return alias
+
+    @staticmethod
+    def _disambiguate_alias(candidate: str, used: set[str], full: Path) -> str:
+        """Return a unique public alias.
+
+        Members can live anywhere on disk (not just under the scope dir), so two
+        members that share a basename — e.g. ``~/a/core`` and ``~/b/core`` — would
+        both fall back to ``core`` and collide. Colliding aliases would make the
+        second member's snapshot dedupe away (same ``save_url``) and both switcher
+        entries point at the same data. Grow the alias leftward by path component
+        until it is unique, then fall back to a numeric suffix.
+        """
+        if candidate not in used:
+            return candidate
+        parts = full.parts
+        for take in range(candidate.count("/") + 2, len(parts) + 1):
+            trial = "/".join(parts[-take:])
+            if trial not in used:
+                return trial
+        i = 2
+        while f"{candidate}-{i}" in used:
+            i += 1
+        return f"{candidate}-{i}"
 
     def _public_path_alias(self, path: Path) -> str:
         resolved = path.resolve()
@@ -478,7 +514,21 @@ class StaticDashboardExporter:
         html = index.read_text(encoding="utf-8")
         tag = '<script src="./archon-static-config.js"></script>'
         if tag not in html:
-            html = html.replace('<script type="module"', f'{tag}\n    <script type="module"', 1)
+            # Inject before the first module script so window.__ARCHON_STATIC__
+            # is defined before the app runs. Match `type=module` regardless of
+            # attribute order or quote style (a bare substring match silently
+            # no-ops if Vite changes the emitted markup, shipping a dataless
+            # site); fall back to </head>, then fail loud rather than silently.
+            m = re.search(r'<script\b[^>]*\btype=(["\']?)module\1[^>]*>', html)
+            if m:
+                html = html[:m.start()] + f"{tag}\n    " + html[m.start():]
+            elif "</head>" in html:
+                html = html.replace("</head>", f"    {tag}\n</head>", 1)
+            else:
+                raise RuntimeError(
+                    "static export: no <script type=module> or </head> found in "
+                    "index.html to inject archon-static-config.js"
+                )
         index.write_text(html, encoding="utf-8")
 
 

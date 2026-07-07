@@ -52,6 +52,34 @@ class StaticExportAliasTest(unittest.TestCase):
 
             self.assertEqual(exporter._alias_for(str(external)), "ExternalProject")
 
+    def test_external_members_sharing_a_basename_get_distinct_aliases(self):
+        with tempfile.TemporaryDirectory() as scope_td, tempfile.TemporaryDirectory() as ext_td:
+            root = Path(scope_td)
+            ext = Path(ext_td)
+            core_a = ext / "a" / "core"
+            core_b = ext / "b" / "core"
+            core_a.mkdir(parents=True)
+            core_b.mkdir(parents=True)
+
+            exporter = StaticDashboardExporter(
+                root / "host",
+                out_dir=root / "docs",
+                members=[
+                    {"name": "core", "path": str(core_a), "has_dag": True},
+                    {"name": "core", "path": str(core_b), "has_dag": True},
+                ],
+                scope_path=root,
+            )
+
+            alias_a = exporter._alias_for(str(core_a))
+            alias_b = exporter._alias_for(str(core_b))
+            # Both are outside the scope dir and share the basename "core"; they
+            # must not collapse to the same alias or one member's snapshot would
+            # dedupe away.
+            self.assertNotEqual(alias_a, alias_b)
+            self.assertEqual(alias_a, "core")
+            self.assertEqual(alias_b, "b/core")
+
 
 if __name__ == "__main__":
     unittest.main()
