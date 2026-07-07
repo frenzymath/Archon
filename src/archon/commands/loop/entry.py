@@ -157,6 +157,11 @@ def loop(
             "or the CLAUDE_CONFIG_DIR env var already in the environment)"
         ),
     ),
+    focus: Optional[str] = typer.Option(
+        None, "--focus",
+        help="Append a one-off instruction to USER_HINTS.md before starting "
+             "the loop (e.g. --focus 'Fix the definition of X before proving Y').",
+    ),
 ) -> None:
     """Start the automated plan → prove → review loop.
 
@@ -259,6 +264,7 @@ def loop(
         debug_feedback=debug_feedback,
         resume=resume,
         backend=backend,
+        focus=focus,
     )
 
     LoopCommand(options).run()

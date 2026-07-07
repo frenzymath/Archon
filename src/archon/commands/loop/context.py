@@ -50,6 +50,7 @@ class LoopOptions:
     debug_feedback: bool = False
     resume: bool = False
     backend: ClaudeBackend = field(default_factory=ClaudeBackend)
+    focus: str | None = None
 
     @property
     def do_git(self) -> bool:

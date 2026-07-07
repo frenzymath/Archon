@@ -115,9 +115,10 @@ class SelectionFromChoiceTest(unittest.TestCase):
     def test_choices(self):
         self.assertIsNone(selection_from_choice("1"))
         self.assertEqual(selection_from_choice("2"), "codex")
+        self.assertEqual(selection_from_choice("3"), "antigravity")
         self.assertEqual(
             selection_from_choice(
-                "3",
+                "4",
                 {"plan": "claude-code", "prover": "codex", "review": "claude-code"},
             ),
             {"plan": "claude-code", "prover": "codex", "review": "claude-code"},

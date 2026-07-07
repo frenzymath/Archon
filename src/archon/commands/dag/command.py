@@ -227,6 +227,7 @@ class DagCommand:
                     data.totals_dict(),
                     data.model_rows() or None,
                 )
+                log.operations_table(data.operations)
 
         if result.complete:
             log.success(
@@ -293,6 +294,7 @@ class DagCommand:
                 data.totals_dict(),
                 data.model_rows() or None,
             )
+            log.operations_table(data.operations)
 
         if ctx.dashboard_url:
             log.panel(

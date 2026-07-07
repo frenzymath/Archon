@@ -196,6 +196,59 @@ def cost_table(
     _console.print(Panel(content, title=label, border_style="dim", padding=(0, 1)))
 
 
+def operations_table(operations: list) -> None:
+    """Print a detailed per-operation cost table.
+
+    Args:
+        operations: List of OperationCost objects or dicts.
+    """
+    if not operations:
+        return
+
+    table = Table(show_header=True, border_style="dim", padding=(0, 1))
+    table.add_column("Operation", style="bold", no_wrap=True)
+    table.add_column("Model", style="dim")
+    table.add_column("In Tokens", justify="right")
+    table.add_column("Out Tokens", justify="right")
+    table.add_column("Cache Read", justify="right")
+    table.add_column("Cost (USD)", justify="right", style="green")
+
+    for op in operations:
+        if hasattr(op, "name"):
+            name = op.name
+            model = op.model
+            in_t = op.input_tokens
+            out_t = op.output_tokens
+            cache = op.cache_read_tokens
+            cost = op.cost_usd
+        else:
+            name = op.get("name", "")
+            model = op.get("model", "")
+            in_t = op.get("input_tokens", 0)
+            out_t = op.get("output_tokens", 0)
+            cache = op.get("cache_read_tokens", 0)
+            cost = op.get("cost_usd", 0.0)
+
+        # Clean model name for display
+        display_model = (
+            model.replace("claude-3-5-", "")
+            .replace("claude-3-", "")
+            .replace("-20241022", "")
+            .replace("-20240229", "")
+        )
+
+        table.add_row(
+            name,
+            display_model,
+            f"{in_t:,}" if in_t else "0",
+            f"{out_t:,}" if out_t else "0",
+            f"{cache:,}" if cache else "0",
+            f"${cost:.4f}",
+        )
+
+    _console.print(table)
+
+
 # ── panels ────────────────────────────────────────────────────────────
 
 

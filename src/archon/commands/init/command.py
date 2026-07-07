@@ -48,12 +48,16 @@ class InitCommand:
         model: str = DEFAULT_MODEL,
         backend: ClaudeBackend | None = None,
         harness: str | None = None,
+        focus: str | None = None,
+        headless: bool = False,
     ) -> None:
         self.project_path_arg = project_path
         self.force = force
         self.model = model
         self.backend = backend
         self.harness = harness
+        self.focus = focus
+        self.headless = headless
         self.ctx: InitContext | None = None
 
     def run(self) -> None:
@@ -87,6 +91,8 @@ class InitCommand:
             model=self.model,
             backend=self.backend or ClaudeBackend(),
             harness=self.harness,
+            focus=self.focus,
+            headless=self.headless,
         )
 
         mode = self._resolve_reinit_mode()
@@ -123,6 +129,9 @@ class InitCommand:
     def _resolve_or_create_project_dir(self) -> Path:
         """Resolve the project path argument, creating the directory if missing."""
         if self.project_path_arg is None:
+            if self.headless:
+                log.error("No project path specified. Cannot prompt for a name headlessly.")
+                raise typer.Exit(1)
             log.info("No project path specified")
             log.step("Enter a name to create a new project, or Ctrl-C and re-run.")
             name = typer.prompt("  Project name")
@@ -156,6 +165,9 @@ class InitCommand:
         if self.force:
             log.warn("--force passed: overwriting existing Archon setup")
             return "overwrite"
+        if self.headless:
+            log.error("Existing Archon setup found. Cannot prompt for re-init mode headlessly. Use --force to overwrite.")
+            return "abort"
         return controller.prompt_mode(info)
 
     def _run_keep_only(self) -> None:

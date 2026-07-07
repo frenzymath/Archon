@@ -234,8 +234,9 @@ def _claude_session_exists(cwd: Path, session_id: str) -> bool:
         # error surface.
         return True
     sanitized = str(cwd_resolved).replace(os.sep, "-")
-    home = Path.home()
-    candidate = home / ".claude" / "projects" / sanitized / f"{session_id}.jsonl"
+    cfg_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(cfg_dir).expanduser() if cfg_dir else Path.home() / ".claude"
+    candidate = base / "projects" / sanitized / f"{session_id}.jsonl"
     return candidate.is_file()
 
 

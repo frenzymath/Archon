@@ -8,7 +8,7 @@ import typer
 
 from archon import log
 
-from ..utils import copy_file, data_path, read_json, run
+from ..utils import copy_file, data_path, read_json, run, get_claude_config_dir
 from .base import InitStep
 
 
@@ -20,7 +20,7 @@ class SkillsStep(InitStep):
         ctx = self.ctx
         log.phase(self.number, self.name)
 
-        home = Path.home()
+        claude_dir = get_claude_config_dir()
         skills_dir = data_path("skills")
         plugin_json_path = skills_dir / "lean4" / ".claude-plugin" / "plugin.json"
 
@@ -31,20 +31,20 @@ class SkillsStep(InitStep):
         (ctx.project_path / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
         (ctx.project_path / ".claude" / "rules").mkdir(parents=True, exist_ok=True)
 
-        self._register_marketplace(home, skills_dir)
-        self._install_plugin(home)
+        self._register_marketplace(claude_dir, skills_dir)
+        self._install_plugin(claude_dir)
         self._copy_archon_tools()
         self._copy_subagent_descriptors()
         self._cleanup_legacy_subagents()
 
     # ── private ────────────────────────────────────────────────────────
 
-    def _register_marketplace(self, home: Path, skills_dir: Path) -> None:
+    def _register_marketplace(self, claude_dir: Path, skills_dir: Path) -> None:
         log.step("Registering archon-local marketplace")
         market_needs_update = True
         r = run(["claude", "plugin", "marketplace", "list"])
         if "archon-local" in (r.stdout or ""):
-            known_path = home / ".claude" / "plugins" / "known_marketplaces.json"
+            known_path = claude_dir / "plugins" / "known_marketplaces.json"
             data = read_json(known_path)
             current = data.get("archon-local", {}).get("source", {}).get("path", "")
             if current == str(skills_dir):
@@ -63,10 +63,10 @@ class SkillsStep(InitStep):
                 log.error(f"Failed to register marketplace: {output.strip()}")
                 raise typer.Exit(1)
 
-    def _install_plugin(self, home: Path) -> None:
+    def _install_plugin(self, claude_dir: Path) -> None:
         ctx = self.ctx
         log.step("Installing lean4 plugin (project scope)")
-        installed_json = home / ".claude" / "plugins" / "installed_plugins.json"
+        installed_json = claude_dir / "plugins" / "installed_plugins.json"
         installed_data = read_json(installed_json)
         installed_here = any(
             entry.get("projectPath") == str(ctx.project_path)

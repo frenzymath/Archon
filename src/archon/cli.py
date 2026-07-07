@@ -112,8 +112,10 @@ from archon.commands.loop.blueprint_doctor import blueprint_doctor_cli  # noqa: 
 app.command("blueprint-doctor")(blueprint_doctor_cli)
 from archon.commands.tooling.protect import protect_check_cli  # noqa: E402
 app.command("protect-check", hidden=True)(protect_check_cli)
-from archon.commands.tooling.peers import peers_cli  # noqa: E402
-app.command("peers")(peers_cli)
+from archon.commands.tooling.peers import peers_app  # noqa: E402
+app.add_typer(peers_app, name="peers")
+from archon.commands.scope.command import app as scope_app  # noqa: E402
+app.add_typer(scope_app, name="scope")
 app.command()(extract)
 app.command()(merge)
 app.command()(loop)
