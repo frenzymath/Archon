@@ -7,17 +7,49 @@
  * (installed at app start) appends `?project=` to every `/api/*` call, so all
  * existing hooks switch with no per-call changes. Selecting "this project"
  * clears the scope.
+ *
+ * Static mode (GitHub Pages export) participates too when the snapshot was
+ * generated for a *scope*: `__ARCHON_STATIC__.scopePath` is set, and per-member
+ * API responses are pre-snapshotted under URLs that carry `?project=<path>`.
+ * The fetch wrapper here appends the scope, and the static-fetch wrapper in
+ * `staticMode.ts` then resolves the resulting URL to the matching JSON file.
  */
 import { apiUrl } from '../utils/constants';
 
 const KEY = 'archon.projectScope';
 
+function staticDashboard(): boolean {
+  return !!window.__ARCHON_STATIC__;
+}
+
+/** True when the deployed static dashboard was built from a scope. */
+export function isStaticScope(): boolean {
+  return !!window.__ARCHON_STATIC__?.scopePath;
+}
+
+/** Scope switching is wired whenever the runtime can serve per-member data:
+ *  live server (not static), or a static export that was built for a scope. */
+function scopeSwitchingEnabled(): boolean {
+  return !staticDashboard() || isStaticScope();
+}
+
 export function getProjectScope(): string | null {
+  if (!scopeSwitchingEnabled()) return null;
   try {
-    return localStorage.getItem(KEY) || null;
+    const stored = localStorage.getItem(KEY);
+    if (stored) {
+      if (!isStaticScope()) return stored;
+      const members = window.__ARCHON_STATIC__?.scopeMembers ?? [];
+      if (members.some((m) => m.path === stored)) return stored;
+    }
   } catch {
-    return null;
+    /* fall through to the static default */
   }
+  // Static scope exports snapshot member APIs under ?project=<public alias>.
+  // Treat the exported host project as the selected project from first load so
+  // Overview/DAG/Blueprint hit the same scoped URLs as the project switcher.
+  if (isStaticScope()) return window.__ARCHON_STATIC__?.projectPath || null;
+  return null;
 }
 
 export function setProjectScope(path: string | null): void {
@@ -46,14 +78,22 @@ export function withProjectScope(url: string): string {
  * lists the base project's peers regardless of which project is being viewed.
  */
 export function installFetchScope(): void {
+  if (!scopeSwitchingEnabled()) return;
   const orig = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input === 'string' && input.startsWith('/api/')) {
-      // /api/peer-projects is never scoped (the switcher always lists the base
-      // project's peers); everything else is scoped to the selected peer.
-      const scoped = input.startsWith('/api/peer-projects') ? input : withProjectScope(input);
-      // Prefix the reverse-proxy base so /api/* works under a path prefix.
-      return orig(apiUrl(scoped), init);
+      // /api/peer-projects and /api/scope are never scoped to a peer (the
+      // switcher always lists the base project's peers; scope is global);
+      // everything else is scoped to the selected peer.
+      const noScope =
+        input.startsWith('/api/peer-projects') || input.startsWith('/api/scope');
+      const scoped = noScope ? input : withProjectScope(input);
+      // Live mode: prefix the reverse-proxy base so /api/* works under a path
+      // prefix. Static scope export: keep the URL rooted at /api so the
+      // static-fetch wrapper in staticMode.ts (it matches on a /api/ pathname)
+      // maps it to ./data/api/*.json instead of hitting the network — apiUrl()
+      // would base-prefix it (e.g. /repo/api/…) and bypass that matcher.
+      return orig(staticDashboard() ? scoped : apiUrl(scoped), init);
     }
     return orig(input, init);
   }) as typeof window.fetch;
