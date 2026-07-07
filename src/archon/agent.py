@@ -546,11 +546,41 @@ import sys, json, datetime
 VERBOSE = '{verbose}' == 'True'
 RAW = open('{raw_log}', 'a') if VERBOSE else None
 JSONL = open('{jsonl}', 'a')
+MODEL = '{model}'
 
 def emit(event_type, **fields):
     row = {{'ts': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'), 'event': event_type, **fields}}
     JSONL.write(json.dumps(row) + '\n')
     JSONL.flush()
+
+def estimate_cost_usd(model, input_tokens, output_tokens, cache_read_tokens=0):
+    m = model.lower()
+    if "sonnet" in m:
+        return (input_tokens * 3.0 + output_tokens * 15.0 + cache_read_tokens * 0.30) / 1_000_000.0
+    elif "haiku" in m:
+        return (input_tokens * 0.8 + output_tokens * 4.0 + cache_read_tokens * 0.08) / 1_000_000.0
+    elif "opus" in m:
+        return (input_tokens * 15.0 + output_tokens * 75.0) / 1_000_000.0
+    elif "flash" in m:
+        return (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
+    elif "pro" in m:
+        return (input_tokens * 1.25 + output_tokens * 5.0) / 1_000_000.0
+    elif "gpt-4o-mini" in m:
+        return (input_tokens * 0.15 + output_tokens * 0.60) / 1_000_000.0
+    elif "gpt-4o" in m:
+        return (input_tokens * 2.50 + output_tokens * 10.00) / 1_000_000.0
+    elif "o1-mini" in m or "o3-mini" in m:
+        return (input_tokens * 1.10 + output_tokens * 4.40) / 1_000_000.0
+    elif "o1-preview" in m or "o1" in m:
+        return (input_tokens * 15.00 + output_tokens * 60.00) / 1_000_000.0
+    elif "deepseek-chat" in m or "deepseek-v3" in m or "deepseek" in m:
+        return (input_tokens * 0.14 + output_tokens * 0.28) / 1_000_000.0
+    elif "deepseek-reasoner" in m or "deepseek-r1" in m:
+        return (input_tokens * 0.55 + output_tokens * 2.19) / 1_000_000.0
+    return (input_tokens * 2.50 + output_tokens * 10.00) / 1_000_000.0
+
+total_in_chars = 15000
+turn_out_chars = 0
 
 def terminal(s):
     print(s, flush=True)
@@ -593,15 +623,26 @@ for line in sys.stdin:
                 thinking = block.get('thinking', '').strip()
                 if thinking:
                     emit('thinking', content=thinking)
+                    turn_out_chars += len(thinking)
             elif bt == 'text':
                 text = block.get('text', '').strip()
                 if text:
                     emit('text', content=text)
                     last_result = text
+                    turn_out_chars += len(text)
             elif bt == 'tool_use':
                 name = block.get('name', '?')
                 inp = block.get('input', {{}})
                 emit('tool_call', tool=name, input=inp)
+                turn_out_chars += len(name) + len(json.dumps(inp))
+
+                if turn_out_chars > 0:
+                    in_t = int(total_in_chars / 4.0)
+                    out_t = int(turn_out_chars / 4.0)
+                    cost = estimate_cost_usd(MODEL, in_t, out_t)
+                    emit('turn_usage', input_tokens=in_t, output_tokens=out_t, cost_usd=cost)
+                    total_in_chars += turn_out_chars
+                    turn_out_chars = 0
 
     elif t == 'user' and 'message' in obj:
         msg = obj['message']
@@ -612,12 +653,21 @@ for line in sys.stdin:
                 content = block.get('content', '')
                 if isinstance(content, str):
                     emit('tool_result', content=content)
+                    total_in_chars += len(content)
                 elif isinstance(content, list):
                     texts = [p.get('text','') for p in content if isinstance(p,dict) and p.get('type')=='text']
-                    emit('tool_result', content='\n'.join(texts))
+                    combined = '\n'.join(texts)
+                    emit('tool_result', content=combined)
+                    total_in_chars += len(combined)
 
     elif t == 'result':
         import re as _re_session
+        if turn_out_chars > 0:
+            in_t = int(total_in_chars / 4.0)
+            out_t = int(turn_out_chars / 4.0)
+            cost = estimate_cost_usd(MODEL, in_t, out_t)
+            emit('turn_usage', input_tokens=in_t, output_tokens=out_t, cost_usd=cost)
+            turn_out_chars = 0
         cost = obj.get('total_cost_usd', 0) or obj.get('cost_usd', 0) or 0
         duration = obj.get('duration_ms', 0) or 0
         turns = obj.get('num_turns', 0) or 0
@@ -1495,6 +1545,7 @@ class ClaudeAgent:
             verbose=str(verbose_logs),
             raw_log=raw_log,
             jsonl=jsonl,
+            model=self.model,
         )
 
         stderr_dest = raw_log if verbose_logs else os.devnull
@@ -1964,11 +2015,20 @@ def _runner_from_descriptor(
     if runner == "codex":
         from archon.agents.codex import CodexAgent
 
+        # Don't leak the ambient Claude default model (e.g. "opus") into codex:
+        # it uses its own native ~/.codex default unless the descriptor names a
+        # codex-compatible model. Passing a Claude id here would emit `-m opus`.
         return CodexAgent(descriptor=descriptor, role=role)
+    if runner == "antigravity":
+        from archon.agents.antigravity import AntigravityAgent
+        # Antigravity CLI model defaults to something internal but can be overridden
+        # We assume the user configures the model via the dashboard or CLI flags.
+        return AntigravityAgent(descriptor=descriptor, role=role)
+        
     raise UnknownHarnessError(
         f"Harness {descriptor.name!r} requests runner {runner!r}, but the "
         f"runners available in this version of Archon are "
-        f"{DEFAULT_HARNESS!r} and 'codex'. Remove the harness override or "
+        f"{DEFAULT_HARNESS!r}, 'codex', and 'antigravity'. Remove the harness override or "
         f"set its runner to a supported value."
     )
 
