@@ -451,8 +451,19 @@ class AntigravityAgent(AgentRunner):
                 # Check if there are active subagents or background tasks
                 if active_db:
                     had_active = False
+                    timed_out = False
                     start_wait = time.time()
                     while True:
+                        # Bound the wait so a wedged subagent or a step stuck at
+                        # status=2 can't hang the run forever. idle_timeout_s is
+                        # None to wait indefinitely (opt-in).
+                        if idle_timeout_s is not None and (time.time() - start_wait) > idle_timeout_s:
+                            log.warning(
+                                f"Timed out after {idle_timeout_s:.0f}s waiting for background "
+                                "subagents or tasks; finishing without them."
+                            )
+                            timed_out = True
+                            break
                         active_subagents = False
                         try:
                             # Check for running archon-subagent.py processes matching this cwd
@@ -495,11 +506,11 @@ class AntigravityAgent(AgentRunner):
                             log.info("Waiting for background subagents or tasks to complete...")
                         time.sleep(2.0)
 
-                    if had_active:
+                    if had_active and not timed_out:
                         use_resume = True
                         continue
 
-                # No active tasks/subagents remain, so finish
+                # No active tasks/subagents remain (or we timed out), so finish
                 break
 
         except Exception as e:
