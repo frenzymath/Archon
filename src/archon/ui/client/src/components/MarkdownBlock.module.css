@@ -142,6 +142,48 @@
 
 .markdown li > p { margin: 0; }
 
+.markdown :global(li.task-list-item) {
+  list-style: none;
+  margin-left: -1.35em;
+}
+
+.markdown :global(.task-checkbox) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.45em 0 0;
+  vertical-align: -0.12em;
+  border: 1px solid var(--md-rule-strong);
+  border-radius: 3px;
+  background: #ffffff;
+}
+
+.markdown :global(.task-checkbox-checked) {
+  border-color: var(--md-link);
+  background: var(--md-link);
+}
+
+.markdown :global(.task-checkbox-checked)::after {
+  content: "";
+  width: 0.28em;
+  height: 0.52em;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-0.02em, -0.04em);
+}
+
+.markdown :global(.task-checkbox-mixed)::after {
+  content: "~";
+  color: var(--md-link);
+  font-size: 0.85em;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateY(-0.06em);
+}
+
 .markdown li > ul,
 .markdown li > ol {
   margin-top: 0.3em;

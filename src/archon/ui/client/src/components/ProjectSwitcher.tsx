@@ -19,6 +19,53 @@ interface PeerProjects {
   peers: PeerEntry[];
 }
 
+interface ProjectOption extends PeerEntry {
+  current?: boolean;
+}
+
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]+/).filter(Boolean);
+}
+
+function isStrictPathAncestor(parent: string, child: string): boolean {
+  const pp = pathParts(parent);
+  const cp = pathParts(child);
+  return pp.length < cp.length && pp.every((part, i) => cp[i] === part);
+}
+
+function dropContainerProjects(projects: ProjectOption[], keepPath: string): ProjectOption[] {
+  // Hide pure "container" parents (a peer that only exists as an ancestor of
+  // another peer and has no DAG of its own) to declutter the list — but never
+  // drop the currently-scoped project, or the controlled <select value> would
+  // reference an option that doesn't exist and render a blank/mismatched entry.
+  return projects.filter((p) => p.current || p.has_dag || p.path === keepPath || !projects.some((q) => isStrictPathAncestor(p.path, q.path)));
+}
+
+function commonPrefixLen(items: string[][]): number {
+  if (items.length === 0) return 0;
+  let n = items[0].length;
+  for (const parts of items.slice(1)) {
+    let i = 0;
+    while (i < n && i < parts.length && parts[i] === items[0][i]) i += 1;
+    n = i;
+  }
+  return n;
+}
+
+function groupForProject(p: ProjectOption, commonLen: number): string {
+  const rel = pathParts(p.path).slice(commonLen);
+  return rel.length > 1 ? rel[0] : 'Projects';
+}
+
+function tailForProject(p: ProjectOption, commonLen: number): string[] {
+  const rel = pathParts(p.path).slice(commonLen);
+  return rel.length > 1 ? rel.slice(1) : [p.name];
+}
+
+function labelForProject(p: ProjectOption, tail: string[]): string {
+  return `${tail.join('/')}${p.current ? ' (this project)' : ''}${p.has_dag ? '' : ' - no DAG'}`;
+}
+
 export function ProjectSwitcher() {
   const [data, setData] = useState<PeerProjects | null>(null);
 
@@ -32,6 +79,18 @@ export function ProjectSwitcher() {
   if (!data || data.peers.length === 0) return null;
 
   const selected = getProjectScope() || data.current.path;
+  const projects: ProjectOption[] = dropContainerProjects([
+    { ...data.current, has_dag: true, current: true },
+    ...data.peers,
+  ], selected).sort((a, b) => a.path.localeCompare(b.path));
+  const commonLen = commonPrefixLen(projects.map((p) => pathParts(p.path)));
+  const groups = projects.reduce<Map<string, ProjectOption[]>>((acc, p) => {
+    const group = groupForProject(p, commonLen);
+    const members = acc.get(group) ?? [];
+    members.push(p);
+    acc.set(group, members);
+    return acc;
+  }, new Map());
 
   const onChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const path = e.target.value;
@@ -48,12 +107,17 @@ export function ProjectSwitcher() {
       onChange={onChange}
       title="View a peer project read-only (from .archon/peers.yaml)"
     >
-      <option value={data.current.path}>{data.current.name} (this project)</option>
-      {data.peers.map(p => (
-        <option key={p.path} value={p.path}>
-          {p.name}
-          {p.has_dag ? '' : ' — no DAG'}
-        </option>
+      {[...groups.entries()].map(([group, members]) => (
+        <optgroup key={group} label={group}>
+          {members.map(project => {
+            const tail = tailForProject(project, commonLen);
+            return (
+              <option key={project.path} value={project.path} title={project.path}>
+                {labelForProject(project, tail)}
+            </option>
+            );
+          })}
+        </optgroup>
       ))}
     </select>
   );

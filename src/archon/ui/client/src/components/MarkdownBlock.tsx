@@ -203,13 +203,13 @@ function renderBlock(block: string): string {
       const m = line.match(/^\s*(\d+)\.\s+(.+)/);
       if (m) {
         if (start === null) start = m[1];
-        items.push(inline(m[2]));
+        items.push(listItemContent(m[2]));
       } else if (items.length) {
         items[items.length - 1] += ' ' + inline(line.trim());
       }
     }
     const startAttr = start && start !== '1' ? ` start="${start}"` : '';
-    return `<ol${startAttr}>${items.map((x) => `<li>${x}</li>`).join('')}</ol>`;
+    return `<ol${startAttr}>${items.map(renderListItem).join('')}</ol>`;
   }
 
   // Bullet list — every line is either a `- ` / `* ` / `+ ` item or a
@@ -219,16 +219,35 @@ function renderBlock(block: string): string {
     for (const line of lines) {
       const m = line.match(/^\s*[-*+]\s+(.+)/);
       if (m) {
-        items.push(inline(m[1]));
+        items.push(listItemContent(m[1]));
       } else if (items.length) {
         items[items.length - 1] += ' ' + inline(line.trim());
       }
     }
-    return `<ul>${items.map((x) => `<li>${x}</li>`).join('')}</ul>`;
+    return `<ul>${items.map(renderListItem).join('')}</ul>`;
   }
 
   // Default: paragraph. Soft newlines collapse to a single space.
   return `<p>${inline(trimmed.replace(/\s*\n\s*/g, ' '))}</p>`;
+}
+
+function listItemContent(raw: string): string {
+  const task = raw.match(/^\[([ xX~])\]\s+(.+)$/);
+  if (!task) return inline(raw);
+  const state = task[1];
+  const body = inline(task[2]);
+  if (state === 'x' || state === 'X') {
+    return `<span class="task-checkbox task-checkbox-checked" role="checkbox" aria-checked="true"></span> ${body}`;
+  }
+  if (state === '~') {
+    return `<span class="task-checkbox task-checkbox-mixed" role="checkbox" aria-checked="mixed"></span> ${body}`;
+  }
+  return `<span class="task-checkbox" role="checkbox" aria-checked="false"></span> ${body}`;
+}
+
+function renderListItem(content: string): string {
+  const cls = content.includes('task-checkbox') ? ' class="task-list-item"' : '';
+  return `<li${cls}>${content}</li>`;
 }
 
 /** Inline transforms.

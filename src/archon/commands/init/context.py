@@ -36,4 +36,6 @@ class InitContext:
     backend: ClaudeBackend = field(default_factory=ClaudeBackend)
     # Raw --harness flag, consumed only when writing a fresh config.json.
     harness: str | None = None
+    focus: str | None = None
+    headless: bool = False
     bootstrap_report: "BootstrapReport | None" = None

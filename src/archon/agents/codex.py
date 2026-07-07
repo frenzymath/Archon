@@ -304,6 +304,34 @@ def emit(event_type, **fields):
     JSONL.write(json.dumps(row) + '\n')
     JSONL.flush()
 
+# Mirror of archon.state.cost.estimate_cost_usd (canonical). Inlined because
+# this parser is a self-contained `python -c` script and must not import archon.
+def estimate_cost_usd(model, input_tokens, output_tokens, cache_read_tokens=0):
+    m = model.lower()
+    if "sonnet" in m:
+        return (input_tokens * 3.0 + output_tokens * 15.0 + cache_read_tokens * 0.30) / 1_000_000.0
+    elif "haiku" in m:
+        return (input_tokens * 0.8 + output_tokens * 4.0 + cache_read_tokens * 0.08) / 1_000_000.0
+    elif "opus" in m:
+        return (input_tokens * 15.0 + output_tokens * 75.0) / 1_000_000.0
+    elif "flash" in m:
+        return (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
+    elif "pro" in m:
+        return (input_tokens * 1.25 + output_tokens * 5.0) / 1_000_000.0
+    elif "gpt-4o-mini" in m:
+        return (input_tokens * 0.15 + output_tokens * 0.60) / 1_000_000.0
+    elif "gpt-4o" in m:
+        return (input_tokens * 2.50 + output_tokens * 10.00) / 1_000_000.0
+    elif "o1-mini" in m or "o3-mini" in m:
+        return (input_tokens * 1.10 + output_tokens * 4.40) / 1_000_000.0
+    elif "o1-preview" in m or "o1" in m:
+        return (input_tokens * 15.00 + output_tokens * 60.00) / 1_000_000.0
+    elif "deepseek-reasoner" in m or "deepseek-r1" in m:
+        return (input_tokens * 0.55 + output_tokens * 2.19) / 1_000_000.0
+    elif "deepseek-chat" in m or "deepseek-v3" in m or "deepseek" in m:
+        return (input_tokens * 0.14 + output_tokens * 0.28) / 1_000_000.0
+    return (input_tokens * 2.50 + output_tokens * 10.00) / 1_000_000.0
+
 def terminal(s):
     print(s, flush=True)
 
@@ -417,10 +445,22 @@ for line in sys.stdin:
 
     elif t == 'turn.completed':
         usage = obj.get('usage', {{}}) or {{}}
-        sum_input += usage.get('input_tokens', 0) or 0
-        sum_cached += usage.get('cached_input_tokens', 0) or 0
-        sum_output += usage.get('output_tokens', 0) or 0
-        sum_reasoning += usage.get('reasoning_output_tokens', 0) or 0
+        t_in = usage.get('input_tokens', 0) or 0
+        t_cached = usage.get('cached_input_tokens', 0) or 0
+        t_out = usage.get('output_tokens', 0) or 0
+        t_reasoning = usage.get('reasoning_output_tokens', 0) or 0
+
+        sum_input += t_in
+        sum_cached += t_cached
+        sum_output += t_out
+        sum_reasoning += t_reasoning
+
+        t_cost = estimate_cost_usd(MODEL, t_in, t_out, t_cached)
+        emit('turn_usage',
+             input_tokens=t_in,
+             output_tokens=t_out,
+             cache_read_input_tokens=t_cached,
+             cost_usd=t_cost)
 
     elif t == 'turn.failed':
         err = obj.get('error')

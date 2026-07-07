@@ -105,8 +105,14 @@ def fail_permission(path: Path, err: Exception | None) -> None:
     raise typer.Exit(1)
 
 
+def get_claude_config_dir() -> Path:
+    import os
+    src = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(src).expanduser() if src else Path.home() / ".claude"
+
+
 def find_global_mcp_lean_lsp() -> list[str]:
-    settings = Path.home() / ".claude" / "settings.json"
+    settings = get_claude_config_dir() / "settings.json"
     data = read_json(settings)
     return [
         k for k in data.get("mcpServers", {})
@@ -115,7 +121,7 @@ def find_global_mcp_lean_lsp() -> list[str]:
 
 
 def find_global_lean4_plugins() -> list[str]:
-    settings = Path.home() / ".claude" / "settings.json"
+    settings = get_claude_config_dir() / "settings.json"
     data = read_json(settings)
     return [
         k for k in data.get("enabledPlugins", {})

@@ -5,11 +5,14 @@
  *
  *  - nodes are dots whose colour encodes *local effort* (green = done/0,
  *    yellow→orange ramp for growing draft effort, red = ∞ no-proof);
- *  - force-directed (forceAtlas2) layout, direction shown by arrows;
+ *  - two layouts (toolbar toggle): force-directed (forceAtlas2), which shows
+ *    how central/heavily-used a node is, and layered-by-depth, which ranks
+ *    nodes by longest dependency chain and stacks them top-down so foundations
+ *    sit above the results that rest on them; direction shown by arrows;
  *  - per-node status glyphs (✓ Lean proof · ⚠ sorry · λ Lean decl · ★ LaTeX
  *    proof · § statement);
- *  - clicking a node lights up its whole transitive cone; double-click focuses
- *    it (filters to the cone); search jumps to any id;
+ *  - clicking a node lights up its direct dependencies; double-click focuses
+ *    its transitive dependency cone; search jumps to any id;
  *  - a project-stats overlay (proved %, sorry/ready/gaps, effort done/remaining);
  *  - filters by node-set (all / blueprint / Lean), component, chapter, isolated;
  *  - a rich sidebar with KaTeX-rendered statement/proof and Lean syntax
@@ -27,6 +30,7 @@ import { useDag, useUnionDags, useDagLastModified, type DagNode, type FileMod } 
 import { useGitLog, useBlueprintChapters, type GitCommit } from '../hooks/useGitLog';
 import { GitTimeline } from '../components/GitTimeline';
 import { buildBlueprintModel, TexFragment } from '../components/BlueprintDoc';
+import { isStaticDashboard } from '../lib/staticMode';
 // Effort/status colour scale (mirrors leandag.exporters) + per-project encoding
 // for the multi-project union overlay.
 import {
@@ -152,6 +156,55 @@ const PHYSICS_OPTS = {
 const ZOOM_MAX = 3.0;
 const FIT_FLOOR = 0.34;
 
+type LayoutMode = 'force' | 'layered';
+
+// Layered-by-depth layout. Ranks each node by its longest dependency chain
+// (Kahn longest-path: foundations that depend on nothing sit at rank 0),
+// stacks ranks top-down, and centres each rank on a shared vertical axis, so
+// every node is drawn above the things that depend on it. Positions are
+// computed once and pinned (physics stays off). Cross-layer edges are drawn
+// straight — legible layers are the goal, not crossing-free routing.
+const LAYER_GAP = 165;   // vertical gap between ranks
+const NODE_GAP = 90;     // horizontal gap between nodes within a rank
+function layeredPositions(
+  ids: string[],
+  usesOf: (id: string) => string[],
+): Map<string, { x: number; y: number }> {
+  const idset = new Set(ids);
+  const rank = new Map<string, number>();
+  const state = new Map<string, 1 | 2>();  // 1 = in progress, 2 = done
+  const visit = (id: string): number => {
+    const st = state.get(id);
+    if (st === 2) return rank.get(id)!;
+    if (st === 1) return 0;                 // cycle guard: treat back-edge as rank 0
+    state.set(id, 1);
+    let r = 0;
+    for (const u of usesOf(id)) {
+      if (u === id || !idset.has(u)) continue;
+      r = Math.max(r, visit(u) + 1);
+    }
+    state.set(id, 2);
+    rank.set(id, r);
+    return r;
+  };
+  for (const id of ids) visit(id);
+
+  const byRank = new Map<number, string[]>();
+  for (const id of ids) {
+    const r = rank.get(id) ?? 0;
+    let layer = byRank.get(r);
+    if (!layer) { layer = []; byRank.set(r, layer); }
+    layer.push(id);
+  }
+  const pos = new Map<string, { x: number; y: number }>();
+  for (const [r, layer] of byRank) {
+    layer.sort();  // deterministic left-to-right order within a rank
+    const offset = (layer.length - 1) / 2;
+    layer.forEach((id, i) => pos.set(id, { x: (i - offset) * NODE_GAP, y: r * LAYER_GAP }));
+  }
+  return pos;
+}
+
 type NodeSet = 'union' | 'blueprint' | 'lean';
 // Review-oriented graph queries (what to do next / what's wrong / what's dead).
 type DagQuery =
@@ -161,8 +214,8 @@ type DagQuery =
   | 'sorry'      // has a sorry/admit
   | 'gaps'       // ∞ effort: no informal proof (roadmap hole)
   | 'unproved'   // not \leanok and not \mathlibok
-  | 'leaves'     // nothing depends on it (rdep_count 0)
-  | 'roots'      // depends on nothing (dep_count 0)
+  | 'leaves'     // sink: nothing depends on it (rdep_count 0)
+  | 'roots'      // source: depends on nothing (dep_count 0)
   | 'isolated';  // no edges at all (dep 0 and rdep 0) — possibly dead
 
 const QUERY_LABEL: Record<DagQuery, string> = {
@@ -172,16 +225,18 @@ const QUERY_LABEL: Record<DagQuery, string> = {
   sorry: 'Has sorry',
   gaps: '∞ effort (no proof)',
   unproved: 'Unproved',
-  leaves: 'Leaves (nothing uses)',
-  roots: 'Roots (no deps)',
+  leaves: 'Sinks (nothing uses)',
+  roots: 'Sources (no deps)',
   isolated: 'Isolated (dead?)',
 };
 
 export default function DagView() {
+  const isStatic = isStaticDashboard();
   // Time-travel: when a commit is selected, the DAG is built at that commit
   // (server-side, in-memory — never overwriting the live .leandag/ files).
   const [selectedSha, setSelectedSha] = useState<string>('');
-  const { data, isLoading, error, refetch, isFetching } = useDag(selectedSha || undefined);
+  const effectiveSha = isStatic ? undefined : selectedSha || undefined;
+  const { data, isLoading, error, refetch, isFetching } = useDag(effectiveSha);
   const { data: gitData } = useGitLog();
   const commits = gitData?.commits ?? [];
   const navigate = useNavigate();
@@ -220,7 +275,7 @@ export default function DagView() {
   // The blueprint label map (cheap numbering pass over all chapters) so the
   // node panel renders statements/proofs exactly like the Blueprint page —
   // \cref{} resolved — and can deep-link into it. Same commit as the graph.
-  const { data: bpData } = useBlueprintChapters(selectedSha || undefined);
+  const { data: bpData } = useBlueprintChapters(effectiveSha);
   const bpLabels = useMemo(
     () => buildBlueprintModel(bpData?.chapters ?? [], true).labels,
     [bpData],
@@ -261,6 +316,7 @@ export default function DagView() {
   const doJumpRef = useRef<() => void>(() => {});
 
   // Filter / selection state.
+  const [layout, setLayout] = useState<LayoutMode>('force');
   const [nodeset, setNodeset] = useState<NodeSet>('union');
   const [componentSel, setComponentSel] = useState<number | null>(null);
   const [chapterSel, setChapterSel] = useState<string>('');
@@ -411,7 +467,7 @@ export default function DagView() {
   }, [baseVisNodes]);
 
   // Adjacency, degree.
-  const { succ, pred, deg } = useMemo(() => {
+  const { pred, deg } = useMemo(() => {
     const succ = new Map<string, string[]>(), pred = new Map<string, string[]>(), deg = new Map<string, number>();
     for (const id of allNodes.keys()) { succ.set(id, []); pred.set(id, []); deg.set(id, 0); }
     for (const e of edges) {
@@ -420,7 +476,7 @@ export default function DagView() {
       deg.set(e.from, (deg.get(e.from) ?? 0) + 1);
       deg.set(e.to, (deg.get(e.to) ?? 0) + 1);
     }
-    return { succ, pred, deg };
+    return { pred, deg };
   }, [allNodes, edges]);
 
   const isOrphan = useCallback((id: string) => !((deg.get(id) ?? 0) > 0), [deg]);
@@ -462,16 +518,22 @@ export default function DagView() {
     return m;
   }, [allProjects]);
 
-  // Cone (ancestors ∪ descendants ∪ self) and ancestors-only walkers.
+  // Transitive dependency cone, direct dependencies, and ancestors-only walkers.
   const coneOf = useCallback((id: string) => {
     const out = new Set<string>([id]);
-    const walk = (adj: Map<string, string[]>, start: string) => {
-      const st = [start];
-      while (st.length) { const x = st.pop()!; for (const y of adj.get(x) ?? []) if (!out.has(y)) { out.add(y); st.push(y); } }
-    };
-    walk(pred, id); walk(succ, id);
+    const st = [...(pred.get(id) ?? [])];
+    while (st.length) {
+      const x = st.pop()!;
+      if (out.has(x)) continue;
+      out.add(x);
+      for (const y of pred.get(x) ?? []) st.push(y);
+    }
     return out;
-  }, [pred, succ]);
+  }, [pred]);
+
+  const directDepsOf = useCallback((id: string) => (
+    new Set<string>([id, ...(pred.get(id) ?? [])])
+  ), [pred]);
 
   const ancestorsOf = useCallback((id: string) => {
     const out = new Set<string>(); const st = [...(pred.get(id) ?? [])];
@@ -576,21 +638,21 @@ export default function DagView() {
     recomputeBounds();
   }, [recomputeBounds]);
 
-  const highlightCone = useCallback((id: string) => {
+  const highlightDirectDeps = useCallback((id: string) => {
     const nodesDS = nodesDSRef.current, edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS) return;
-    const cone = coneOf(id);
+    const directDeps = directDepsOf(id);
     // Custom (union) nodes ignore DataSet colour updates — dim via the ref +
     // redraw; standard nodes dim by colour-swapping as before.
-    if (merged.active) { dimRef.current = cone; netRef.current?.redraw(); }
+    if (merged.active) { dimRef.current = directDeps; netRef.current?.redraw(); }
     else nodesDS.update((nodesDS.getIds() as string[]).map((nid) =>
-      cone.has(nid) ? baseVisById.get(nid)
+      directDeps.has(nid) ? baseVisById.get(nid)
         : { id: nid, color: { background: '#e5e7eb', border: '#d1d5db' }, font: { color: '#cbd5e1' } }));
     edgesDS.update((edgesDS.get() as any[]).map((e) => {
-      const on = cone.has(e.from) && cone.has(e.to);
+      const on = e.to === id && directDeps.has(e.from);
       return { id: e.id, color: on ? { color: '#475569', highlight: '#334155' } : { color: '#edf0f4' }, width: on ? 2.5 : 1 };
     }));
-  }, [coneOf, baseVisById, merged.active]);
+  }, [directDepsOf, baseVisById, merged.active]);
 
   // Base skin (no node cone selected): honour the highlight overlay if one is
   // active (dim non-matches but keep them on canvas), else full colour.
@@ -675,17 +737,17 @@ export default function DagView() {
     const id = jumpRef.current;
     if (id && (nodesDS.getIds() as string[]).includes(id)) {
       net.selectNodes([id]); net.focus(id, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } } as any);
-      highlightCone(id); jumpRef.current = null;
+      highlightDirectDeps(id); jumpRef.current = null;
     } else if (selIdRef.current && (nodesDS.getIds() as string[]).includes(selIdRef.current)) {
-      highlightCone(selIdRef.current);
+      highlightDirectDeps(selIdRef.current);
     }
-  }, [highlightCone]);
+  }, [highlightDirectDeps]);
   doJumpRef.current = doJump;
 
   // Keep latest imperative callbacks reachable from the once-registered handlers.
   useEffect(() => {
     cbRef.current = {
-      click: (p) => { const id = p?.nodes?.[0]; if (id) { setSelId(String(id)); highlightCone(String(id)); } else { setSelId(''); clearHighlight(); } },
+      click: (p) => { const id = p?.nodes?.[0]; if (id) { setSelId(String(id)); highlightDirectDeps(String(id)); } else { setSelId(''); clearHighlight(); } },
       dbl: (p) => { const id = p?.nodes?.[0]; if (id && allNodes.has(String(id))) { setFocus(String(id)); setSelId(String(id)); jumpRef.current = String(id); } },
       wheel: (e) => {
         const net = netRef.current; if (!net) return;
@@ -742,13 +804,27 @@ export default function DagView() {
     const nodes = baseVisNodes.filter((n) => visibleSet.has(n.id as string));
     const es = edges.filter((e) => visibleSet.has(e.from) && visibleSet.has(e.to)).map((e, i) => ({ id: i, from: e.from, to: e.to, arrows: 'to' }));
     nodesDS.clear(); edgesDS.clear();
-    nodesDS.add(nodes); edgesDS.add(es);
-    if (nodes.length > 1) net.setOptions({ physics: PHYSICS_OPTS as any });
-    else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0); }
+    if (layout === 'layered' && nodes.length > 1) {
+      // Pinned layered layout: compute ranks from the visible subgraph and
+      // fix each node's position, then keep physics off so nothing drifts.
+      const ids = nodes.map((n) => n.id as string);
+      const pos = layeredPositions(ids, (id) => allNodes.get(id)?.uses ?? []);
+      const placed = nodes.map((n) => {
+        const p = pos.get(n.id as string);
+        return p ? { ...n, x: p.x, y: p.y, fixed: { x: true, y: true } } : n;
+      });
+      nodesDS.add(placed); edgesDS.add(es);
+      net.setOptions({ physics: false });
+      setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0);
+    } else {
+      nodesDS.add(nodes); edgesDS.add(es);
+      if (nodes.length > 1) net.setOptions({ physics: PHYSICS_OPTS as any });
+      else { net.setOptions({ physics: false }); setTimeout(() => { fitFloored(); if (selIdRef.current) doJump(); else applyBaseRef.current(); }, 0); }
+    }
     // Deps intentionally exclude selection-derived callbacks (fitFloored/doJump
     // are stable) so the canvas only rebuilds on real filter/data changes, not
     // when a node is clicked. eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleSet, baseVisNodes, edges]);
+  }, [visibleSet, baseVisNodes, edges, layout, allNodes]);
 
   // Re-skin when the highlight overlay changes (slider / file / type / query),
   // unless a node cone is currently selected (that takes visual precedence).
@@ -781,8 +857,9 @@ export default function DagView() {
   const stats = useMemo(() => {
     const vals = [...allNodes.values()];
     const bp = vals.filter((n) => n.type !== 'lean_aux');
-    const proved = bp.filter((n) => n.proved || n.mathlib_ok).length;
+    const proved = bp.filter((n) => n.proved).length;
     const mathlib = bp.filter((n) => n.mathlib_ok).length;
+    const complete = bp.filter(isDoneNode).length;
     const sorry = vals.filter((n) => n.has_sorry).length;
     const ready = bp.filter((n) => !isDoneNode(n) && n.uses.every((d) => !allNodes.has(d) || doneIds.has(d))).length;
     const gaps = bp.filter((n) => !n.lean_name && !n.mathlib_ok).length;
@@ -794,10 +871,11 @@ export default function DagView() {
     let done = 0, remLower = 0, infNodes = 0;
     for (const n of vals) {
       if (n.proof_size_lean != null) done += n.proof_size_lean;
+      if (isDoneNode(n)) continue;
       if (n.effort_local == null) infNodes++; else remLower += n.effort_local;
     }
-    const pct = bp.length ? Math.round((100 * proved) / bp.length) : 0;
-    return { provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes, leaves, roots, isolated };
+    const pct = bp.length ? Math.round((100 * complete) / bp.length) : 0;
+    return { completeN: complete, provedN: proved, mathlib, bpN: bp.length, pct, sorry, ready, gaps, leanok, done, remLower, infNodes, leaves, roots, isolated };
   }, [allNodes, isDoneNode, doneIds]);
 
   const sel = selId ? allNodes.get(selId) : undefined;
@@ -887,6 +965,10 @@ export default function DagView() {
             </div>
           </details>
         )}
+        <select className="dv-select" value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)} title="Graph layout: force-directed shows centrality; layered stacks nodes by dependency depth">
+          <option value="force">Force-directed</option>
+          <option value="layered">Layered · by depth</option>
+        </select>
         <select className="dv-select" value={nodeset} onChange={(e) => { setNodeset(e.target.value as NodeSet); setFocus(null); }} title="Which declarations to include">
           <option value="union">All declarations</option>
           <option value="blueprint">Blueprint only</option>
@@ -943,9 +1025,10 @@ export default function DagView() {
               <h4>Project</h4>
               <button className="dv-stats-toggle" title="Minimize" onClick={() => setStatsOpen(false)}>–</button>
             </div>
-            <div className="row"><span>Proved (\leanok)</span><span className="v done">{stats.provedN}/{stats.bpN} · {stats.pct}%</span></div>
+            <div className="row"><span>Complete</span><span className="v done">{stats.completeN}/{stats.bpN} · {stats.pct}%</span></div>
             <div className="bar"><span style={{ width: `${stats.pct}%` }} /></div>
-            {stats.mathlib > 0 && <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>}
+            <div className="row"><span>Lean-proved</span><span className="v done">{stats.provedN}</span></div>
+            <div className="row"><span>Mathlib-backed</span><span className="v mathlib">{stats.mathlib}</span></div>
             {qRow('With sorry', stats.sorry, 'sorry', stats.sorry ? 'inf' : '')}
             {qRow('Ready to formalize', stats.ready, 'frontier')}
             <div className="row"><span>Needs \lean{'{}'}</span><span className="v">{stats.gaps}</span></div>
@@ -953,8 +1036,8 @@ export default function DagView() {
             <div className="sep" />
             <h4>Structure</h4>
             <div className="row"><span>Components</span><span className="v">{components.length}</span></div>
-            {qRow('Leaves', stats.leaves, 'leaves')}
-            {qRow('Roots', stats.roots, 'roots')}
+            {qRow('Sinks', stats.leaves, 'leaves')}
+            {qRow('Sources', stats.roots, 'roots')}
             {qRow('Isolated', stats.isolated, 'isolated', stats.isolated ? 'inf' : '')}
             <div className="sep" />
             <h4>Effort (chars)</h4>
@@ -987,23 +1070,27 @@ export default function DagView() {
         </aside>
       </div>
 
-      {/* Temporal axis — same commit rail as the Graph view. Click a commit to
-          rebuild the DAG as it was at that commit (in-memory, never cached). */}
-      <div className="dv-resize-h" onMouseDown={botResize.onMouseDown} title="Drag to resize" />
-      <div className="dv-git-panel" ref={gitPanelRef} style={{ height: botResize.size }}>
-        <div className="dv-git-head">
-          <span className="dv-git-title">Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
-          {selectedSha && (
-            <button className="dv-git-live" onClick={() => setSelectedSha('')}>← Live</button>
-          )}
-        </div>
-        <GitTimeline
-          commits={commits}
-          selectedSha={selectedSha}
-          onSelect={(c: GitCommit) => setSelectedSha((prev) => (prev === c.sha ? '' : c.sha))}
-          containerW={gitW}
-        />
-      </div>
+      {!isStatic && (
+        <>
+          {/* Temporal axis — same commit rail as the Graph view. Click a commit to
+              rebuild the DAG as it was at that commit (in-memory, never cached). */}
+          <div className="dv-resize-h" onMouseDown={botResize.onMouseDown} title="Drag to resize" />
+          <div className="dv-git-panel" ref={gitPanelRef} style={{ height: botResize.size }}>
+            <div className="dv-git-head">
+              <span className="dv-git-title">Git history{isFetching && selectedSha ? ' · building…' : ''}</span>
+              {selectedSha && (
+                <button className="dv-git-live" onClick={() => setSelectedSha('')}>← Live</button>
+              )}
+            </div>
+            <GitTimeline
+              commits={commits}
+              selectedSha={selectedSha}
+              onSelect={(c: GitCommit) => setSelectedSha((prev) => (prev === c.sha ? '' : c.sha))}
+              containerW={gitW}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1122,7 +1209,7 @@ function NodePanel({ n, ancestors, macros, focused, labels, lastMod, presence, o
           <div className="degree"><span className="degree-val">{n.rdep_count}</span><span className="degree-label">used by</span></div>
         </div>
         <div className="deps-sub">direct dependencies</div>
-        <DepList key={`direct-${n.id}`} items={n.uses} empty="none — axiom" onGoTo={onGoTo} />
+        <DepList key={`direct-${n.id}`} items={n.uses} empty="none - source" onGoTo={onGoTo} />
         <div className="deps-sub">indirect (transitive) dependencies</div>
         <DepList key={`indirect-${n.id}`} items={indirect} empty="none beyond the direct ones" onGoTo={onGoTo} />
       </div>

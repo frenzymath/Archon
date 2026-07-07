@@ -44,30 +44,55 @@ class SemanticPassStep(InitStep):
 
         bootstrap_summary = self._build_bootstrap_summary(layout)
 
+        if ctx.headless:
+            objective_instruction = (
+                "IMPORTANT: You are running in a headless CI/automation environment. "
+                "Do NOT ask the user to confirm or adjust objectives. Make your best judgment, "
+                "write the initial objectives directly to PROGRESS.md, and proceed."
+            )
+            verification_instruction = (
+                "When you have finished the init steps, run /archon-lean4:doctor to verify "
+                "the full setup before exiting."
+            )
+        else:
+            objective_instruction = (
+                "IMPORTANT: After checking the project state, do NOT write initial objectives \\\n"
+                "            on your own. Instead, propose what you think the objectives should be, then \\\n"
+                "            ask the user to confirm or adjust before writing them to PROGRESS.md. Wait \\\n"
+                "            for the user's reply."
+            )
+            verification_instruction = (
+                "When the user has confirmed and you have finished the init steps, run \\\n"
+                "            /archon-lean4:doctor to verify the full setup before exiting."
+            )
+
         prompt = textwrap.dedent(f"""\
             You are in the init stage for project '{project_name}' at {ctx.project_path}. \
             Read {ctx.state_dir}/AGENTS.md, then read {ctx.state_dir}/prompts/init.md and follow \
             its instructions. Project state files are in {ctx.state_dir}/. Write PROGRESS.md \
             and other state files there, not in the project directory.
 
-            IMPORTANT: After checking the project state, do NOT write initial objectives \
-            on your own. Instead, propose what you think the objectives should be, then \
-            ask the user to confirm or adjust before writing them to PROGRESS.md. Wait \
-            for the user's reply.
+            {objective_instruction}
 
-            When the user has confirmed and you have finished the init steps, run \
-            /archon-lean4:doctor to verify the full setup before exiting.
+            {verification_instruction}
 
             Remark: A bootstrap process has already run to install lake, mathlib, and \
             other deterministic setup, including creating an empty \
             {protect.PROTECTED_FILENAME} at the project root. Here is its report:
             {json.dumps(bootstrap_summary, indent=2)}
             """)
+            
+        if ctx.focus:
+            prompt += f"\n\nIMPORTANT CLI INSTRUCTION:\n{ctx.focus}\nPlease ensure you factor this into your init tasks.\n"
 
         cfg = load_project_config(ctx.project_path)
-        build_runner(
-            role="init", model=ctx.model, cfg=cfg, backend=ctx.backend,
-        ).run_interactive(prompt, cwd=ctx.project_path)
+        runner = build_runner(
+            role="init", model=ctx.model, cfg=cfg, backend=ctx.backend, harness=ctx.harness,
+        )
+        if ctx.headless:
+            runner.run(prompt, cwd=ctx.project_path)
+        else:
+            runner.run_interactive(prompt, cwd=ctx.project_path)
 
         new_stage = parse_stage(progress_md)
         if new_stage == "init":

@@ -2,6 +2,29 @@
 
 All notable changes to Archon are documented here.
 
+## [0.3.3] — 2026-07
+
+A patch release: incremental dashboard and workflow improvements over 0.3.2.
+The core proving loop is unchanged, and every 0.3.1/0.3.2 fix carries forward.
+
+### Added
+
+- **Scope & roadmap.** A Scope Home dashboard view with interactive
+  project-status checklists, and an `archon scope roadmap` agent that launches
+  an interactive session and condenses the plan into milestones rather than an
+  exhaustive list.
+- **Static dashboard export** (`archon dashboard --static-build`). Builds a
+  self-contained static copy of the dashboard suitable for GitHub Pages, so a
+  project's DAG/blueprint/logs can be published without a running server.
+- **Token & USD cost tracking.** Per-operation and turn-level token and dollar
+  accounting, surfaced in the UI log viewer.
+- **Multi-project dashboard.** A project switcher and a Meta DAG *union* view
+  across peer projects (building on `.archon/peers.yaml`), so several projects
+  can be monitored — and their DAGs merged — from one dashboard.
+- **Layered DAG layout** (#31). A "Layered · by depth" option in the DAG view
+  alongside the force-directed default: nodes are ranked by longest dependency
+  chain and stacked top-down, so the prerequisite structure reads clearly.
+
 ## [0.3.2] — 2026-07
 
 A patch release: two bug fixes reported against v0.3.1, one contributed
@@ -12,46 +35,37 @@ enhancement, and a version-badge correction. No configuration changes.
 - **Dashboard behind a path-prefix reverse proxy.** The dashboard now works
   when mounted under a URL sub-path (jupyter-server-proxy, code-server
   `/proxy/<port>/`, nginx/k8s ingress sub-paths), not just at the origin root.
-  `/api/*` calls, the log-stream WebSocket, built asset paths, and the router
-  all derive their base from the runtime location; every change is a no-op at
-  the root, so existing localhost/root deployments are unaffected. Contributed
-  by [@surenny](https://github.com/surenny) in
+  Every change is a no-op at the root, so existing localhost/root deployments
+  are unaffected. Contributed by [@surenny](https://github.com/surenny) in
   [#29](https://github.com/frenzymath/Archon/pull/29).
 
 ### Fixed
 
 - **`sync_leanok` stripped valid `\leanok` markers every round.** The decl
-  index (`_scan_lean_decls`) didn't exclude `.archon`, so full-source history
-  snapshots under `.archon/logs/*/snapshots/` poisoned the index and a snapshot
-  path could win over the real declaration — the derived module failed to build
-  and the marker was stripped (reproducibly ~48/round).
+  index didn't exclude `.archon`, so full-source history snapshots poisoned it
+  and a snapshot path could win over the real declaration — the marker was then
+  stripped (reproducibly ~48/round).
   [#32](https://github.com/frenzymath/Archon/issues/32).
 - **`archon loop` crashed with `FileNotFoundError: 'claude'` mid-run.** The
-  Claude Code CLI auto-updates by swapping its launcher on disk; a spawn landing
-  in that window took the whole loop down. Agent spawns now retry through the
-  swap with a short backoff. [#30](https://github.com/frenzymath/Archon/issues/30).
-- **Dashboard version badge stuck at 0.3.0.** The UI `package.json` manifests
-  were never bumped for 0.3.1, so the badge under-reported the release; all
-  manifests now track the package version.
+  Claude Code CLI auto-updates by swapping its launcher on disk; agent spawns
+  now retry through the swap. [#30](https://github.com/frenzymath/Archon/issues/30).
+- **Dashboard version badge stuck at 0.3.0.** The UI manifests were never
+  bumped for 0.3.1; all manifests now track the package version.
 
 ## [0.3.1] — 2026-06
 
 A hotfix release: three bugs reported against v0.3.0, fixed without pulling in
-the in-progress v0.4.0 feature work.
+the in-progress feature work on the dev branch.
 
 ### Fixed
 
-- **`archon init` (merge mode) crashed with `UnboundLocalError: project_path`**
-  — `load_project_config(project_path)` ran before the variable was assigned in
-  `PromptMerger._merge_with_claude`.
+- **`archon init` (merge mode) crashed with `UnboundLocalError: project_path`.**
 - **Re-init left `PROGRESS.md` stuck at `init`** on projects that already had
-  Lean content, so `archon loop` / `archon dag` refused to run. Re-init now
-  reconciles the stage from the detected declarations; empty projects stay at
-  `init`.
-- **`sync_leanok` corrupted inline `\leanok` math.** `_LEANOK_LINE_RE` swallowed
+  Lean content, so `archon loop` / `archon dag` refused to run; re-init now
+  reconciles the stage from the detected declarations.
+- **`sync_leanok` corrupted inline `\leanok` math.** The line regex swallowed
   the rest of the line, so `\leanok \(x = y\)` lost its opening `\(` and crashed
-  plastex/leanblueprint with a `RecursionError`. The regex is now anchored to a
-  `\leanok`-alone line; inline forms strip only the bare macro.
+  plastex; it is now anchored to a `\leanok`-alone line.
 
 ## [0.3.0] — 2026-06
 

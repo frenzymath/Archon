@@ -16,6 +16,9 @@ import urllib.error
 import urllib.request
 
 
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def port_in_use(port: int) -> bool:
     """Return True if the dashboard server can NOT bind to `port`.
 
@@ -90,7 +93,7 @@ def wait_for_http(port: int, expected_archon_path: str, timeout: float = 4.0) ->
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=0.5) as resp:
+            with _NO_PROXY_OPENER.open(url, timeout=0.5) as resp:
                 if resp.status == 200:
                     try:
                         data = json.loads(resp.read().decode("utf-8"))
