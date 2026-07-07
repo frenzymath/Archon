@@ -9,7 +9,7 @@ The package is split by concern:
   - :mod:`.cost`      — Claude session_end aggregation
 """
 
-from .cost import CostData, cost_summary
+from .cost import CostData, cost_summary, OperationCost
 from .iteration import (
     SessionRename,
     apply_session_renames,
@@ -45,6 +45,7 @@ from .progress import (
 
 __all__ = [
     "CostData",
+    "OperationCost",
     "cost_summary",
     "SessionRename",
     "apply_session_renames",
