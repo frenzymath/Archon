@@ -1,12 +1,15 @@
 """Typer entry point for ``archon merge``.
 
-Combines two archon projects that share part of their blueprint DAG. The
-``target`` is duplicated into ``--dest`` (never modified); the ``--from``
-source is mounted read-only. For every declaration the two share — same
-Lean name / blueprint label, same statement — the session keeps the better
-proof (``--prefer source`` by default, since you usually merge a project
-*because* it carries the improvement). A genuinely differing statement is a
-conflict the session surfaces rather than auto-merges.
+Combines two archon projects that share part of their blueprint DAG. By
+default the ``target`` is duplicated into ``--dest`` (never modified); the
+``--from`` source is mounted read-only. With ``--in-place`` instead the merge
+edits the ``target`` directly — the pre-merge state is snapshotted to the
+target's inner git (``.archon/git-dir``) as a revert point and the merged
+result is committed there once the verify gate passes. For every declaration
+the two share — same Lean name / blueprint label, same statement — the session
+keeps the better proof (``--prefer source`` by default, since you usually merge
+a project *because* it carries the improvement). A genuinely differing
+statement is a conflict the session surfaces rather than auto-merges.
 
 Because a swapped-in proof only type-checks against the *signatures* of the
 lemmas it uses (not their proofs), best-per-declaration selection is a safe,
@@ -39,9 +42,18 @@ def merge(
         help="The archon project to merge FROM (read-only). Must share the "
              "target's lean-toolchain and mathlib pin.",
     ),
-    dest: str = typer.Option(
-        ..., "--dest", "-d",
-        help="Where to create the merged sandbox (must not exist).",
+    dest: Optional[str] = typer.Option(
+        None, "--dest", "-d",
+        help="Where to create the merged sandbox (must not exist). Omit when "
+             "using --in-place.",
+    ),
+    in_place: bool = typer.Option(
+        False, "--in-place",
+        help="Merge directly INTO the target (no sandbox copy). The pre-merge "
+             "state is snapshotted to the target's inner git (`.archon/git-dir`) "
+             "and the merged result is committed there once the verify gate "
+             "passes — so you can revert with `archon branch`. Mutually "
+             "exclusive with --dest.",
     ),
     union: bool = typer.Option(
         False, "--union",
@@ -104,24 +116,33 @@ def merge(
     \b
     After the session a deterministic gate verifies the result: the DAG
     rebuilds with zero broken \\uses{}, every agreed node is present, and
-    (by default) `lake build` succeeds. Only then is the sandbox finalized
-    with a fresh outer git history.
+    (by default) `lake build` succeeds. Only then is the result finalized —
+    a sandbox merge gets a fresh outer git history; an --in-place merge is
+    committed to the target's inner git (`.archon/git-dir`), leaving the
+    pre-merge snapshot as a revert point.
 
     \b
     Examples:
       archon merge ~/proj/B --from ~/proj/A --dest ~/proj/AB
       archon merge ~/proj/B --from ~/proj/A --dest ~/proj/AB --union
       archon merge ~/proj/B --from ~/proj/A --dest ~/proj/AB --prefer target
+      archon merge ~/proj/B --from ~/proj/A --in-place   # edit B directly, commit to inner git
     """
     if lake not in ("hardlink", "copy", "none"):
         raise typer.BadParameter("--lake must be hardlink | copy | none")
     if prefer not in ("source", "target"):
         raise typer.BadParameter("--prefer must be source | target")
+    if in_place and dest:
+        raise typer.BadParameter("pass either --dest or --in-place, not both")
+    if not in_place and not dest:
+        raise typer.BadParameter(
+            "merge needs a --dest sandbox, or --in-place to merge into the target"
+        )
     project_config = load_project_config(Path(target))
     backend = resolve_claude_backend(project_config, cli_value=claude_backend)
     ExtractCommand(
         target, dest,
         merge_source=source, union=union, prefer=prefer,
-        lake_mode=lake, resume=resume,
+        lake_mode=lake, resume=resume, in_place=in_place,
         build_check=build, model=model, backend=backend, harness=harness,
     ).run()

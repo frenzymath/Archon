@@ -81,6 +81,15 @@ class DuplicateReport:
     warnings: list[str] = field(default_factory=list)
 
 
+@dataclass
+class InPlaceReport:
+    """Result of preparing an in-place merge (no duplication)."""
+    target: Path
+    snapshot_sha: str | None = None
+    manifest_path: Path | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
 def _sha256_short(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -160,6 +169,105 @@ def _manifest_files(dest: Path) -> dict[str, str]:
     return hashes
 
 
+def _write_manifest(
+    dest: Path,
+    *,
+    mode: str,
+    parent: Path,
+    parent_inner_head: str | None,
+    parent_outer_head: str | None,
+    merge_source: Path | None,
+    union: bool,
+    prefer: str,
+    lake_mode: str,
+    in_place: bool = False,
+) -> Path:
+    """Write ``.archon/extract-manifest.json`` and return its path.
+
+    Shared by sandbox duplication and in-place merge so both record the same
+    provenance schema the verify gate reads back (parent, the inner-git head to
+    diff regressions against, merge winner/scope policy, source hashes).
+    """
+    manifest = {
+        "version": 1,
+        "mode": mode,
+        "in_place": in_place,
+        "created_at": utcnow_iso(),
+        "parent": str(parent),
+        "parent_inner_head": parent_inner_head,
+        "parent_outer_head": parent_outer_head,
+        "merge_source": str(merge_source) if merge_source else None,
+        "union": union,       # merge: full union vs enrich-target-only
+        "prefer": prefer,     # merge: which side's proof wins an overlap
+        "lake_mode": lake_mode,
+        "seeds": [],        # filled by the session once scope is agreed
+        "closure": [],      # filled by the session from the carve plan
+        "overlaps": [],     # merge: filled by the session — per-decl winner
+        "files": _manifest_files(dest),
+    }
+    path = dest / ".archon" / MANIFEST_NAME
+    path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return path
+
+
+def prepare_in_place(
+    target: Path,
+    *,
+    merge_source: Path | None = None,
+    union: bool = False,
+    prefer: str = "source",
+) -> InPlaceReport:
+    """Prepare an *in-place* merge: snapshot the target, write the manifest.
+
+    Unlike :func:`duplicate_project`, nothing is copied — the merge session
+    edits ``target`` directly. To keep that safe and reviewable we first commit
+    the current state to the target's inner git (``.archon/git-dir``); that
+    snapshot is both the undo point and the baseline the verify gate diffs
+    regressions against (recorded as ``parent_inner_head``). The merged result
+    is committed to the same inner git after the gate passes.
+    """
+    target = target.resolve()
+    if not (target / ".archon").is_dir():
+        raise FileNotFoundError(f"{target} is not an archon project (no .archon/)")
+
+    report = InPlaceReport(target=target)
+
+    if InnerGit.available():
+        inner = InnerGit(target)
+        inner.init()
+        inner.ensure_initial_commit("archon: initial state")
+        label = (
+            f"archon[merge]: pre-merge snapshot ({merge_source.name} → {target.name})"
+            if merge_source else "archon[merge]: pre-merge snapshot"
+        )
+        # allow_empty so a clean tree still yields a labeled pre-merge ref.
+        inner.commit(label, allow_empty=True)
+        report.snapshot_sha = inner.head_sha(short=False)
+    else:
+        report.warnings.append(
+            "`git` not on PATH — no inner-git snapshot/undo for the in-place merge"
+        )
+
+    report.manifest_path = _write_manifest(
+        target,
+        mode="merge",
+        parent=target,
+        parent_inner_head=report.snapshot_sha,
+        parent_outer_head=_outer_head(target),
+        merge_source=merge_source,
+        union=union,
+        prefer=prefer,
+        lake_mode="none",
+        in_place=True,
+    )
+
+    for w in report.warnings:
+        log.warn(w)
+    return report
+
+
 def duplicate_project(
     parent: Path,
     dest: Path,
@@ -218,27 +326,18 @@ def duplicate_project(
         report.warnings.append("`git` not on PATH — sandbox has no inner git (no undo)")
 
     # ── 5. Provenance manifest ─────────────────────────────────────────
-    manifest = {
-        "version": 1,
-        "mode": mode,
-        "created_at": utcnow_iso(),
-        "parent": str(parent),
-        "parent_inner_head": (
+    report.manifest_path = _write_manifest(
+        dest,
+        mode=mode,
+        parent=parent,
+        parent_inner_head=(
             InnerGit(parent).head_sha(short=False) if InnerGit.available() else None
         ),
-        "parent_outer_head": _outer_head(parent),
-        "merge_source": str(merge_source) if merge_source else None,
-        "union": union,       # merge: full union vs enrich-target-only
-        "prefer": prefer,     # merge: which side's proof wins an overlap
-        "lake_mode": lake_mode,
-        "seeds": [],        # filled by the session once scope is agreed
-        "closure": [],      # filled by the session from the carve plan
-        "overlaps": [],     # merge: filled by the session — per-decl winner
-        "files": _manifest_files(dest),
-    }
-    report.manifest_path = state_dst / MANIFEST_NAME
-    report.manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        parent_outer_head=_outer_head(parent),
+        merge_source=merge_source,
+        union=union,
+        prefer=prefer,
+        lake_mode=lake_mode,
     )
 
     for w in report.warnings:
