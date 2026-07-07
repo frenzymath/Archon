@@ -25,10 +25,10 @@ function estimateCostUSD(model: string, inputTokens: number, outputTokens: numbe
     return (inputTokens * 1.10 + outputTokens * 4.40) / 1000000;
   } else if (m.includes('o1-preview') || m.includes('o1')) {
     return (inputTokens * 15.00 + outputTokens * 60.00) / 1000000;
-  } else if (m.includes('deepseek-chat') || m.includes('deepseek-v3') || m.includes('deepseek')) {
-    return (inputTokens * 0.14 + outputTokens * 0.28) / 1000000;
   } else if (m.includes('deepseek-reasoner') || m.includes('deepseek-r1')) {
     return (inputTokens * 0.55 + outputTokens * 2.19) / 1000000;
+  } else if (m.includes('deepseek-chat') || m.includes('deepseek-v3') || m.includes('deepseek')) {
+    return (inputTokens * 0.14 + outputTokens * 0.28) / 1000000;
   }
   return (inputTokens * 2.50 + outputTokens * 10.00) / 1000000;
 }

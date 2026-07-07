@@ -45,10 +45,10 @@ def estimate_cost_usd(
         return (input_tokens * 1.10 + output_tokens * 4.40) / 1_000_000.0
     elif "o1-preview" in m or "o1" in m:
         return (input_tokens * 15.00 + output_tokens * 60.00) / 1_000_000.0
-    elif "deepseek-chat" in m or "deepseek-v3" in m or "deepseek" in m:
-        return (input_tokens * 0.14 + output_tokens * 0.28) / 1_000_000.0
     elif "deepseek-reasoner" in m or "deepseek-r1" in m:
         return (input_tokens * 0.55 + output_tokens * 2.19) / 1_000_000.0
+    elif "deepseek-chat" in m or "deepseek-v3" in m or "deepseek" in m:
+        return (input_tokens * 0.14 + output_tokens * 0.28) / 1_000_000.0
     return (input_tokens * 2.50 + output_tokens * 10.00) / 1_000_000.0
 
 

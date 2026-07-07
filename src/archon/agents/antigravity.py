@@ -78,7 +78,7 @@ def extract_tool_result(fields: dict[str, bytes], step_type: int) -> str | None:
         entries = []
         for path, val_bytes in sorted(fields.items()):
             parts = path.split('.')
-            if len(parts) >= 2 and parts[-2] == '3' and parts[-3] == '15':
+            if len(parts) >= 3 and parts[-2] == '3' and parts[-3] == '15':
                 try:
                     entries.append(val_bytes.decode('utf-8'))
                 except Exception:

@@ -74,6 +74,14 @@ export function register(fastify: FastifyInstance, _paths: ProjectPaths) {
     try {
       const st = fs.statSync(abs);
       if (!st.isFile()) return reply.status(404).send({ error: 'not a file' });
+      // safeJoin only string-checks `rel`; a symlink inside the project could
+      // still point outside the root. Resolve the real path and re-check
+      // containment so we never read files outside the project root.
+      const realRoot = fs.realpathSync(path.resolve(projectPath));
+      const realAbs = fs.realpathSync(abs);
+      if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+        return reply.status(400).send({ error: 'invalid path' });
+      }
       if (st.size > MAX_FILE_BYTES) {
         return reply.status(413).send({ error: 'file too large', size: st.size });
       }
