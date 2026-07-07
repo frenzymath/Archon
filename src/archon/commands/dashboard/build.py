@@ -78,12 +78,24 @@ def needs_build(client_dir: Path) -> bool:
     return False
 
 
-def build_client(client_dir: Path) -> None:
+def build_client(
+    client_dir: Path,
+    *,
+    out_dir: Path | None = None,
+    base: str | None = None,
+) -> None:
     """Build the client via vite, exiting on failure."""
     vite = client_dir / "node_modules" / "vite" / "bin" / "vite.js"
+    cmd = ["node", str(vite), "build", "--logLevel", "warn"]
+    if out_dir is not None:
+        cmd.extend(["--outDir", str(out_dir), "--emptyOutDir"])
+    if base is not None:
+        cmd.extend(["--base", base])
     r = subprocess.run(
-        ["node", str(vite), "build", "--logLevel", "warn"],
-        cwd=client_dir, capture_output=True, text=True,
+        cmd,
+        cwd=client_dir,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         log.error(f"Client build failed: {r.stderr.strip()}")

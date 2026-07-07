@@ -15,6 +15,21 @@ def dashboard(
     ),
     dev: bool = typer.Option(False, "--dev", help="Run in dev mode (vite dev + tsx watch)."),
     build_only: bool = typer.Option(False, "--build", help="Build client only, no server."),
+    static_build: bool = typer.Option(
+        False,
+        "--static-build",
+        help="Export a static dashboard snapshot suitable for GitHub Pages.",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Output directory for --static-build (default: <project>/docs).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Allow --static-build to replace a non-empty output directory.",
+    ),
     open_browser: bool = typer.Option(False, "--open", help="Open browser after starting."),
     restart: bool = typer.Option(
         False, "--restart",
@@ -37,6 +52,9 @@ def dashboard(
         port=port,
         dev=dev,
         build_only=build_only,
+        static_build=static_build,
+        out=out,
+        force=force,
         open_browser=open_browser,
         restart=restart,
     ).run()

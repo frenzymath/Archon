@@ -45,6 +45,19 @@ export interface PeerEntry {
  * stderr, so stdout is clean JSON (same contract `dag-graph` relies on).
  */
 export function loadPeers(projectPath: string): PeerEntry[] {
+  // Scope mode: `archon scope dashboard` injects the scope's members as the
+  // peer set via ARCHON_SCOPE_PEERS (JSON), so the project switcher and the
+  // union DAG span the whole scope rather than the host project's own
+  // `.archon/peers.yaml`. Falls through to per-project resolution if unset.
+  const override = process.env.ARCHON_SCOPE_PEERS;
+  if (override) {
+    try {
+      const parsed = JSON.parse(override);
+      if (Array.isArray(parsed)) return parsed as PeerEntry[];
+    } catch {
+      /* malformed override — fall back to the host project's peers */
+    }
+  }
   try {
     const r = spawnSync(ARCHON_BIN, ['peers', '--project-path', projectPath, '--json'], {
       encoding: 'utf-8',
