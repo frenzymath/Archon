@@ -16,7 +16,7 @@ function splitToolHeadline(headline: string): { toolLabel: string; rest: string 
 const EVENT_COLORS: Record<string, string> = {
   shell: 'var(--blue)', thinking: 'var(--text-muted)', tool_call: 'var(--purple)',
   tool_result: 'var(--orange)', text: 'var(--green)', session_end: 'var(--green)',
-  code_snapshot: 'var(--blue)', prompt: 'var(--purple)',
+  code_snapshot: 'var(--blue)', prompt: 'var(--purple)', turn_usage: 'var(--blue)',
 };
 
 interface Props { entry: LogEntry; }
@@ -118,13 +118,23 @@ export default function LogEntryLine({ entry }: Props) {
       if (entry.summary) hasDetail = true;
       break;
     }
+    case 'turn_usage': {
+      const parts: string[] = [];
+      const costVal = entry.total_cost_usd || entry.cost_usd || 0;
+      if (entry.input_tokens) parts.push(`${entry.input_tokens.toLocaleString()} in`);
+      if (entry.cache_read_input_tokens) parts.push(`${entry.cache_read_input_tokens.toLocaleString()} cached`);
+      if (entry.output_tokens) parts.push(`${entry.output_tokens.toLocaleString()} out`);
+      if (costVal) parts.push(`$${costVal.toFixed(4)}`);
+      headline = parts.join(' · ');
+      break;
+    }
   }
 
   return (
     <div className={styles.line}>
       <span className={styles.ts}>{fmtTime(entry.ts)}</span>
       <span className={styles.event} style={{ color: EVENT_COLORS[entry.event] || 'var(--text-muted)' }}>
-        {entry.event}{entry.level === 'error' ? '!' : entry.level === 'warn' ? '⚠' : ''}
+        {entry.event === 'turn_usage' ? 'turn cost' : entry.event}{entry.level === 'error' ? '!' : entry.level === 'warn' ? '⚠' : ''}
       </span>
       <span
         className={`${styles.text} ${hasDetail ? styles.expandable : ''}`}

@@ -25,6 +25,8 @@ import { register as registerMultilane } from './routes/multilane.js';
 import { register as registerDag } from './routes/dag.js';
 import { register as registerBlueprint } from './routes/blueprint.js';
 import { register as registerPeers } from './routes/peers.js';
+import { register as registerScope } from './routes/scope.js';
+import { register as registerSource } from './routes/source.js';
 import type { ProjectPaths } from './routes/project.js';
 import { makePaths, loadPeers, allowedRoots } from './paths.js';
 
@@ -120,6 +122,8 @@ export async function createServer(options: { projectPath: string; port: number 
   registerDag(fastify, paths);
   registerBlueprint(fastify, paths);
   registerPeers(fastify, paths);
+  registerScope(fastify, paths);
+  registerSource(fastify, paths);
 
   // Host selection.
   //   Native Linux/macOS → dual-stack `::` (IPV6_V6ONLY=0 accepts IPv4 too).

@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { LogEntry } from '../types';
 import { getProjectScope } from '../lib/projectScope';
+import { isStaticDashboard } from '../lib/staticMode';
 import { wsUrl } from '../utils/constants';
 
 const POLL_INTERVAL = 3000;
@@ -66,6 +67,7 @@ export function useLogStream(selectedFile: string): UseLogStreamResult {
     }
 
     function startPolling() {
+      if (isStaticDashboard()) return;
       if (pollRef.current) return;
       pollRef.current = setInterval(async () => {
         if (cancelled) return;
@@ -73,6 +75,13 @@ export function useLogStream(selectedFile: string): UseLogStreamResult {
         if (count !== undefined) {
         }
       }, POLL_INTERVAL);
+    }
+
+    if (isStaticDashboard()) {
+      fetchLog();
+      return () => {
+        cancelled = true;
+      };
     }
 
     // --- WebSocket ---

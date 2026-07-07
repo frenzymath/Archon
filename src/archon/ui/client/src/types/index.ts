@@ -1,7 +1,7 @@
 // --- Log types ---
 export interface LogEntry {
   ts: string;
-  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt';
+  event: 'shell' | 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'session_end' | 'code_snapshot' | 'prompt' | 'turn_usage';
   level?: 'info' | 'warn' | 'error';
   message?: string;
   content?: string;
@@ -13,12 +13,14 @@ export interface LogEntry {
   snapshot_path?: string;
   old_string?: string;
   new_string?: string;
-  // session_end fields
+  // session_end / turn_usage fields
   total_cost_usd?: number;
+  cost_usd?: number;
   duration_ms?: number;
   num_turns?: number;
   input_tokens?: number;
   output_tokens?: number;
+  cache_read_input_tokens?: number;
   model_usage?: Record<string, { inputTokens: number; outputTokens: number; costUSD: number }>;
   summary?: string;
   // prompt event fields — the initial prompt sent to claude (stamped right
@@ -90,6 +92,7 @@ export interface Task {
 
 // --- Session summary types ---
 export interface SessionSummary {
+  operation?: string;
   cost: number;
   duration: number;
   tokensIn: number;
