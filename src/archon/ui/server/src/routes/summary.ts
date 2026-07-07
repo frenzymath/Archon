@@ -5,6 +5,8 @@ import type { LogEntry, AggregatedStats, SessionSummary } from '../types.js';
 import { parseJsonl, primaryModelId } from '../utils.js';
 import type { ProjectPaths } from './project.js';
 
+// Mirror of the canonical pricing table in archon/state/cost.py
+// (estimate_cost_usd). Keep the rates and branch order in sync with it.
 function estimateCostUSD(model: string, inputTokens: number, outputTokens: number, cacheReadTokens: number = 0): number {
   const m = model.toLowerCase();
   if (m.includes('sonnet')) {

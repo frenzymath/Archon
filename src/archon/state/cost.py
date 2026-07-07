@@ -25,7 +25,14 @@ def estimate_cost_usd(
     output_tokens: int,
     cache_read_tokens: int = 0,
 ) -> float:
-    """Estimate USD cost based on token counts and model pricing."""
+    """Estimate USD cost based on token counts and model pricing.
+
+    CANONICAL model pricing table. Three mirrors exist that cannot import this
+    (two self-contained ``python -c`` stream-parser templates in
+    ``archon/agent.py`` and ``archon/agents/codex.py``, and a TypeScript copy in
+    ``ui/server/src/routes/summary.ts``). Keep all four in sync when pricing
+    changes — a drift here is what let deepseek-reasoner bill at chat rates.
+    """
     m = model.lower()
     if "sonnet" in m:
         return (input_tokens * 3.0 + output_tokens * 15.0 + cache_read_tokens * 0.30) / 1_000_000.0

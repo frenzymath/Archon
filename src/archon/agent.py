@@ -553,6 +553,8 @@ def emit(event_type, **fields):
     JSONL.write(json.dumps(row) + '\n')
     JSONL.flush()
 
+# Mirror of archon.state.cost.estimate_cost_usd (canonical). Inlined because
+# this parser is a self-contained `python -c` script and must not import archon.
 def estimate_cost_usd(model, input_tokens, output_tokens, cache_read_tokens=0):
     m = model.lower()
     if "sonnet" in m:
