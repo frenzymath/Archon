@@ -33,7 +33,7 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
 
 export default function App() {
   const { data: project, isError } = useProject();
-  const { data: scope } = useScope();
+  const { data: scope, isLoading: scopeLoading } = useScope();
   const isStatic = isStaticDashboard();
   const staticScope = isStaticScope();
   const inScopeMode = !!scope?.inScope;
@@ -88,7 +88,12 @@ export default function App() {
           <Route path="/dag" element={<DagView />} />
           <Route path="/blueprint" element={<Blueprint />} />
           <Route path="/code" element={showCode ? <CodeView /> : <Navigate to="/diffs" replace />} />
-          <Route path="/scope" element={showScopeHome ? <ScopeHome /> : <Navigate to="/" replace />} />
+          {/* Don't redirect off Scope Home until useScope() has resolved:
+              on a refresh or the reload() after switching projects, `scope`
+              is undefined on first render, so a premature <Navigate to="/">
+              would bounce the user to Overview. Hold on a null element while
+              the query is in flight. */}
+          <Route path="/scope" element={showScopeHome ? <ScopeHome /> : scopeLoading ? null : <Navigate to="/" replace />} />
           <Route path="/logs" element={isStatic ? <Navigate to="/" replace /> : <LogViewer />} />
           <Route path="/diffs" element={isStatic ? <Navigate to="/" replace /> : <DiffPlayback />} />
           <Route path="/journal" element={<Journal />} />

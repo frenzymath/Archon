@@ -33,8 +33,12 @@ function isStrictPathAncestor(parent: string, child: string): boolean {
   return pp.length < cp.length && pp.every((part, i) => cp[i] === part);
 }
 
-function dropContainerProjects(projects: ProjectOption[]): ProjectOption[] {
-  return projects.filter((p) => p.current || p.has_dag || !projects.some((q) => isStrictPathAncestor(p.path, q.path)));
+function dropContainerProjects(projects: ProjectOption[], keepPath: string): ProjectOption[] {
+  // Hide pure "container" parents (a peer that only exists as an ancestor of
+  // another peer and has no DAG of its own) to declutter the list — but never
+  // drop the currently-scoped project, or the controlled <select value> would
+  // reference an option that doesn't exist and render a blank/mismatched entry.
+  return projects.filter((p) => p.current || p.has_dag || p.path === keepPath || !projects.some((q) => isStrictPathAncestor(p.path, q.path)));
 }
 
 function commonPrefixLen(items: string[][]): number {
@@ -78,7 +82,7 @@ export function ProjectSwitcher() {
   const projects: ProjectOption[] = dropContainerProjects([
     { ...data.current, has_dag: true, current: true },
     ...data.peers,
-  ]).sort((a, b) => a.path.localeCompare(b.path));
+  ], selected).sort((a, b) => a.path.localeCompare(b.path));
   const commonLen = commonPrefixLen(projects.map((p) => pathParts(p.path)));
   const groups = projects.reduce<Map<string, ProjectOption[]>>((acc, p) => {
     const group = groupForProject(p, commonLen);
