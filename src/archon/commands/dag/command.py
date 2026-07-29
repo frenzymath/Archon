@@ -30,7 +30,11 @@ from archon.commands.loop.preflight import (
     check_informal_agent_keys,
     preflight,
 )
-from archon.commands.loop.services import BlueprintServerProcess, DashboardProcess
+from archon.commands.loop.services import (
+    BlueprintServerProcess,
+    DashboardProcess,
+    install_signal_exit,
+)
 
 from .context import DagContext, DagOptions
 from .phases import DagBuildPhase, DagDoctorPhase, DagElaborationPhase
@@ -167,6 +171,8 @@ class DagCommand:
         ctx = self.ctx
         opts = self.options
 
+        install_signal_exit()
+
         if not opts.dry_run and not opts.no_dashboard:
             dashboard = DashboardProcess(opts.project_path, open_browser=opts.open_browser)
             url = dashboard.start()
@@ -298,13 +304,13 @@ class DagCommand:
 
         if ctx.dashboard_url:
             log.panel(
-                f"DAG finished. The dashboard is still running at "
+                f"DAG finished. Dashboard URL: "
                 f"[bold cyan]{ctx.dashboard_url}[/bold cyan].\n"
                 + (
                     f"Blueprint preview: [bold cyan]{ctx.blueprint_url}[/bold cyan]\n"
                     if ctx.blueprint_url else ""
                 )
-                + "Inspect results, then stop it with Ctrl-C or by closing this terminal.",
+                + "The dashboard will be stopped automatically when the DAG process exits.",
                 title="Done",
                 style="green",
             )
