@@ -9,10 +9,13 @@ unsound dependency surface silently grows through clean-compiling
 delegates.
 
 This module runs the bundled ``check_axioms_inline.sh`` — which
-temporarily appends ``#print axioms`` to each Lean file, recompiles, and
-reverts (with backup/restore + an EXIT/INT/TERM trap) — over the
-project's top-level declarations, and reports any that depend on
-``sorryAx`` (and, secondarily, any other non-standard axiom).
+temporarily appends ``#print axioms`` to each project-source Lean file,
+recompiles, and reverts (with backup/restore + an EXIT/INT/TERM trap) —
+over the project's top-level declarations, and reports any that depend on
+``sorryAx`` (and, secondarily, any other non-standard axiom). Generated
+loop state under ``.archon/`` is excluded, especially historical
+``logs/iter-NNN/snapshots/*.lean`` files that need not elaborate against
+the current project imports.
 
 Informational only: it never blocks the loop and never mutates project
 state beyond the script's own backup/restore. It is comparatively

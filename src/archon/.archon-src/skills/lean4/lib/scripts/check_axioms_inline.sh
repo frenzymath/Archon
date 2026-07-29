@@ -107,7 +107,12 @@ for arg in "${POSITIONAL[@]}"; do
         while IFS= read -r -d '' file; do
             FILES+=("$file")
             dir_files_found=true
-        done < <(find "$arg" -type d \( -name .lake -o -name .git \) -prune -o -type f -name '*.lean' -print0)
+        # `.archon/` is loop state, not project source.  In particular,
+        # logs/iter-NNN/snapshots/ contains historical pre-edit copies that
+        # may no longer elaborate against the current imports.  Compiling
+        # those snapshots makes the whole current-source axiom sweep fail
+        # before it can report any axioms.
+        done < <(find "$arg" -type d \( -name .lake -o -name .git -o -name .archon \) -prune -o -type f -name '*.lean' -print0)
         if [[ "$dir_files_found" == false ]]; then
             if [[ -n "$EXIT_ZERO_ON_FINDINGS" ]]; then
                 echo -e "${YELLOW}Warning: no .lean files found under: $arg; skipping.${NC}" >&2
@@ -137,6 +142,24 @@ if [[ ${#FILES[@]} -gt 0 ]]; then
         done | sort -u
     )
     FILES=("${DEDUPED[@]}")
+fi
+
+# Also reject explicitly supplied files below `.archon/`.  The loop normally
+# invokes this script on the project directory, but keeping the exclusion here
+# prevents a direct glob/file argument from reintroducing historical snapshots.
+if [[ ${#FILES[@]} -gt 0 ]]; then
+    SOURCE_FILES=()
+    for file in "${FILES[@]}"; do
+        case "$file" in
+            */.archon/*)
+                continue
+                ;;
+            *)
+                SOURCE_FILES+=("$file")
+                ;;
+        esac
+    done
+    FILES=("${SOURCE_FILES[@]}")
 fi
 
 # Validate input
