@@ -8,6 +8,8 @@ The plan-phase helpers must:
   (so the init state and the cleared state match — a clean cycle that
   doesn't pollute the next planner's "user hints" view with stale
   content from the iter we just consumed);
+* retain temporary hints added or rewritten after the plan-start capture,
+  so they reach the following plan phase rather than being lost on clear;
 * leave the file alone when the captured content was empty.
 """
 
@@ -75,6 +77,84 @@ class ClearUserHintsTest(unittest.TestCase):
             self.assertEqual(
                 hints.read_text(encoding="utf-8"),
                 _read_user_hints_template(),
+            )
+
+    def test_preserves_temporary_hint_added_after_capture(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            hints = state / "USER_HINTS.md"
+            template = _read_user_hints_template()
+            consumed = "- [2026-01-01T00:00:00Z] consumed by this plan\n"
+            added = "- [2026-01-01T00:01:00Z] added while plan is running\n"
+            captured = template.replace(
+                "## Temporary hints\n\n",
+                "## Temporary hints\n\n" + consumed,
+                1,
+            )
+            hints.write_text(captured, encoding="utf-8")
+
+            # Simulate a user writing a new one-shot instruction while the
+            # plan agent is working from the earlier snapshot.
+            hints.write_text(captured.replace(consumed, consumed + added), encoding="utf-8")
+            _clear_user_hints(state, captured)
+
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                template.replace(
+                    "## Temporary hints\n\n",
+                    "## Temporary hints\n\n" + added,
+                    1,
+                ),
+            )
+
+    def test_preserves_new_temporary_hint_when_capture_had_only_persistent(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            hints = state / "USER_HINTS.md"
+            template = _read_user_hints_template()
+            persistent = "- [2026-01-01T00:00:00Z] standing directive\n"
+            added = "- [2026-01-01T00:01:00Z] added while plan is running\n"
+            captured = template.replace(
+                "## Persistent hints\n\n",
+                "## Persistent hints\n\n" + persistent,
+                1,
+            )
+            current = captured.replace(
+                "## Temporary hints\n\n",
+                "## Temporary hints\n\n" + added,
+                1,
+            )
+            hints.write_text(current, encoding="utf-8")
+
+            _clear_user_hints(state, captured)
+
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                current,
+            )
+
+    def test_preserves_temporary_hint_rewritten_after_capture(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            hints = state / "USER_HINTS.md"
+            template = _read_user_hints_template()
+            original = "- [2026-01-01T00:00:00Z] original wording\n"
+            rewritten = "- [2026-01-01T00:00:00Z] rewritten wording\n"
+            captured = template.replace(
+                "## Temporary hints\n\n",
+                "## Temporary hints\n\n" + original,
+                1,
+            )
+            hints.write_text(captured.replace(original, rewritten), encoding="utf-8")
+            _clear_user_hints(state, captured)
+
+            self.assertEqual(
+                hints.read_text(encoding="utf-8"),
+                template.replace(
+                    "## Temporary hints\n\n",
+                    "## Temporary hints\n\n" + rewritten,
+                    1,
+                ),
             )
 
     def test_creates_file_when_missing(self):

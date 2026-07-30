@@ -14,6 +14,7 @@ agent to do it:
 
 from __future__ import annotations
 
+from collections import Counter
 import re
 import time
 from pathlib import Path
@@ -87,6 +88,7 @@ def _capture_user_hints(state_dir: Path) -> str | None:
 
 
 _PERSISTENT_HEADING = re.compile(r"^##\s+Persistent hints\s*$", re.IGNORECASE | re.MULTILINE)
+_TEMPORARY_HEADING = re.compile(r"^##\s+Temporary hints\s*$", re.IGNORECASE | re.MULTILINE)
 _HTML_COMMENT_END_RE = re.compile(r"-->")
 
 
@@ -112,14 +114,65 @@ def _split_hints(text: str) -> tuple[str, str]:
     return text[: m.start()], text[m.start():]
 
 
-def _clear_user_hints(state_dir: Path) -> None:
-    """Selectively reset USER_HINTS.md after the plan phase consumed it.
+def _temporary_hint_entries(text: str) -> list[str]:
+    """Return the actual temporary-hint entries, excluding the format guide.
 
-    Only the ``## Temporary hints`` section is cleared; the
-    ``## Persistent hints`` section (standing user directives) is
-    preserved verbatim across iterations. The cleared temporary section
-    is replaced with the corresponding part of the bundled template so
-    the HTML-comment preamble and section headings are always present.
+    A hint is normally one timestamped Markdown bullet. Continuation lines
+    are kept with their preceding bullet so an edit to a multi-line hint is
+    treated as a new entry instead of being partly consumed.
+    """
+    uncommented = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    heading = _TEMPORARY_HEADING.search(uncommented)
+    if not heading:
+        return []
+
+    body_start = heading.end()
+    if body_start < len(uncommented) and uncommented[body_start] == "\n":
+        body_start += 1
+    remainder = uncommented[body_start:]
+    next_heading = re.search(r"^##\s", remainder, re.MULTILINE)
+    body = remainder[:next_heading.start()] if next_heading else remainder
+
+    entries: list[str] = []
+    current: list[str] = []
+    for line in body.splitlines():
+        if re.match(r"^\s*-\s+\[", line):
+            if current:
+                entries.append("\n".join(current).strip())
+            current = [line]
+        elif current:
+            current.append(line)
+        elif line.strip():
+            # Preserve malformed/manual content rather than silently losing it.
+            entries.append(line.strip())
+    if current:
+        entries.append("\n".join(current).strip())
+    return entries
+
+
+def _uncaptured_temporary_entries(current: str, captured: str) -> list[str]:
+    """Keep temporary entries that were not present in the plan snapshot."""
+    consumed = Counter(_temporary_hint_entries(captured))
+    retained: list[str] = []
+    for entry in _temporary_hint_entries(current):
+        if consumed[entry]:
+            consumed[entry] -= 1
+        else:
+            retained.append(entry)
+    return retained
+
+
+def _clear_user_hints(state_dir: Path, captured_hints: str | None = None) -> None:
+    """Clear temporary hints consumed by a successful plan phase.
+
+    The plan prompt is built from ``captured_hints`` before the agent starts.
+    If a user adds or rewrites a temporary hint while that agent is running,
+    it was not in the prompt and must survive for the next plan phase. Thus,
+    when a capture is supplied, only entries present in that snapshot are
+    consumed. Persistent hints remain verbatim across iterations.
+
+    Calling this helper without a capture retains the legacy/reset behavior:
+    clear the complete temporary section.
 
     Falls back to a full template reset when the template is unreadable
     or the file cannot be parsed, so a missing-template scenario never
@@ -139,11 +192,22 @@ def _clear_user_hints(state_dir: Path) -> None:
         pass
 
     _, persistent_block = _split_hints(current)
+    retained_temporary = (
+        _uncaptured_temporary_entries(current, captured_hints)
+        if captured_hints is not None
+        else []
+    )
 
     if persistent_block:
-        # Rebuild: fresh template up to (but not including) the persistent
-        # section, then the preserved persistent section.
+        # Rebuild with the template's format guide, any temporary entries that
+        # arrived after capture, and the current persistent section.
         template_temporary, _ = _split_hints(template)
+        if retained_temporary:
+            # The template intentionally leaves a blank separator before the
+            # persistent heading. Normalize that tail while inserting entries
+            # so the Temporary heading has exactly one blank line before them.
+            template_temporary = template_temporary.rstrip("\n") + "\n\n"
+            template_temporary += "\n".join(retained_temporary) + "\n\n"
         new_content = template_temporary + persistent_block
     else:
         new_content = template
@@ -234,7 +298,7 @@ class PlanPhase(Phase):
             # before completing this far, the file is left intact so
             # the retry sees the same hints.
             if captured_hints is not None and captured_hints.strip():
-                _clear_user_hints(ctx.state_dir)
+                _clear_user_hints(ctx.state_dir, captured_hints)
             # AUTO_NOTES.md is fully loop-owned — clear it whenever it had
             # content so each validation note reaches the planner exactly once.
             if captured_auto_notes is not None and captured_auto_notes.strip():
