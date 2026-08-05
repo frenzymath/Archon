@@ -96,7 +96,16 @@ class DashboardProcess:
 
         log_path = self.project_path / ".archon" / "logs" / "dashboard.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = ["archon", "dashboard", str(self.project_path), "--port", str(port)]
+        # The parent reports this URL even when startup outlasts the initial
+        # readiness probe, so the child must not silently retry on another port.
+        cmd = [
+            "archon",
+            "dashboard",
+            str(self.project_path),
+            "--port",
+            str(port),
+            "--strict-port",
+        ]
         try:
             self.proc = subprocess.Popen(
                 cmd,
@@ -119,7 +128,7 @@ class DashboardProcess:
             return None
 
         self.port = port
-        self.url = f"http://localhost:{port}"
+        self.url = f"http://127.0.0.1:{port}"
         if not ready:
             log.warn(
                 f"Dashboard is still starting at {self.url}; "

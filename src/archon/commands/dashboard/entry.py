@@ -37,6 +37,7 @@ def dashboard(
              "before launching a new one. Without this flag, multiple dashboards "
              "for the same project coexist on different ports.",
     ),
+    strict_port: bool = typer.Option(False, "--strict-port", hidden=True),
 ) -> None:
     """Start the web dashboard for real-time monitoring.
 
@@ -57,4 +58,5 @@ def dashboard(
         force=force,
         open_browser=open_browser,
         restart=restart,
+        strict_port=strict_port,
     ).run()
