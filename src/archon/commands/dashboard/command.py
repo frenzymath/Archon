@@ -46,6 +46,7 @@ class DashboardCommand:
         force: bool = False,
         open_browser: bool = False,
         restart: bool = False,
+        strict_port: bool = False,
     ) -> None:
         self.project_path = project_path
         self.port = port
@@ -56,6 +57,7 @@ class DashboardCommand:
         self.force = force
         self.open_browser = open_browser
         self.restart = restart
+        self.strict_port = strict_port
 
     def run(self) -> None:
         resolved = Path(self.project_path).resolve()
@@ -182,7 +184,7 @@ class DashboardCommand:
             archon_dir=archon_dir,
             registry=registry,
         )
-        port = server.start_with_retry(self.port)
+        port = server.start_with_retry(self.port, strict_port=self.strict_port)
 
         # Use 127.0.0.1 over localhost: some systems resolve `localhost`
         # to ::1 first, which — if the server only listens on IPv4 —

@@ -535,13 +535,13 @@ class LoopCommand:
 
         if ctx.dashboard_url:
             log.panel(
-                f"Loop finished. The dashboard is still running at "
+                f"Loop finished. Dashboard URL: "
                 f"[bold cyan]{ctx.dashboard_url}[/bold cyan].\n"
                 + (
                     f"Blueprint preview: [bold cyan]{ctx.blueprint_url}[/bold cyan]\n"
                     if ctx.blueprint_url else ""
                 )
-                + "Inspect results, then stop it with Ctrl-C or by closing this terminal.",
+                + "The dashboard will be stopped automatically when the loop process exits.",
                 title="Done",
                 style="green",
             )

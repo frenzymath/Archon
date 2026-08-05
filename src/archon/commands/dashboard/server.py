@@ -92,9 +92,20 @@ class ServerProcess:
             signal_pid_or_group(self.proc.pid, signal.SIGKILL)
             wait_for_exit(self.proc.pid, timeout=2.0)
 
-    def start_with_retry(self, requested_port: int) -> int:
-        """Bring the server up, advancing port on bind races. Returns final port."""
-        port = self._resolve_initial_port(requested_port)
+    def start_with_retry(
+        self,
+        requested_port: int,
+        *,
+        strict_port: bool = False,
+    ) -> int:
+        """Bring the server up and return its final port.
+
+        Standalone dashboards advance to another port on bind/startup failure.
+        Loop-owned dashboards use ``strict_port`` because their parent process
+        publishes the requested URL before a slow startup has necessarily
+        completed; changing ports behind the parent would make that URL stale.
+        """
+        port = self._resolve_initial_port(requested_port, strict_port=strict_port)
         self.port = port
         self.pid_file = self.registry.pidfile_for(port)
         self.proc = self.spawn(port)
@@ -110,6 +121,10 @@ class ServerProcess:
             if wait_for_http(port, expected_archon_path, timeout=wait_timeout):
                 return port
             self._handle_failed_attempt(port, wait_timeout)
+
+            if strict_port:
+                self.pid_file.unlink(missing_ok=True)
+                raise typer.Exit(1)
 
             next_port = find_free_port(port)
             if next_port is None:
@@ -165,11 +180,18 @@ class ServerProcess:
 
     # ── private ────────────────────────────────────────────────────────
 
-    def _resolve_initial_port(self, requested_port: int) -> int:
+    def _resolve_initial_port(
+        self,
+        requested_port: int,
+        *,
+        strict_port: bool = False,
+    ) -> int:
         """Bind-test the requested port; advance to the next free one if busy."""
         if not port_in_use(requested_port):
             return requested_port
         log.warn(f"Port {requested_port} is already in use by another process or project")
+        if strict_port:
+            raise typer.Exit(1)
         free_port = find_free_port(requested_port)
         if free_port is None:
             log.error(

@@ -72,7 +72,8 @@ class PortProbe:
 
 class DashboardProcess:
     """Launches `archon dashboard <project>` in the background and waits for
-    its port to bind. Cleans up on process exit via `atexit`.
+    its port to bind. The child is always cleaned up with the parent process
+    via `atexit`, including when startup takes longer than the initial probe.
     """
 
     def __init__(self, project_path: Path, *, open_browser: bool = False) -> None:
@@ -95,7 +96,16 @@ class DashboardProcess:
 
         log_path = self.project_path / ".archon" / "logs" / "dashboard.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = ["archon", "dashboard", str(self.project_path), "--port", str(port)]
+        # The parent reports this URL even when startup outlasts the initial
+        # readiness probe, so the child must not silently retry on another port.
+        cmd = [
+            "archon",
+            "dashboard",
+            str(self.project_path),
+            "--port",
+            str(port),
+            "--strict-port",
+        ]
         try:
             self.proc = subprocess.Popen(
                 cmd,
@@ -107,14 +117,30 @@ class DashboardProcess:
             log.warn(f"Dashboard failed to start: {e}")
             return None
 
-        if not self._wait_for_port(port, log_path):
+        # Register cleanup as soon as the child exists.  The dashboard can
+        # legitimately take longer than the readiness probe (for example on a
+        # cold npm/tsx start); it must still be reaped if the loop exits while
+        # that child is finishing startup.
+        atexit.register(self._cleanup)
+
+        ready = self._wait_for_port(port, log_path)
+        if not ready and self.proc.poll() is not None:
             return None
 
         self.port = port
-        self.url = f"http://localhost:{port}"
+        self.url = f"http://127.0.0.1:{port}"
+        if not ready:
+            log.warn(
+                f"Dashboard is still starting at {self.url}; "
+                "the loop will continue and clean it up on exit."
+            )
         log.panel(
-            f"Dashboard is live at [bold cyan]{self.url}[/bold cyan]\n"
-            f"Watch iterations, parallel provers, diffs, and the proof journal update live.",
+            (
+                f"Dashboard is live at [bold cyan]{self.url}[/bold cyan]"
+                if ready
+                else f"Dashboard is starting at [bold cyan]{self.url}[/bold cyan]"
+            )
+            + "\nWatch iterations, parallel provers, diffs, and the proof journal update live.",
             title="Archon Dashboard",
             style="cyan",
         )
@@ -125,7 +151,6 @@ class DashboardProcess:
             except Exception:
                 pass
 
-        atexit.register(self._cleanup)
         return self.url
 
     def _wait_for_port(self, port: int, log_path: Path) -> bool:
@@ -145,8 +170,8 @@ class DashboardProcess:
             time.sleep(0.1)
 
         log.warn(
-            f"Dashboard did not bind port {port} within 8s; continuing without it. "
-            f"See {log_path} for details."
+            f"Dashboard did not bind port {port} within 8s; continuing while "
+            f"it finishes startup. See {log_path} for details."
         )
         return False
 

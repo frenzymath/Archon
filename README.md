@@ -285,7 +285,7 @@ The high-level flow is `autoformalize` → `prover` → `polish` → `COMPLETE`;
 
 Every phase commits its output to an inner git at `.archon/git-dir/` as `archon[NNN/phase]: …`, so the dashboard's git tree shows the per-phase history independently of your project's outer git. Use `archon branch` to fork from any historical agent commit if a run goes sideways. Because this history lives in `.archon/git-dir/`, your own `.git` is never touched by Archon's versioning.
 
-By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL.
+By default, `archon loop` **also launches the web dashboard** (see [Web Dashboard](#monitoring-progress)) in the background on a free port in the range 8080–8099 and prints the URL. The dashboard belongs to that loop and is stopped automatically when the loop process exits, including when the loop is interrupted. If its initial readiness probe times out while the dashboard process is still alive, the loop keeps the URL and still cleans the dashboard up on exit. To run a dashboard independently, use `archon dashboard <project>`.
 
 #### 4.1 Subagents (optional but highly recommended)
 
