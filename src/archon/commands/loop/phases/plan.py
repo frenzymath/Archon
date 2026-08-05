@@ -119,19 +119,23 @@ def _temporary_hint_entries(text: str) -> list[str]:
 
     A hint is normally one timestamped Markdown bullet. Continuation lines
     are kept with their preceding bullet so an edit to a multi-line hint is
-    treated as a new entry instead of being partly consumed.
+    treated as a new entry instead of being partly consumed. Files from before
+    the Temporary/Persistent split are treated entirely as temporary content;
+    their HTML format guide is still excluded.
     """
     uncommented = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     heading = _TEMPORARY_HEADING.search(uncommented)
-    if not heading:
-        return []
-
-    body_start = heading.end()
-    if body_start < len(uncommented) and uncommented[body_start] == "\n":
-        body_start += 1
-    remainder = uncommented[body_start:]
-    next_heading = re.search(r"^##\s", remainder, re.MULTILINE)
-    body = remainder[:next_heading.start()] if next_heading else remainder
+    if heading:
+        body_start = heading.end()
+        if body_start < len(uncommented) and uncommented[body_start] == "\n":
+            body_start += 1
+        remainder = uncommented[body_start:]
+        next_heading = re.search(r"^##\s", remainder, re.MULTILINE)
+        body = remainder[:next_heading.start()] if next_heading else remainder
+    elif _PERSISTENT_HEADING.search(uncommented):
+        body = ""
+    else:
+        body = uncommented
 
     entries: list[str] = []
     current: list[str] = []
@@ -174,9 +178,9 @@ def _clear_user_hints(state_dir: Path, captured_hints: str | None = None) -> Non
     Calling this helper without a capture retains the legacy/reset behavior:
     clear the complete temporary section.
 
-    Falls back to a full template reset when the template is unreadable
-    or the file cannot be parsed, so a missing-template scenario never
-    carries stale content into the next iter.
+    Pre-section files are migrated into the current template while applying
+    the same snapshot comparison. If the bundled template is unavailable,
+    clearing remains best-effort and does not raise into the loop.
     """
     hints_file = state_dir / "USER_HINTS.md"
     try:
@@ -198,19 +202,16 @@ def _clear_user_hints(state_dir: Path, captured_hints: str | None = None) -> Non
         else []
     )
 
-    if persistent_block:
-        # Rebuild with the template's format guide, any temporary entries that
-        # arrived after capture, and the current persistent section.
-        template_temporary, _ = _split_hints(template)
-        if retained_temporary:
-            # The template intentionally leaves a blank separator before the
-            # persistent heading. Normalize that tail while inserting entries
-            # so the Temporary heading has exactly one blank line before them.
-            template_temporary = template_temporary.rstrip("\n") + "\n\n"
-            template_temporary += "\n".join(retained_temporary) + "\n\n"
-        new_content = template_temporary + persistent_block
-    else:
-        new_content = template
+    # Rebuild from the current template even when the live file predates the
+    # Temporary/Persistent split or has lost one of its section headings.
+    template_temporary, template_persistent = _split_hints(template)
+    if retained_temporary:
+        # The template intentionally leaves a blank separator before the
+        # persistent heading. Normalize that tail while inserting entries so
+        # the Temporary heading has exactly one blank line before them.
+        template_temporary = template_temporary.rstrip("\n") + "\n\n"
+        template_temporary += "\n".join(retained_temporary) + "\n\n"
+    new_content = template_temporary + (persistent_block or template_persistent)
 
     try:
         hints_file.write_text(new_content, encoding="utf-8")
