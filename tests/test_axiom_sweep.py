@@ -7,6 +7,8 @@ launderings into the next plan prompt as open sorries.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +18,7 @@ from archon.commands.loop.axiom_sweep import (
     AxiomSweepReport,
     _ANSI_RE,
     _FINDING_RE,
+    _script_path,
     write_reports,
 )
 from archon.prompts import _axiom_sweep_findings_block
@@ -47,6 +50,64 @@ class ReportTest(unittest.TestCase):
         self.assertEqual([f.decl for f in rep.sorry_launderings], ["A.b"])
         self.assertEqual([f.decl for f in rep.other_axioms], ["A.c"])
         self.assertTrue(rep.has_launderings)
+
+
+class ScriptDiscoveryTest(unittest.TestCase):
+    def test_project_scan_excludes_archon_snapshots(self):
+        with tempfile.TemporaryDirectory() as d:
+            project = Path(d)
+            source = project / "Main.lean"
+            source.write_text("namespace Main\n\ndef value := 1\n")
+
+            snapshot = (
+                project / ".archon" / "logs" / "iter-005" / "snapshots"
+                / "Main" / "baseline.lean"
+            )
+            snapshot.parent.mkdir(parents=True)
+            snapshot.write_text(
+                "namespace Main\n\n"
+                "def stale : Nat := this_identifier_does_not_exist\n"
+            )
+
+            fake_bin = project / "fake-bin"
+            fake_bin.mkdir()
+            calls = project / "lake-calls.txt"
+            fake_lake = fake_bin / "lake"
+            fake_lake.write_text(
+                "#!/bin/sh\n"
+                'printf "%s\\n" "$3" >> "$AXIOM_SWEEP_TEST_CALLS"\n'
+                "exit 0\n"
+            )
+            fake_lake.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+            env["AXIOM_SWEEP_TEST_CALLS"] = str(calls)
+            result = subprocess.run(
+                ["bash", str(_script_path()), ".", "--report-only"],
+                cwd=project,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            checked = calls.read_text().splitlines()
+            self.assertEqual(checked, [str(source.resolve())])
+            self.assertNotIn(str(snapshot.resolve()), checked)
+            self.assertNotIn("AUTO_AXIOM_CHECK_MARKER", source.read_text())
+
+            explicit = subprocess.run(
+                ["bash", str(_script_path()), str(snapshot), "--report-only"],
+                cwd=project,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            self.assertEqual(calls.read_text().splitlines(), checked)
 
 
 class PlanInjectionTest(unittest.TestCase):
