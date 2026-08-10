@@ -14,6 +14,9 @@
 
 </div>
 
+> [!IMPORTANT]
+> We just released [**Archon Horizon**](https://github.com/frenzymath/Archon-Horizon), a workspace-first orchestration system for long-running Lean 4 formalization with Codex or Claude Code. Horizon is a complementary alternative to Archon, designed for long-horizon agents working across multiple sessions and interdependent projects. [Check it out](https://github.com/frenzymath/Archon-Horizon).
+
 > ✨✨ **Archon v0.3.3.** Dashboard and workflow polish. **Project scoping & roadmap**: a Scope Home view with interactive status checklists and an `archon scope roadmap` agent that condenses the plan into milestones. **Cost visibility**: per-operation and turn-level token + USD tracking in the log viewer. **Static export** (`archon dashboard --static-build`) publishes a self-contained dashboard to GitHub Pages. **Multi-project**: a project switcher and a Meta DAG union view across peers. The DAG view gains a **layered-by-depth layout**, and the dashboard now works **behind a path-prefix reverse proxy**. Carries forward every 0.3.1/0.3.2 fix.
 
 > ✨✨✨ **Archon v0.3.0.** Adds more harnesses (currently Codex and Claude Code) and workarounds for [Anthropic's new rate limits on `claude -p`](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) (Codex, a headless Claude TUI, and more). Archon grounds its work in a DAG via [LeanDag](https://github.com/AxelDlv00/LeanDAG), a custom API for querying the Lean blueprint graph. The dashboard is richer — blueprints are rendered, the DAG is navigable. Provers can run in different modes (fine-grained, mathlib-build, …), and subprojects can be extracted from the DAG with `archon extract` to work on separately, then merged back with `archon merge`. Adds `peers.yaml` to allow archon to read other projects' dags and reuse their proofs.
