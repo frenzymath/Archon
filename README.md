@@ -419,4 +419,8 @@ There are several ways to supply such material:
 
 ## Star History
 
-GitHub currently restricts access to historical star data, so the Star History chart is unavailable. See the repository's [stargazers](https://github.com/frenzymath/Archon/stargazers) page for the current list.
+<div align="center">
+<a href="https://star-history.com/#frenzymath/Archon&Date">
+  <img src="docs/star-history.png" alt="Archon star history" width="600">
+</a>
+</div>
