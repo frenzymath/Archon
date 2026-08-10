@@ -71,6 +71,22 @@ def test_inner_git_dir_never_tracked(tmp_path: Path):
 
 def test_default_excludes_list_git_dir():
     assert ".archon/git-dir/\n" in InnerGit._DEFAULT_EXCLUDES
+    assert ".archon/tmp/\n" in InnerGit._DEFAULT_EXCLUDES
+
+
+def test_sandbox_tmp_never_tracked(tmp_path: Path):
+    proj = _project(tmp_path)
+    inner = InnerGit(proj)
+    inner.init()
+    inner.ensure_initial_commit("init")
+
+    sandbox_tmp = proj / ".archon" / "tmp" / "run-test"
+    sandbox_tmp.mkdir(parents=True)
+    (sandbox_tmp / "scratch").write_text("disposable\n")
+    inner.commit("sandbox tmp exists", allow_empty=True)
+
+    tracked = inner._run(["ls-files"]).stdout.split()
+    assert not any(path.startswith(".archon/tmp/") for path in tracked)
 
 
 def test_ensure_excludes_migrates_old_repo(tmp_path: Path):

@@ -2,13 +2,21 @@
 
 All notable changes to Archon are documented here.
 
-## [0.3.3] — 2026-07
+## [0.3.3] — 2026-08
 
-A patch release: incremental dashboard and workflow improvements over 0.3.2.
-The core proving loop is unchanged, and every 0.3.1/0.3.2 fix carries forward.
+A patch release: incremental dashboard, workflow, and safety improvements over
+0.3.2. The core proving loop is unchanged, and every 0.3.1/0.3.2 fix carries
+forward.
 
 ### Added
 
+- **Workspace-only safe mode** ([#40](https://github.com/frenzymath/Archon/issues/40)).
+  `archon loop --safe` keeps sandboxed commands automatic while confining
+  writes to the active project through Claude Code's native filesystem sandbox
+  or Codex `workspace-write`. Reads and network access remain available;
+  operations outside the workspace fail instead of prompting or falling back
+  to unsandboxed execution. The equivalent persistent setting is
+  `loop.safe: true`.
 - **Scope & roadmap.** A Scope Home dashboard view with interactive
   project-status checklists, and an `archon scope roadmap` agent that launches
   an interactive session and condenses the plan into milestones rather than an

@@ -31,6 +31,7 @@ for strict JSON):
     "parallel": true,
     "max_parallel": 4,             // concurrent prover agents
     "model": "opus",               // role model: opus (default) / sonnet / haiku / kimi / …
+    "safe": false,                 // --safe: workspace-only native filesystem sandbox
 
     "claude_backend": "claude-p",  // how Claude Code is launched — see §1
     "harness": "codex",            // engine for every role + subagent — see §2 (empty = Claude Code)
@@ -51,6 +52,28 @@ for strict JSON):
 
 `harnesses` (named engine bundles) is the one block not shown here; `archon init`
 ships a ready-to-use `codex` harness, so you usually only reference it by name.
+
+### Workspace-only safe mode
+
+Run `archon loop --safe`, or set `loop.safe` to `true`, to confine agent
+writes to the active project while keeping sandboxed commands automatic. The
+unrestricted default is unchanged. Safe mode intentionally leaves reads and
+network access available; it is a workspace-write boundary, not a credential
+or data-exfiltration boundary.
+
+- Claude Code uses its native filesystem sandbox in auto-allow mode and
+  `acceptEdits` for direct file tools. Unsandboxed retries are disabled and a
+  missing sandbox dependency aborts the run instead of silently widening
+  access. On Linux/WSL2 this requires `bubblewrap` and `socat`; macOS uses its
+  built-in Seatbelt sandbox.
+- Codex uses `workspace-write` with interactive approvals disabled, so an
+  attempted write outside the project fails and is returned to the model.
+- Each run receives a private temporary directory under `.archon/tmp/`, which
+  is excluded from Archon's inner git.
+
+Safe mode limits writes; it does not make the project contents disposable or
+prevent destructive changes *inside* the project. Inner-git history remains
+the recovery mechanism for those changes.
 
 ---
 

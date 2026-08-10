@@ -6,13 +6,14 @@ build a `LoopOptions`, and call `LoopCommand.run()`.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import typer
 
 from archon import log
-from archon.agent import DEFAULT_MODEL, InteractiveBackend
+from archon.agent import DEFAULT_MODEL, SAFE_MODE_ENV, InteractiveBackend
 from archon.types import Stage
 
 from .command import LoopCommand, parse_from_phase
@@ -81,6 +82,12 @@ def loop(
     dry_run: bool = typer.Option(
         False, "--dry-run",
         help="Print prompts without launching Claude.",
+    ),
+    safe: Optional[bool] = typer.Option(
+        None, "--safe/--no-safe",
+        help="Confine agent writes to the active project with the harness's "
+             "native filesystem sandbox, while auto-allowing sandboxed "
+             "commands. (default from config or off)",
     ),
     no_dashboard: bool = typer.Option(
         False, "--no-dashboard",
@@ -207,6 +214,7 @@ def loop(
     debug_feedback = _resolve(
         debug_feedback, section=loop_cfg, key='debug_feedback', default=False,
     )
+    safe = _resolve(safe, section=loop_cfg, key='safe', default=False)
     backend = resolve_claude_backend(
         project_config,
         cli_value=claude_backend,
@@ -251,6 +259,7 @@ def loop(
         no_lake_build=no_lake_build,
         no_blueprint_web=no_blueprint_web,
         dry_run=dry_run,
+        safe=safe,
         no_dashboard=no_dashboard,
         blueprint_server_flag=blueprint_server_flag,
         open_browser=open_browser,
@@ -267,4 +276,15 @@ def loop(
         focus=focus,
     )
 
-    LoopCommand(options).run()
+    previous_safe_mode = os.environ.get(SAFE_MODE_ENV)
+    if safe:
+        os.environ[SAFE_MODE_ENV] = "1"
+    else:
+        os.environ.pop(SAFE_MODE_ENV, None)
+    try:
+        LoopCommand(options).run()
+    finally:
+        if previous_safe_mode is None:
+            os.environ.pop(SAFE_MODE_ENV, None)
+        else:
+            os.environ[SAFE_MODE_ENV] = previous_safe_mode

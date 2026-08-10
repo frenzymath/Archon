@@ -6,7 +6,7 @@
 
 *Autonomous formalization of research-level mathematics in Lean 4*
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.3-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 [![Blog](https://img.shields.io/badge/blog-Archon%20first%20proof-ff6f61)](https://frenzymath.com/blog/archon-firstproof/)
 [![claude-p](https://img.shields.io/badge/driver-claude--p-8A2BE2?logo=github)](https://github.com/AxelDlv00/claude-p)
@@ -17,7 +17,7 @@
 > [!IMPORTANT]
 > We just released [**Archon Horizon**](https://github.com/frenzymath/Archon-Horizon), a workspace-first orchestration system for long-running Lean 4 formalization with Codex or Claude Code. Horizon is a complementary alternative to Archon, designed for long-horizon agents working across multiple sessions and interdependent projects. [Check it out](https://github.com/frenzymath/Archon-Horizon).
 
-> ✨✨ **Archon v0.3.3.** Dashboard and workflow polish. **Project scoping & roadmap**: a Scope Home view with interactive status checklists and an `archon scope roadmap` agent that condenses the plan into milestones. **Cost visibility**: per-operation and turn-level token + USD tracking in the log viewer. **Static export** (`archon dashboard --static-build`) publishes a self-contained dashboard to GitHub Pages. **Multi-project**: a project switcher and a Meta DAG union view across peers. The DAG view gains a **layered-by-depth layout**, and the dashboard now works **behind a path-prefix reverse proxy**. Carries forward every 0.3.1/0.3.2 fix.
+> ✨✨ **Archon v0.3.3.** Dashboard, workflow, and safety polish. **Project scoping & roadmap**: a Scope Home view with interactive status checklists and an `archon scope roadmap` agent that condenses the plan into milestones. **Cost visibility**: per-operation and turn-level token + USD tracking in the log viewer. **Static export** (`archon dashboard --static-build`) publishes a self-contained dashboard to GitHub Pages. **Multi-project**: a project switcher and a Meta DAG union view across peers. **Workspace-only safe mode** (`archon loop --safe`) keeps commands automatic while using the native Claude Code or Codex filesystem sandbox to prevent writes outside the active project. The DAG view gains a **layered-by-depth layout**, and the dashboard now works **behind a path-prefix reverse proxy**. Carries forward every 0.3.1/0.3.2 fix.
 
 > 🔄 **Upgrading from v0.1.0 or v0.2.0?** Just run `archon update` once and then `archon init` in existing projects. *Please, first backup your work!*
 >
@@ -56,10 +56,7 @@ Archon is designed and optimized for **project-level formalization** — multi-f
 
 ## Install
 
-> **Security note:** `archon loop` runs Claude Code with `--dangerously-skip-permissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests, which Claude Code refuses when running as root on Linux. In our experiment, Opus or Sonnet never caused harm, but since there is still a risk, we recommend one of the following workarounds:
-> 1. **Use a dedicated non-root user** (RECOMMENDED) — e.g. create one with `adduser` — so you are not running with excessive root privileges.
-> 2. **Set `export IS_SANDBOX=1`** so Claude Code is allowed to start with this high-risk option.
-> 3. **Run inside a Docker container** or VM with no access to sensitive data or credentials
+> **Security note:** By default, `archon loop` runs Claude Code with `--dangerously-skip-permissions`, meaning the model can execute arbitrary shell commands, read/write any file the process can access, and make network requests. Use `archon loop --safe` to keep sandboxed commands automatic while restricting writes to the active project. Safe mode uses the native Claude Code or Codex filesystem sandbox and fails rather than falling back to an unsandboxed command; reads and network access remain available. For the unrestricted default, use a dedicated non-root user or a Docker container/VM with no access to sensitive data or credentials.
 
 > Note: It is recommended to run inside a Python virtual environment (e.g., `python3.11 -m venv ~/archon-env`).
 
@@ -153,6 +150,7 @@ See [CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference. As a quick
     "max_iterations": 2,
     "parallel": true,
     "max_parallel": 4,
+    "safe": false,
 
     // How Claude Code is launched — see "Backends" below for why this matters
     // now that `claude -p` is rate-limited ("default" | "claude-p" | "vscode" | "desktop" | "interactive").

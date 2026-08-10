@@ -226,6 +226,8 @@ class InnerGit:
         "# on each commit), so an in-place merge / branch switch never settles.\n"
         "# Excluding it here makes the protection self-contained.\n"
         ".archon/git-dir/\n"
+        "# Per-run native-sandbox temp directories are disposable.\n"
+        ".archon/tmp/\n"
         "# Multi-lane worktrees live under .archon/lanes/<id>/ — each is its\n"
         "# own checkout sharing this same git-dir; the parent worktree must\n"
         "# not stage them or 'git add' would recurse into nested checkouts.\n"
@@ -309,7 +311,7 @@ class InnerGit:
         if not archon_dir.is_dir():
             return
         for entry in sorted(archon_dir.iterdir()):
-            if entry.name == "git-dir":
+            if entry.name in {"git-dir", "tmp"}:
                 continue
             if entry.name == ".debug-feedback":
                 # Developer-only feedback channel. Notes are for the

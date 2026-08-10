@@ -62,6 +62,13 @@ def default_config() -> dict[str, Any]:
             'model': 'opus',
             'verbose_logs': False,
             'no_review': False,
+            '_safe_help': (
+                "If true (or with `archon loop --safe`), confine agent writes "
+                "to the active project with Claude/Codex native filesystem "
+                "sandboxing. Sandboxed commands are auto-approved; operations "
+                "outside the project fail instead of prompting. Off by default."
+            ),
+            'safe': False,
             '_debug_feedback_help': (
                 "If true, agents may append notes to "
                 ".archon/.debug-feedback/debug_feedback.md about missing "
