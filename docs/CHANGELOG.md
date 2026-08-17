@@ -33,6 +33,12 @@ forward.
   alongside the force-directed default: nodes are ranked by longest dependency
   chain and stacked top-down, so the prerequisite structure reads clearly.
 
+### Fixed
+
+- **Dashboard server silently exited on native Windows.** CLI entry-point
+  detection now compares normalized native paths instead of a file URL with a
+  backslash path. [#43](https://github.com/frenzymath/Archon/issues/43).
+
 ## [0.3.2] — 2026-07
 
 A patch release: two bug fixes reported against v0.3.1, one contributed
