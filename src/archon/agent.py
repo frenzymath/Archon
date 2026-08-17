@@ -60,6 +60,48 @@ DEFAULT_HARNESS = "claude-code"
 DEFAULT_MODEL = "opus"
 
 
+# Set by ``archon loop --safe`` for the complete parent/child agent tree.
+# Keeping this in the environment avoids plumbing a new field through every
+# process-pool worker and the synchronous ``archon subagent`` wrapper.
+SAFE_MODE_ENV = "ARCHON_SAFE_MODE"
+
+
+def safe_mode_enabled() -> bool:
+    """Whether the current agent tree requested native sandboxing."""
+    return os.environ.get(SAFE_MODE_ENV) == "1"
+
+
+def _safe_claude_settings(cwd: Path | None = None) -> str:
+    """Render Claude's strict, auto-allow sandbox settings as JSON.
+
+    The sandbox handles Bash and all of its descendants at the OS level.
+    ``acceptEdits`` (selected in :meth:`ClaudeAgent._build_flags`) handles
+    Claude's direct file-edit tools inside the working directory.
+    """
+    sandbox: dict[str, object] = {
+        "enabled": True,
+        "autoAllowBashIfSandboxed": True,
+        "failIfUnavailable": True,
+        "allowUnsandboxedCommands": False,
+        # Safe mode is deliberately a write boundary, not a network policy:
+        # long-running formalization may still need arbitrary remote hosts.
+        "network": {"allowedDomains": ["*"]},
+    }
+    if cwd is not None:
+        sandbox["filesystem"] = {"allowWrite": [str(cwd.resolve())]}
+    return json.dumps({"sandbox": sandbox}, separators=(",", ":"))
+
+
+def prepare_safe_tmp(cwd: Path, env: dict[str, str]) -> None:
+    """Give a safe run a private temporary directory inside its workspace."""
+    if not safe_mode_enabled():
+        return
+    run_tmp = cwd.resolve() / ".archon" / "tmp" / f"run-{uuid.uuid4().hex}"
+    run_tmp.mkdir(parents=True, exist_ok=True)
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        env[name] = str(run_tmp)
+
+
 # Native Claude Code tools that every archon agent is forbidden to use,
 # passed to ``claude --disallowedTools``.
 #
@@ -1079,11 +1121,26 @@ class ClaudeAgent:
 
     # ── command assembly ─────────────────────────────────────────────
 
-    def _build_flags(self, model: str, *, include_disallowed: bool = True) -> list[str]:
+    def _build_flags(
+        self,
+        model: str,
+        *,
+        include_disallowed: bool = True,
+        cwd: Path | None = None,
+    ) -> list[str]:
         flags: list[str] = []
-        if self.skip_permissions:
-            flags.append("--dangerously-skip-permissions")
-        flags.extend(["--permission-mode", self.permission_mode])
+        if safe_mode_enabled():
+            # Native sandbox auto-allow keeps Bash commands flowing without
+            # prompts, while acceptEdits limits Claude's direct file tools to
+            # the active working directory. Do not combine this with
+            # bypassPermissions: Claude documents that mode as skipping
+            # protected-path checks.
+            flags.extend(["--permission-mode", "acceptEdits"])
+            flags.extend(["--settings", _safe_claude_settings(cwd)])
+        else:
+            if self.skip_permissions:
+                flags.append("--dangerously-skip-permissions")
+            flags.extend(["--permission-mode", self.permission_mode])
         flags.extend(["--model", model])
         # Force the blocking-Bash dispatch path: a HEADLESS agent must never
         # spawn subagents natively or schedule a wakeup, or it ends its turn
@@ -1225,11 +1282,12 @@ class ClaudeAgent:
         if env_overrides:
             merged.update(env_overrides)
         base_env = self._build_env(merged)
+        prepare_safe_tmp(cwd, base_env)
 
         cmd, env = self.backend.build_headless(
             prompt,
             model=real_model,
-            flags=self._build_flags(real_model),
+            flags=self._build_flags(real_model, cwd=cwd),
             resume_session_id=resume_session_id,
             base_env=base_env,
             log_base=log_base,
@@ -1350,17 +1408,24 @@ class ClaudeAgent:
         long pauses are normal (they're reading, thinking, typing).
         """
         real_model, provider_env_vars, provider = self._resolve_provider()
+        env = (
+            self._build_env(provider_env_vars)
+            if provider_env_vars else self._build_env(None)
+        )
+        prepare_safe_tmp(cwd, env)
         # include_disallowed=False: --disallowedTools is variadic and would
         # swallow the trailing positional prompt below — and interactive
         # sessions don't need the guard (a human drives, no orchestrator).
-        cmd = ["claude", *self._build_flags(real_model, include_disallowed=False)]
+        cmd = [
+            "claude",
+            *self._build_flags(real_model, include_disallowed=False, cwd=cwd),
+        ]
         if session_id:
             cmd.extend(["--session-id", session_id])
         if extra_args:
             cmd.extend(extra_args)
         cmd.append(prompt)
 
-        env = self._build_env(provider_env_vars) if provider_env_vars else None
         self._announce_model(real_model=real_model, provider=provider)
         return subprocess.run(cmd, cwd=cwd, env=env).returncode
 
@@ -2038,7 +2103,8 @@ def _runner_from_descriptor(
 __all__ = [
     "AgentRunner", "ClaudeAgent", "ClaudeBackend", "ClaudePBackend",
     "EntrypointBackend", "InteractiveBackend", "DEFAULT_HARNESS", "DEFAULT_MODEL",
-    "DISALLOWED_NATIVE_TOOLS", "BASH_FOREGROUND_TIMEOUT_MS",
+    "DISALLOWED_NATIVE_TOOLS", "BASH_FOREGROUND_TIMEOUT_MS", "SAFE_MODE_ENV",
+    "safe_mode_enabled", "prepare_safe_tmp",
     "RunOutcome", "QuotaExhaustedError", "SupervisionResult",
     "UnknownHarnessError", "build_runner", "supervise_streamed_run",
 ]

@@ -35,6 +35,7 @@ class LoopOptions:
     no_lake_build: bool
     no_blueprint_web: bool
     dry_run: bool
+    safe: bool
     no_dashboard: bool
     blueprint_server_flag: bool
     open_browser: bool

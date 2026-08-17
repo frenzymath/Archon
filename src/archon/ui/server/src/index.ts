@@ -149,7 +149,7 @@ export async function createServer(options: { projectPath: string; port: number 
 }
 
 // CLI entry point
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const { projectPath, port } = parseArgs();
   // Prefer 127.0.0.1 in the printed URL — resolves predictably on every system,
   // whereas `localhost` may hit ::1 first on configurations with IPv6-first DNS.

@@ -9,6 +9,7 @@ from archon import log
 from .checks import (
     ApiKeysCheck,
     ClaudeCodeCheck,
+    ClaudeSandboxCheck,
     CurlCheck,
     DashboardDepsCheck,
     GitCheck,
@@ -68,6 +69,7 @@ class SetupCommand:
     def _check_claude_code(self) -> None:
         log.rule("Claude Code")
         ClaudeCodeCheck(self.installer).run()
+        ClaudeSandboxCheck(self.installer).run()
 
     def _check_blueprint_deps(self) -> None:
         if self.skip_blueprint:

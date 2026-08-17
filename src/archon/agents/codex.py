@@ -51,7 +51,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from archon import log
-from archon.agent import RunOutcome, supervise_streamed_run
+from archon.agent import (
+    RunOutcome,
+    prepare_safe_tmp,
+    safe_mode_enabled,
+    supervise_streamed_run,
+)
 from archon.commands.tooling.project_config import HarnessDescriptor
 
 
@@ -539,6 +544,8 @@ class CodexAgent:
 
     @property
     def sandbox(self) -> str:
+        if safe_mode_enabled():
+            return "workspace-write"
         return self.descriptor.sandbox or "danger-full-access"
 
     def _gateway_creds(
@@ -633,6 +640,16 @@ class CodexAgent:
 
         argv += self._mcp_overrides(lake_root, env_source or os.environ)
         argv += ["--sandbox", self.sandbox, "--ephemeral"]
+        if safe_mode_enabled():
+            # Never wait for an unavailable interactive approval in a
+            # headless safe run. Operations outside workspace-write fail and
+            # are returned to the model as command errors.
+            argv += ["-c", 'approval_policy="never"']
+            argv += [
+                "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+                "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                "-c", "sandbox_workspace_write.network_access=true",
+            ]
         argv += self._descriptor_extra_args()
         if extra_args:
             argv += list(extra_args)
@@ -674,6 +691,13 @@ class CodexAgent:
 
         argv += self._mcp_overrides(lake_root, env_source or os.environ)
         argv += ["--sandbox", self.sandbox]
+        if safe_mode_enabled():
+            argv += ["-c", 'approval_policy="never"']
+            argv += [
+                "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+                "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                "-c", "sandbox_workspace_write.network_access=true",
+            ]
         argv += self._descriptor_extra_args()
         if extra_args:
             argv += list(extra_args)
@@ -865,6 +889,7 @@ class CodexAgent:
 
         prompt = self._apply_prompt_variant(prompt, project_path=cwd)
         env = self.build_env(env_overrides)
+        prepare_safe_tmp(cwd, env)
         self._announce()
 
         if log_base is None:
@@ -930,6 +955,7 @@ class CodexAgent:
 
         prompt = self._apply_prompt_variant(prompt, project_path=cwd)
         env = self.build_env()
+        prepare_safe_tmp(cwd, env)
         self._announce()
         argv = self.build_interactive_argv(
             prompt, extra_args=extra_args, env_source=env, lake_root=cwd,

@@ -30,8 +30,9 @@ def setup(
 
     Checks and installs (without silent sudo) git, Python 3.10+, curl,
     elan/lean/lake, uv, ripgrep, poppler-utils (pdftoppm/pdftotext, needed
-    for the Read tool to ingest PDF references), Claude Code, Node.js (via
-    nvm), dashboard npm dependencies, and verifies external-model API keys.
+    for the Read tool to ingest PDF references), Claude Code, its Linux
+    sandbox dependencies (bubblewrap and socat), Node.js (via nvm), dashboard
+    npm dependencies, and verifies external-model API keys.
 
     Also installs leanblueprint and its system-level prerequisites
     (graphviz + dev headers, TeX Live, ghostscript, dvisvgm, pdf2svg,
